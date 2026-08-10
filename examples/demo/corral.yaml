@@ -1,0 +1,39 @@
+codemap:
+  output_dir: code_map
+  scan_dirs: [acme_pipeline]
+  skip_dirs: [__pycache__]
+
+lineage:
+  output: code_map/edges.parquet
+  pipeline_yaml: pipeline.yaml
+  yaml_manifest_schema:
+    groups: target_table
+  config_loaders:
+    load_pipeline_config: pipeline.yaml
+
+hooks:
+  surfaces: surfaces.yaml
+  magic_numbers:
+    constants: null
+    scan_dirs: [acme_pipeline]
+
+preflight:
+  gotchas: agent_memory/gotchas.json
+
+# The two governance walkthrough commands use --root ../.. so these shared
+# example paths resolve from the corral repository root.
+governance:
+  registry: examples/governance/instruction_rules.example.yaml
+  instruction_globs: [examples/governance/instructions/**]
+  replay:
+    manifest: examples/governance/instruction_manifest.example.yaml
+    trigger_rules: examples/governance/instruction_trigger_rules.example.yaml
+    corpus: examples/governance/replay_corpus.example.yaml
+    topic_prefixes: [examples/governance/instructions/]
+    critical_tiers: [critical, elevated]
+    min_recall: 0.95
+  budget:
+    token_ceilings:
+      critical: 2000
+      elevated: 1800
+      standard: 1200

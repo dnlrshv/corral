@@ -1,0 +1,10 @@
+# Top-level scalars are read by acme_pipeline.config.load_pipeline_config.
+minimum_total: 25
+report_path: build/order-summary.txt
+
+# The lineage builder also reads this manifest section.
+groups:
+  curated_orders_refresh:
+    module: acme_pipeline.queries
+    entrypoint: rebuild_curated_orders
+    target_table: curated_orders

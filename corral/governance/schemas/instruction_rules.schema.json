@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/dnlrshv/corral/corral/governance/schemas/instruction_rules.schema.json",
+  "title": "Corral Instruction Rule Registry",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "rules"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "rules": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {
+        "type": "string",
+        "pattern": "^(R-[A-Z0-9]+-[0-9]{3,4}|G-[0-9]{4}-[0-9]{3})$"
+      },
+      "additionalProperties": {"$ref": "#/$defs/rule"}
+    }
+  },
+  "$defs": {
+    "rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file", "anchor", "concern_key", "modality", "review_by"],
+      "properties": {
+        "file": {"type": "string", "minLength": 1},
+        "anchor": {"type": "string", "minLength": 8},
+        "concern_key": {"type": "string", "pattern": "^[a-z][a-z0-9-]*$"},
+        "modality": {"type": "string", "enum": ["MUST", "MUST NOT", "ASK", "READ"]},
+        "selectors": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "paths": {"type": "array", "items": {"type": "string"}, "default": []},
+            "workflows": {"type": "array", "items": {"type": "string"}, "default": []},
+            "surfaces": {"type": "array", "items": {"type": "string"}, "default": []}
+          }
+        },
+        "review_by": {"type": "string", "minLength": 1},
+        "note": {"type": "string"}
+      }
+    }
+  }
+}

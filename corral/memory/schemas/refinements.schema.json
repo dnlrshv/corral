@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/dnlrshv/corral/corral/memory/schemas/refinements.schema.json",
+  "title": "Retrospective refinement-ledger record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "timestamp",
+    "target_path",
+    "before_snapshot",
+    "after_snapshot",
+    "before_exists",
+    "edit_snapshots",
+    "evidence_refs",
+    "status"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^REF-[0-9TZ]+-[0-9]{3}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "target_path": {
+      "type": "string",
+      "pattern": "^(?!/)(?!.*\\.\\.)[^\\n]+$"
+    },
+    "before_snapshot": {
+      "type": "string"
+    },
+    "after_snapshot": {
+      "type": "string"
+    },
+    "before_exists": {
+      "type": "boolean"
+    },
+    "edit_snapshots": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/EditSnapshot"
+      }
+    },
+    "evidence_refs": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "status": {
+      "const": "pending_human_review"
+    }
+  },
+  "$defs": {
+    "EditSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "target_path",
+        "before_snapshot",
+        "after_snapshot",
+        "before_exists"
+      ],
+      "properties": {
+        "target_path": {
+          "type": "string",
+          "pattern": "^(?!/)(?!.*\\.\\.)[^\\n]+$"
+        },
+        "before_snapshot": {
+          "type": "string"
+        },
+        "after_snapshot": {
+          "type": "string"
+        },
+        "before_exists": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

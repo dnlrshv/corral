@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/dnlrshv/corral/corral/governance/schemas/instruction_manifest.schema.json",
+  "title": "Corral Instruction Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "token_estimate", "budgets", "profiles", "units", "skills", "budget_debt"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "token_estimate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "chars_per_token", "baselined_against_sha", "baselined_on"],
+      "properties": {
+        "method": {"const": "chars_div_4"},
+        "chars_per_token": {"const": 4},
+        "baselined_against_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "baselined_on": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"}
+      }
+    },
+    "budgets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["always_loaded_bundle_target_tokens", "always_loaded_bundle_hard_tokens", "always_loaded_single_file_hard_tokens", "trigger_loaded_unit_hard_tokens", "skill_body_hard_tokens", "skill_count_warn", "skill_count_hard", "budget_debt_max_days"],
+      "properties": {
+        "always_loaded_bundle_target_tokens": {"type": "integer", "minimum": 1},
+        "always_loaded_bundle_hard_tokens": {"type": "integer", "minimum": 1},
+        "always_loaded_single_file_hard_tokens": {"type": "integer", "minimum": 1},
+        "trigger_loaded_unit_hard_tokens": {"type": "integer", "minimum": 1},
+        "skill_body_hard_tokens": {"type": "integer", "minimum": 1},
+        "skill_count_warn": {"type": "integer", "minimum": 0},
+        "skill_count_hard": {"type": "integer", "minimum": 0},
+        "budget_debt_max_days": {"type": "integer", "minimum": 1}
+      }
+    },
+    "profiles": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+      "additionalProperties": {"$ref": "#/$defs/profile"}
+    },
+    "units": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+      "additionalProperties": {"$ref": "#/$defs/unit"}
+    },
+    "bundle_ratchets": {
+      "type": "object",
+      "propertyNames": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+      "additionalProperties": {"$ref": "#/$defs/bundle_ratchet"}
+    },
+    "skills": {
+      "type": "object",
+      "propertyNames": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+      "additionalProperties": {"$ref": "#/$defs/skill"}
+    },
+    "budget_debt": {"type": "array", "items": {"$ref": "#/$defs/budget_debt_entry"}}
+  },
+  "$defs": {
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entrypoint"],
+      "properties": {
+        "entrypoint": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+        "description": {"type": "string", "default": ""}
+      }
+    },
+    "unit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "kind"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "kind": {"type": "string", "enum": ["always_loaded", "trigger_loaded"]},
+        "always_loads": {
+          "type": "array",
+          "default": [],
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"}
+        },
+        "ratchet_ceiling_tokens": {"type": "integer", "minimum": 1},
+        "ratchet_reason": {"type": "string", "minLength": 1}
+      },
+      "dependentRequired": {
+        "ratchet_ceiling_tokens": ["ratchet_reason"],
+        "ratchet_reason": ["ratchet_ceiling_tokens"]
+      }
+    },
+    "bundle_ratchet": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ceiling_tokens", "reason"],
+      "properties": {
+        "ceiling_tokens": {"type": "integer", "minimum": 1},
+        "reason": {"type": "string", "minLength": 1}
+      }
+    },
+    "skill": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path"],
+      "properties": {"path": {"type": "string", "minLength": 1}}
+    },
+    "budget_debt_entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["unit", "owner", "reason", "granted_on", "expires_on"],
+      "properties": {
+        "unit": {"type": "string", "minLength": 1},
+        "owner": {"type": "string", "minLength": 1},
+        "reason": {"type": "string", "minLength": 1},
+        "granted_on": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"},
+        "expires_on": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"}
+      }
+    }
+  }
+}

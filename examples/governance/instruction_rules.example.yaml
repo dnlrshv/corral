@@ -1,0 +1,38 @@
+schema_version: 1
+rules:
+  R-PAYMENTS-001:
+    file: examples/governance/instructions/core.md
+    anchor: "Changes to payments-config MUST include a rollback note."
+    concern_key: payments-rollbacks
+    modality: MUST
+    selectors:
+      paths: [config/payments.yaml]
+      surfaces: [payments-config]
+    review_by: platform-maintainers
+  R-PAYMENTS-002:
+    file: examples/governance/instructions/core.md
+    anchor: "Changes to payments-config MUST NOT bypass staged validation."
+    concern_key: payments-validation
+    modality: MUST NOT
+    selectors:
+      workflows: [payments-rollout]
+      surfaces: [payments-config]
+    review_by: platform-maintainers
+  R-ORDERS-003:
+    file: examples/governance/instructions/core.md
+    anchor: "ASK the service owner before changing an orders-api response field."
+    concern_key: orders-ownership
+    modality: ASK
+    selectors:
+      paths: [src/api/orders.py]
+      surfaces: [orders-api]
+    review_by: api-maintainers
+  R-ORDERS-004:
+    file: examples/governance/instructions/core.md
+    anchor: "READ the orders-api compatibility notes first"
+    concern_key: orders-compatibility
+    modality: READ
+    selectors:
+      workflows: [orders-change]
+      surfaces: [orders-api]
+    review_by: api-maintainers

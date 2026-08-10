@@ -1,0 +1,38 @@
+# corral retrospective model-seat registry.
+#
+# Copy to seats.yaml (or point corral.yaml's seats_file at another path).
+# Provider is a free-form identity label used only for the independent-provider
+# check. Credentials are read only from each seat's explicitly named auth_env.
+
+schema_version: 1
+seats:
+  # Anthropic Messages API through the optional dependency already supplied by
+  # `pip install corral[preflight]`.
+  retro-drafter:
+    provider: vendor-a
+    model: model-id
+    auth_env: CORRAL_DRAFTER_API_KEY
+    adapter: anthropic-sdk
+
+  # Stdlib HTTP against an OpenAI-compatible endpoint. The configured base URL
+  # receives /chat/completions or /responses unless it already has that suffix.
+  retro-verifier:
+    provider: vendor-b
+    model: model-id
+    auth_env: CORRAL_VERIFIER_API_KEY
+    adapter: openai-compatible-endpoint
+    options:
+      base_url_env: CORRAL_VERIFIER_BASE_URL
+      protocol: chat-completions  # chat-completions or responses
+
+  # Local command: argv is executed directly, never through a shell. The prompt
+  # is sent on stdin unless {prompt_file} appears in argv. Available placeholders
+  # are {model} and {prompt_file}. auth_env may be null for a local unauthenticated
+  # command. The child receives only PATH, HOME, LANG, and auth_env when set.
+  local-verifier:
+    provider: local-cli
+    model: model-id
+    auth_env: null
+    adapter: shell-command
+    options:
+      argv: ["provider-cli", "--model", "{model}"]

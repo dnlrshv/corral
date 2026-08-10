@@ -1,0 +1,307 @@
+# corral configuration.
+#
+# Copy this file to corral.yaml at your repository root and adjust. Every
+# key is optional; omitted keys fall back to the defaults shown here.
+
+# Model-seat registry, relative to this file/repository root. See
+# seats.example.yaml for the complete adapter schema.
+seats_file: seats.yaml
+
+governance:
+  # The registry is repository data. The JSON Schema is packaged with corral
+  # unless governance.schema points at an adopter-owned replacement.
+  registry: instruction_rules.yaml
+  schema: null
+
+  # No private instruction paths are assumed. Declare every instruction-doc
+  # family that should activate normative-line detection.
+  instruction_globs: ["AGENTS.md", "docs/instructions/**"]
+
+  # Also adopter-owned and empty by default. In a governance-lane PR, matches
+  # are blocked. Include the gate, its workflow/bootstrap, and packaged-policy
+  # mirrors used by your CI topology.
+  protected_paths:
+    ["corral/governance/**", ".github/workflows/instruction-governance.yml"]
+
+  rule_id_pattern: '^(R-[A-Z0-9]+-\d{3,4}|G-\d{4}-\d{3})$'
+  modalities: [MUST, MUST NOT, ASK, READ]
+
+  proposals:
+    operations: [sharpen, add_rule, add_skill, demote, delete]
+    tiers: [executable, core, workflow_prompt, topic_file, gotcha, skill, wiki]
+    max: 3
+    reviewers: [platform-maintainers, api-maintainers]
+
+  replay:
+    manifest: examples/governance/instruction_manifest.example.yaml
+    trigger_rules: examples/governance/instruction_trigger_rules.example.yaml
+    corpus: examples/governance/replay_corpus.example.yaml
+    topic_prefixes: [examples/governance/instructions/]
+    critical_tiers: [critical, elevated]
+    min_recall: 0.95
+    # First matching path glob supplies the frozen case tier.
+    severity_paths:
+      config/payments.yaml: critical
+      src/api/orders.py: elevated
+    default_tier: standard
+    # Builder-only pools; both are empty by default in corral.
+    allowed_loads:
+      [examples/governance/instructions/core.md,
+       examples/governance/instructions/payments.md,
+       examples/governance/instructions/orders.md]
+    forbidden_loads:
+      [examples/governance/instructions/payments.md,
+       examples/governance/instructions/orders.md]
+
+  budget:
+    # Per-tier ceilings are optional. The replay corpus/manifest budgets remain
+    # authoritative for tiers omitted here.
+    token_ceilings: {critical: 2000, elevated: 1800, standard: 1200}
+
+  # Human reviewer stamped on governance-generated proposals/reports (retro
+  # doc/skill proposals and staleness demotion proposals). No default.
+  reviewer: null
+
+  staleness:
+    # Deterministic applicability thresholds (two-threshold hysteresis band).
+    retain_rate: 0.20
+    retain_days: 90
+    retain_workflow_count: 2
+    demote_rate: 0.10
+    demote_days: 180
+    min_sessions: 30
+    # Destination glob for demoted non-normative prose. No default: demotion
+    # proposal blocks are withheld until it is configured.
+    demote_target_glob: null
+
+retro:
+  # Seat used to draft retrospective candidates/proposals.
+  drafter_seat: retro-drafter
+
+  # Independent verifier seats, tried in this exact order. The first is a
+  # required seat for `corral retro seats check`; later entries are fallbacks.
+  verifier_seats: [retro-verifier, local-verifier]
+
+  # Prevent a seat whose provider label matches the drafter from reviewing
+  # the drafter's output. Disable only for deliberately non-independent use.
+  require_distinct_provider: true
+
+  # Per probe-independent completion call timeout.
+  verification_timeout_s: 300
+
+  # Gotchas preserve the source's proceed-unverified behavior. Instruction
+  # proposals preserve the stricter source behavior and are refuted whenever
+  # no verifier can produce a valid result.
+  gotcha_unavailable_policy: proceed-unverified
+  instruction_unavailable_policy: fail-closed
+
+  # GitHub repository (owner/name) that `corral retro run` mines. There is
+  # NO default: the retrospective stays repo-less until adopters opt in.
+  repository: null
+
+  # Where severe-candidate review issues go: github (file via gh), stdout
+  # (render only; the default), or off. Write-side effects additionally
+  # never happen under --dry-run.
+  issue_sink: stdout
+
+  # Repo-root-relative glob locating committed fix-up pair parquets. When
+  # null, defaults to <telemetry.rollup_output_dir>/fixup_*.parquet; the
+  # week-specific file wins, else the newest match, else live PR fetch.
+  fixup_glob: null
+
+  # Gotcha registry written by `corral retro run`; validated against the
+  # schema shipped in corral/memory before every write.
+  gotchas_path: agent_memory/gotchas.json
+
+  # Refinement ledger consumed by `corral retro revert-refinement`.
+  refinements_path: agent_memory/refinements.jsonl
+
+  # Minimum drafter confidence for a candidate to reach verification.
+  confidence_threshold: 0.70
+
+  # Output token budget for drafter completions.
+  max_tokens: 900
+
+  # Per drafter completion timeout in seconds.
+  drafting_timeout_s: 300
+
+  # Severity vocabulary offered to the drafter, and the subset that triggers
+  # immediate review-issue filing. Default empty subset: no issue filing.
+  allowed_severities: [info, P2, P1, P0]
+  severe_severities: []
+
+  github:
+    # Issue assignee; null omits the flag entirely.
+    assignee: null
+    # Label used for open-issue dedup and for filed review issues.
+    gotcha_label: agent-gotcha
+    # Per gh invocation timeout in seconds.
+    timeout_s: 30
+
+  evidence:
+    # Minimum DISTINCT ROOT INCIDENTS before an evidence group merits a seat
+    # call. Never loosen this to manufacture output.
+    min_root_incidents: 2
+    # Cap on candidates drafted per weekly run, highest-evidence first.
+    max_candidates: 3
+    # Case-insensitive title substrings excluding a fix-up pair from mining
+    # (the retrospective's own weekly output must not mine itself).
+    ignored_title_patterns: ["weekly gotcha retrospective", "weekly agent rollup"]
+    # A pair whose ONLY shared files match these globs is housekeeping
+    # correlation, not defect evidence.
+    ignored_path_globs:
+      ["CLAUDE.md", "AGENTS.md", "README.md", "CLAUDE/*", "wiki/*",
+       "agent_telemetry/*", "agent_memory/gotchas.json"]
+
+  bridge:
+    # File-backed evidence roots. Default EMPTY: adopters opt in. Private
+    # host layouts are deliberately not defaults; examples only:
+    # memory_roots: ["~/.claude/projects", "vendor-memory/corpus"]
+    # run_artifact_roots: [".agent-runs"]
+    memory_roots: []
+    run_artifact_roots: []
+
+  proposals:
+    # Instruction-file (doc/skill) proposal pass. Verified proposals render
+    # into the weekly summary as a SEPARATE human-review-only section/commit
+    # plan; `corral retro run` never auto-applies them.
+    enabled: false
+    # Cap on accepted proposals per weekly run (hard cap 3), ON TOP of the
+    # gotcha cap.
+    max: 3
+    # Minimum DISTINCT root incidents behind one proposal.
+    min_incidents: 2
+    # Repo-relative globs the drafter may target (the adopter's instruction
+    # ladder). No default: the pass refuses targets until these are declared.
+    target_globs: []
+
+codemap:
+  # Directory that receives imports.parquet and symbols.parquet, and where
+  # `corral codemap query` looks for them (plus edges.parquet and flows/).
+  output_dir: code_map
+
+  # Repo-root-relative directories the code map scans. ["."] walks the
+  # whole tree.
+  scan_dirs: ["."]
+
+  # Repo-root-relative directories that are never scanned. Claude Code
+  # agent worktrees are skipped by default: they shadow the main tree and
+  # would duplicate every symbol and edge.
+  skip_dirs: [".venv", "data", "tests/fixtures", ".claude/worktrees"]
+
+lineage:
+  # Where `corral lineage build` writes its output. The build command
+  # writes edges.parquet into the parent directory of this path, and
+  # `corral codemap query` reads lineage edges from this exact path — it
+  # may live outside codemap.output_dir.
+  output: code_map/edges.parquet
+
+  # Pipeline manifest YAML declaring module:entrypoint -> table writes.
+  # Which sections are read (and which key of each entry holds the table
+  # name) is controlled by yaml_manifest_schema below. A missing file
+  # simply contributes no edges.
+  pipeline_yaml: config/data_pipeline.yaml
+
+  # Section-name -> table-key mapping for the pipeline manifest YAML.
+  # Every listed section contributes writes_table edges, reading the table
+  # name from the mapped key of each entry.
+  yaml_manifest_schema:
+    sources: table
+    groups: target_table
+
+  # Config-loader functions the lineage extractor should trust, as a map of
+  # loader-function-name -> config file path recorded as the edge target.
+  # Calls to functions not listed here produce no reads_config edges.
+  config_loaders: {}
+  # Example:
+  # config_loaders:
+  #   load_app_config: config/app.yaml
+
+  # Optional key prefix a wrapper loader has already traversed, e.g. a
+  # loader that returns cfg["metrics"] maps to the prefix "metrics".
+  config_loader_key_prefixes: {}
+  # Example:
+  # config_loader_key_prefixes:
+  #   load_metric_defs: metrics
+
+hooks:
+  # Registry shared by the staged-change gate and the coding-agent reminder.
+  # The path is relative to the repository root.
+  surfaces: surfaces.yaml
+
+  magic_numbers:
+    # Python module containing dataclass singleton fields that define approved
+    # numeric constants. No private/project-specific path is assumed. When
+    # omitted or null, the lint prints a notice and skips membership checks.
+    constants: null
+    # Example:
+    # constants: src/app/constants.py
+
+    # Optional YAML controlling skip_values, high_frequency_threshold,
+    # exceptions, and scoped_constants. A missing file uses built-in defaults.
+    allowlist: .magic-number-allowlist.yaml
+
+    # Directories to scan, relative to the repository root. If omitted, this
+    # inherits codemap.scan_dirs.
+    # scan_dirs: ["src", "scripts"]
+
+preflight:
+  # Gotcha registry consumed by `corral preflight` and validated by
+  # `corral memory validate`. Relative to the repository root.
+  gotchas: agent_memory/gotchas.json
+
+  # Anthropic model ID used for LLM brief generation.
+  model: claude-haiku-4-5-20251001
+
+  # Maximum output tokens for the LLM call.
+  max_tokens: 1500
+
+  # OPTIONAL repo-local quota snapshot (YAML or JSON). When unset or the
+  # file is absent, quota telemetry is skipped silently.
+  quota_status_file: null
+
+  # Default output file for `corral preflight` (stdout when null). The
+  # --output flag overrides this.
+  output: null
+
+  # Top-level modules under which the LLM may propose NEW files (test_files)
+  # during brief post-validation. When null, the set is derived from the
+  # code-map artifacts (top-level directories recorded in symbols.parquet).
+  recognized_modules: null
+  # Example:
+  # recognized_modules: ["src", "tests", "scripts"]
+
+  # CI workflow-name -> workflow-kind mapping, used to match gotcha
+  # workflow_kinds against the $GITHUB_WORKFLOW env var. Workflow names are
+  # per-repository CI configuration, so the default is empty: unrecognized
+  # or missing names never filter on workflow kind.
+  workflow_kinds: {}
+  # Example:
+  # workflow_kinds:
+  #   "CI: Fix Issue": fix-issue
+  #   "CI: PR Review": pr-review
+
+telemetry:
+  # Spool directory for session records written by the Claude Code Stop hook
+  # (`corral telemetry capture` / `corral-telemetry-capture`). Resolution
+  # order: --spool-dir flag, $CORRAL_TELEMETRY_DIR, this key, then the
+  # XDG-style default ~/.cache/corral/telemetry ($XDG_CACHE_HOME honoured).
+  spool_dir: null
+  # Example:
+  # spool_dir: ~/.cache/corral/telemetry
+
+  # Directory (relative to the repository root) that receives the weekly
+  # `corral telemetry rollup` parquet files (rollup_<YYYY-Www>.parquet).
+  rollup_output_dir: agent_telemetry
+
+  # Artifact lookback window for the rollup, in days. The source mechanism
+  # downloads CI artifacts named agent-telemetry-* created within this
+  # window; there is no local-retention/pruning setting.
+  lookback_days: 7
+
+  # Branch-protection required status checks for `main`, used by
+  # `corral telemetry ci-outcome` and the rollup's CI join. Commits missing
+  # a check-run for any listed context read as null (data not
+  # reconstructable), not failed. Adjust to match your repository's
+  # required checks.
+  required_ci_contexts: ["lint", "test"]

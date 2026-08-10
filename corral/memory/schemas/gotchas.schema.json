@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/dnlrshv/corral/corral/memory/schemas/gotchas.schema.json",
+  "title": "AgentMemoryGotchas",
+  "description": "Schema for the agent gotcha registry (default path: agent_memory/gotchas.json) — cross-agent pitfall registry.",
+  "type": "object",
+  "required": ["gotchas"],
+  "additionalProperties": false,
+  "properties": {
+    "gotchas": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Gotcha"
+      }
+    }
+  },
+  "$defs": {
+    "Gotcha": {
+      "type": "object",
+      "required": [
+        "id",
+        "rule",
+        "workflow_kinds",
+        "repo_paths",
+        "surface_ids",
+        "source_prs",
+        "control_type",
+        "control_pr",
+        "control_path",
+        "inject_into_briefer",
+        "created",
+        "expires"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^G-\\d{4}-\\d{3}$",
+          "description": "Unique gotcha identifier in the format G-YYYY-NNN."
+        },
+        "rule": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Human-readable description of the pitfall or rule to follow."
+        },
+        "workflow_kinds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Agent workflow kinds this rule applies to, e.g. 'fix-issue', 'pr-review', 'pr-merge', 'pr-triage', 'pm'. Matched against the invoking CI workflow name via the preflight workflow-kind mapping (preflight.workflow_kinds in corral.yaml). Schema v2: replaces the overloaded `applies_to_surfaces` field, which previously held either workflow-kind strings or file paths interchangeably and could never match the file-path-only briefer selector."
+        },
+        "repo_paths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Repo-relative file path globs (e.g. 'src/api/orders.py', 'config/*.yaml') this rule applies to. Glob-matched (fnmatch) against the briefer's `files_to_touch`."
+        },
+        "surface_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Surface-registry keys (surfaces.yaml) this rule applies to (e.g. 'payments-config'). Matched against the briefer's `surfaces_in_scope`."
+        },
+        "source_prs": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          },
+          "description": "PR numbers that motivated this gotcha."
+        },
+        "source_refs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Non-PR evidence source refs that motivated this gotcha, such as sanitized session-memory or audit-log pointers."
+        },
+        "control_type": {
+          "type": "string",
+          "enum": [
+            "regression_test",
+            "schema_validator",
+            "lint",
+            "labeler",
+            "hook",
+            "prompt_only"
+          ],
+          "description": "Type of automated control that enforces this rule."
+        },
+        "control_pr": {
+          "oneOf": [
+            {"type": "integer"},
+            {"type": "null"}
+          ],
+          "description": "PR number that introduced the control, or null if not yet implemented."
+        },
+        "control_path": {
+          "oneOf": [
+            {"type": "string"},
+            {"type": "null"}
+          ],
+          "description": "Repo-relative path to the control file, or null if not yet implemented."
+        },
+        "inject_into_briefer": {
+          "type": "boolean",
+          "description": "Whether this rule should be injected into agent briefing prompts."
+        },
+        "created": {
+          "type": "string",
+          "format": "date",
+          "description": "ISO 8601 date when this gotcha was created (YYYY-MM-DD)."
+        },
+        "expires": {
+          "oneOf": [
+            {"type": "string", "format": "date"},
+            {"type": "null"}
+          ],
+          "description": "ISO 8601 date when this gotcha expires and should be removed, or null if permanent."
+        }
+      }
+    }
+  }
+}

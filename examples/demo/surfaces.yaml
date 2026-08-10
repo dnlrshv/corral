@@ -1,0 +1,25 @@
+surfaces:
+  curated-orders-sql:
+    description: SQL that replaces the synthetic curated-orders table.
+    paths:
+      - acme_pipeline/queries.py
+    line_ranges: []
+    needs_human: true
+    needs_shadow_run: false
+    needs_equivalence_check: true
+    needs_validation: false
+    notes: Review source and destination table names before accepting an edit.
+    yaml_block_selectors: []
+
+  pipeline-settings:
+    description: Runtime thresholds and output location for the demo pipeline.
+    paths:
+      - pipeline.yaml
+    line_ranges: []
+    needs_human: false
+    needs_shadow_run: true
+    needs_equivalence_check: false
+    needs_validation: true
+    notes: Exercise the demo after changing a setting.
+    yaml_block_selectors:
+      - pipeline.yaml::minimum_total

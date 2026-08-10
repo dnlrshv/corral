@@ -1,0 +1,75 @@
+{
+  "gotchas": [
+    {
+      "id": "G-2025-001",
+      "rule": "Regenerate derived artifacts after changing query text.",
+      "workflow_kinds": ["fix-issue"],
+      "repo_paths": ["demo/queries.py", "demo/*.py"],
+      "surface_ids": [],
+      "source_prs": [12],
+      "control_type": "regression_test",
+      "control_pr": 14,
+      "control_path": "tests/test_queries.py",
+      "inject_into_briefer": true,
+      "created": "2025-01-15",
+      "expires": null
+    },
+    {
+      "id": "G-2025-002",
+      "rule": "Confirm the rollout plan with a maintainer before editing payment config.",
+      "workflow_kinds": [],
+      "repo_paths": ["config/payments.yaml"],
+      "surface_ids": ["payments-config"],
+      "source_prs": [],
+      "source_refs": ["audit/2025-01-review"],
+      "control_type": "prompt_only",
+      "control_pr": null,
+      "control_path": null,
+      "inject_into_briefer": true,
+      "created": "2025-02-01",
+      "expires": "2099-01-01"
+    },
+    {
+      "id": "G-2025-003",
+      "rule": "Expired rule that must never surface in a brief.",
+      "workflow_kinds": [],
+      "repo_paths": ["**/*.py"],
+      "surface_ids": [],
+      "source_prs": [],
+      "control_type": "prompt_only",
+      "control_pr": null,
+      "control_path": null,
+      "inject_into_briefer": true,
+      "created": "2025-01-01",
+      "expires": "2025-01-02"
+    },
+    {
+      "id": "G-2025-004",
+      "rule": "Registry-only rule that is never injected into briefs.",
+      "workflow_kinds": [],
+      "repo_paths": ["demo/pipeline.py"],
+      "surface_ids": [],
+      "source_prs": [],
+      "control_type": "lint",
+      "control_pr": null,
+      "control_path": null,
+      "inject_into_briefer": false,
+      "created": "2025-03-01",
+      "expires": null
+    },
+    {
+      "id": "G-2025-005",
+      "rule": "Workflow-scoped review checklist for pull-request reviews.",
+      "workflow_kinds": ["pr-review"],
+      "repo_paths": [],
+      "surface_ids": [],
+      "source_prs": [],
+      "control_type": "prompt_only",
+      "control_pr": null,
+      "control_path": null,
+      "inject_into_briefer": true,
+      "created": "2025-03-10",
+      "expires": null
+    }
+  ]
+}

@@ -1,0 +1,73 @@
+# Instruction-governance gate for PRs that touch instruction files.
+#
+# TRUSTED-BASE pattern (why this workflow looks unusual):
+#   On a pull request, validator code is POLICY and the head ref is untrusted
+#   DATA. The workflow therefore bootstraps the launcher itself from the BASE
+#   ref, then `corral governance check --base-ref ... --head-ref ...`
+#   materializes the corral package from BASE again for its trusted child. The
+#   nested interpreter receives a
+#   PYTHONPATH pointing ONLY at the materialized BASE package -- never the
+#   ambient PYTHONPATH -- so HEAD-controlled directories cannot inject code
+#   (e.g. via sitecustomize.py) or shadow imports inside the trusted child.
+#   The BASE validator reads the baseline registry and the governance config
+#   from BASE and treats HEAD strictly as data (proposed registry/instruction
+#   text + diff + PR-body proposal block). Editing validator logic in the
+#   same PR therefore cannot weaken the verdict that judges that PR.
+#
+#   Do NOT "simplify" this into installing the head checkout and invoking the
+#   gate with the internal CORRAL_GOVERNANCE_BASE_EXECUTED bypass variable.
+name: instruction-governance-gate
+
+on:
+  pull_request:
+    paths:
+      # Mirror your governance.instruction_globs here, plus the registry and
+      # governance config whose changes can alter verdicts.
+      - "AGENTS.md"
+      - "docs/instructions/**"
+      - "instruction_rules.yaml"
+      - "corral.yaml"
+      - "corral/governance/**"
+
+permissions:
+  contents: read # base + head history for git archive/diff
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out PR head with full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the gate needs both base and head refs
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install trusted-base corral launcher in an isolated environment
+        env:
+          BASE_REF: origin/${{ github.base_ref }}
+        run: |
+          trusted_src="${RUNNER_TEMP}/corral-governance-base"
+          trusted_venv="${RUNNER_TEMP}/corral-governance-venv"
+          mkdir -p "$trusted_src"
+          git archive --format=tar "$BASE_REF" | tar -x -C "$trusted_src"
+          python -m venv "$trusted_venv"
+          "$trusted_venv/bin/python" -m pip install "$trusted_src"
+
+      - name: Write PR body for proposal-block parsing
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: printf '%s' "$PR_BODY" > pr_body.md
+
+      - name: Run instruction-governance gate (trusted base)
+        run: |
+          "${RUNNER_TEMP}/corral-governance-venv/bin/python" -I -c \
+            'import sys; from corral.cli import main; raise SystemExit(main(sys.argv[1:]))' \
+            governance check \
+            --root "$GITHUB_WORKSPACE" \
+            --base-ref "origin/${{ github.base_ref }}" \
+            --head-ref "${{ github.sha }}" \
+            --pr-body-file "$GITHUB_WORKSPACE/pr_body.md"

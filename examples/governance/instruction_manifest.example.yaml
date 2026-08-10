@@ -1,0 +1,32 @@
+schema_version: 1
+token_estimate:
+  method: chars_div_4
+  chars_per_token: 4
+  baselined_against_sha: "0000000000000000000000000000000000000000"
+  baselined_on: "2026-08-10"
+budgets:
+  always_loaded_bundle_target_tokens: 500
+  always_loaded_bundle_hard_tokens: 800
+  always_loaded_single_file_hard_tokens: 800
+  trigger_loaded_unit_hard_tokens: 600
+  skill_body_hard_tokens: 800
+  skill_count_warn: 3
+  skill_count_hard: 5
+  budget_debt_max_days: 14
+profiles:
+  example:
+    entrypoint: core
+    description: Synthetic payments-config and orders-api profile.
+units:
+  core:
+    path: examples/governance/instructions/core.md
+    kind: always_loaded
+  payments:
+    path: examples/governance/instructions/payments.md
+    kind: trigger_loaded
+  orders:
+    path: examples/governance/instructions/orders.md
+    kind: trigger_loaded
+bundle_ratchets: {}
+skills: {}
+budget_debt: []

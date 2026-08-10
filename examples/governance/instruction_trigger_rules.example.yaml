@@ -1,0 +1,14 @@
+schema_version: 1
+always_load:
+  - examples/governance/instructions/core.md
+rules:
+  payments_config:
+    description: Load payments guidance for payments-config work.
+    path_globs: [config/payments.yaml, config/payments/**]
+    keyword_patterns: ["(?i)payments[- ]config"]
+    loads: [examples/governance/instructions/payments.md]
+  orders_api:
+    description: Load orders guidance for orders-api work.
+    path_globs: [src/api/orders.py, src/api/orders/**]
+    keyword_patterns: ["(?i)orders[- ]api"]
+    loads: [examples/governance/instructions/orders.md]

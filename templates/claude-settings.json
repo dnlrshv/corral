@@ -1,0 +1,25 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "corral-surface-reminder"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "corral-telemetry-capture"
+          }
+        ]
+      }
+    ]
+  }
+}

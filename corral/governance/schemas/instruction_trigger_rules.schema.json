@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/dnlrshv/corral/corral/governance/schemas/instruction_trigger_rules.schema.json",
+  "title": "Corral Instruction Trigger Rules",
+  "description": "Machine-readable deterministic retrieval rules.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "always_load", "rules"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "always_load": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "rules": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+      "additionalProperties": {"$ref": "#/$defs/rule"}
+    }
+  },
+  "$defs": {
+    "rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["description", "path_globs", "keyword_patterns", "loads"],
+      "properties": {
+        "description": {"type": "string", "minLength": 1},
+        "path_globs": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "keyword_patterns": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "loads": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  }
+}

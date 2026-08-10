@@ -1,0 +1,27 @@
+# Copy to surfaces.yaml at the repository root and replace these neutral
+# examples with the high-risk surfaces declared by your project.
+surfaces:
+  payments-config:
+    description: Configuration that controls payment processing behavior.
+    paths:
+      - config/payments.yaml
+    line_ranges: []
+    needs_human: true
+    needs_shadow_run: false
+    needs_equivalence_check: true
+    needs_validation: false
+    notes: Confirm the rollout plan with a maintainer.
+    yaml_block_selectors: []
+
+  orders-api:
+    description: Request validation for the orders API.
+    paths:
+      - src/api/orders.py
+    line_ranges:
+      - src/api/orders.py:40-85
+    needs_human: false
+    needs_shadow_run: true
+    needs_equivalence_check: false
+    needs_validation: false
+    notes: Exercise the affected endpoint before merging.
+    yaml_block_selectors: []

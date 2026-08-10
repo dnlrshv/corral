@@ -1,0 +1,26 @@
+# Gitleaks configuration for corral.
+# The redaction and bridge-security tests embed deliberately fake,
+# never-valid credential-shaped strings that exercise those code paths.
+# Allowlists below are scoped to the specific synthetic values / lines so
+# a real secret added to the same files would still be caught.
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Synthetic token-shaped fixtures (matched by captured value)"
+regexTarget = "match"
+regexes = [
+    '''sk-ant-AbC123_xYz''',
+    '''ghp_AbC123def''',
+    '''github_pat_Zz9''',
+    '''ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456''',
+    '''AKIAABCDEFGHIJKLMNOP''',
+    '''glpat-ABCDEFGHIJKLMNOPQRST''',
+]
+
+[[allowlists]]
+description = "Synthetic RSA private-key block in the scrubber test"
+paths = ['''tests/test_retro_run\.py''']
+regexTarget = "line"
+regexes = ['''-----BEGIN RSA PRIVATE KEY-----''']

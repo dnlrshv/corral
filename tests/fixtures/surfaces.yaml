@@ -1,0 +1,24 @@
+surfaces:
+  payments-config:
+    description: Payment configuration.
+    paths:
+      - config/payments.yaml
+    line_ranges: []
+    needs_human: true
+    needs_shadow_run: false
+    needs_equivalence_check: true
+    needs_validation: false
+    notes: Ask a maintainer to review.
+    yaml_block_selectors: []
+  orders-api:
+    description: Orders API validation.
+    paths:
+      - src/api/orders.py
+    line_ranges:
+      - src/api/orders.py:10-20
+    needs_human: false
+    needs_shadow_run: true
+    needs_equivalence_check: false
+    needs_validation: true
+    notes: Exercise the endpoint.
+    yaml_block_selectors: []

@@ -1,0 +1,15 @@
+- id: surface-check
+  name: corral surface check
+  description: Check staged changes against declared high-risk surfaces.
+  entry: corral-surface-check
+  language: python
+  pass_filenames: false
+  always_run: true
+
+- id: magic-numbers
+  name: corral magic-number lint
+  description: Flag numeric literals that duplicate configured constants.
+  entry: corral-magic-numbers
+  language: python
+  pass_filenames: false
+  always_run: true

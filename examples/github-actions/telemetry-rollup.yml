@@ -1,0 +1,78 @@
+# Weekly agent-telemetry rollup: aggregates session artifacts into parquet,
+# reconstructs CI outcomes for the week's merged PRs, and opens a PR with the
+# parquet artifacts + summary (single-writer discipline as in the retro job).
+name: weekly-telemetry-rollup
+
+on:
+  schedule:
+    - cron: "41 5 * * 1" # weekly, Mondays (UTC), after the retrospective
+  workflow_dispatch: {}
+
+permissions:
+  actions: read # list/download telemetry workflow artifacts
+  checks: read # read check runs for the ci-outcome join
+  contents: read
+  pull-requests: read # gh pr list for the ci-outcome join
+
+jobs:
+  rollup:
+    runs-on: ubuntu-latest
+    env:
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      # Read-side gh calls (merged-PR metadata, CI contexts) use the default
+      # workflow token; no extra secrets are needed for reading.
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out default branch
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install corral
+        run: pip install .
+
+      - name: Roll up weekly session artifacts into parquet
+        run: corral telemetry rollup 2>&1 | tee rollup_summary.md
+
+      - name: Reconstruct CI outcomes for this week's merged PRs
+        run: |
+          since="$(date -d '7 days ago' +%F)"
+          mkdir -p agent_telemetry
+          prs="$(gh pr list --state merged --search "merged:>=${since}" --json number --jq '.[].number')"
+          for pr in $prs; do
+            corral telemetry ci-outcome --pr "$pr" \
+              > "agent_telemetry/ci_outcome_${pr}.json" || true
+          done
+
+      - name: Re-check remote HEAD before push (abort if moved)
+        id: base
+        run: |
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          git fetch origin
+          current="$(git rev-parse "origin/${DEFAULT_BRANCH}")"
+          if [ "$current" != "$(git rev-parse HEAD)" ]; then
+            echo "base ref moved during the run; refusing to push" >&2
+            exit 1
+          fi
+
+      - name: Open rollup PR (parquet + summary)
+        env:
+          # PAT (or GitHub App installation token) authorized to push the
+          # branch and open the PR. Placeholder secret name.
+          GH_TOKEN: ${{ secrets.CORRAL_TELEMETRY_PR_TOKEN }}
+        run: |
+          week="$(date +%G-W%V)"
+          branch="telemetry/${week}"
+          git config user.name "weekly-telemetry-rollup"
+          git config user.email "weekly-telemetry-rollup@users.noreply.github.com"
+          git checkout -b "$branch"
+          git add agent_telemetry/ rollup_summary.md
+          git commit -m "Weekly telemetry rollup ${week}"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}"
+          git push origin "$branch"
+          gh pr create \
+            --title "Weekly telemetry rollup ${week}" \
+            --body-file rollup_summary.md

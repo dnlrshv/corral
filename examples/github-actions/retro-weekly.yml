@@ -1,0 +1,84 @@
+# Weekly agent retrospective: mines fix-up evidence, drafts gotcha candidates
+# + (optionally) doc/skill proposals, and opens ONE PR with the registry
+# commit and the human-review-only summary.
+#
+# Single-writer contract: `corral retro run` is the sole writer of the gotcha
+# registry. The job captures the base SHA at checkout time, passes it to the
+# run as --expected-base (the run refuses to write when the ref moved), and a
+# guard step re-resolves the remote HEAD immediately before push -- aborting
+# when the default branch moved underneath us.
+name: weekly-retrospective
+
+on:
+  schedule:
+    - cron: "17 5 * * 1" # weekly, Mondays (UTC)
+  workflow_dispatch: {}
+
+permissions:
+  contents: read # checkout only; the push below authenticates with the PAT
+  issues: read # retrospective evidence collected via gh
+  pull-requests: read # merged-PR evidence collected via gh
+
+jobs:
+  retro:
+    runs-on: ubuntu-latest
+    env:
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+    steps:
+      - name: Check out default branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the base-SHA guard needs refs, not a shallow tip
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install corral
+        run: pip install .
+
+      - name: Capture expected base SHA (single-writer guard)
+        id: base
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Run weekly retrospective
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Model-seat credentials; names must match the seats.yaml auth_env
+          # entries (placeholder secret names).
+          CORRAL_DRAFTER_API_KEY: ${{ secrets.CORRAL_DRAFTER_API_KEY }}
+          CORRAL_VERIFIER_API_KEY: ${{ secrets.CORRAL_VERIFIER_API_KEY }}
+        run: |
+          corral retro run \
+            --base-ref "origin/${DEFAULT_BRANCH}" \
+            --expected-base "${{ steps.base.outputs.sha }}" \
+            --output-summary retrospective.md
+
+      - name: Re-check remote HEAD before push (abort if moved)
+        run: |
+          git fetch origin
+          current="$(git rev-parse "origin/${DEFAULT_BRANCH}")"
+          if [ "$current" != "${{ steps.base.outputs.sha }}" ]; then
+            echo "base ref moved (${{ steps.base.outputs.sha }} -> $current); refusing to push" >&2
+            exit 1
+          fi
+
+      - name: Open retrospective PR (registry commit + summary)
+        env:
+          # PAT (or GitHub App installation token) authorized to push the
+          # branch and open the PR. Placeholder secret name.
+          GH_TOKEN: ${{ secrets.CORRAL_RETRO_PR_TOKEN }}
+        run: |
+          week="$(date +%G-W%V)"
+          branch="retro/${week}"
+          git config user.name "weekly-retrospective"
+          git config user.email "weekly-retrospective@users.noreply.github.com"
+          git checkout -b "$branch"
+          git add agent_memory/gotchas.json retrospective.md
+          git commit -m "Weekly retrospective ${week}"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}"
+          git push origin "$branch"
+          gh pr create \
+            --title "Weekly retrospective ${week}" \
+            --body-file retrospective.md

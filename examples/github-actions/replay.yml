@@ -1,0 +1,33 @@
+# Deterministic retrieval replay: proves the always-loaded bundle + trigger
+# rules still retrieve the reviewed corpus cases at the configured recall.
+name: instruction-replay
+
+on:
+  pull_request:
+    paths:
+      - "instruction_rules.yaml"
+      - "instruction_manifest.yaml"
+      - "instruction_trigger_rules.yaml"
+      - "replay_corpus.yaml"
+      - "docs/instructions/**"
+
+permissions:
+  contents: read
+
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out PR head
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install corral
+        run: pip install .
+
+      - name: Replay the reviewed retrieval corpus
+        run: corral governance replay

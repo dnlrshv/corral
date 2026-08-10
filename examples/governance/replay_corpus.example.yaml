@@ -1,0 +1,39 @@
+profile: example
+generated_on: "2026-08-10"
+source_repo: synthetic/corral-example
+stratification:
+  by_tier: {critical: 1, elevated: 1, standard: 1}
+cases:
+  - number: 101
+    kind: pr
+    title: Stage a payments-config rollout
+    task_text: Add a payments-config retry window with rollback notes.
+    touched_paths: [config/payments.yaml]
+    expected_loads:
+      - examples/governance/instructions/core.md
+      - examples/governance/instructions/payments.md
+    forbidden_loads: [examples/governance/instructions/orders.md]
+    max_bundle_tokens: 2000
+    tier: critical
+  - number: 102
+    kind: pr
+    title: Validate a new orders-api field
+    task_text: Add request validation to the orders-api endpoint.
+    touched_paths: [src/api/orders.py]
+    expected_loads:
+      - examples/governance/instructions/core.md
+      - examples/governance/instructions/orders.md
+    forbidden_loads: [examples/governance/instructions/payments.md]
+    max_bundle_tokens: 1800
+    tier: elevated
+  - number: 103
+    kind: issue
+    title: Clarify neutral service documentation
+    task_text: Clarify the general service overview.
+    touched_paths: [docs/overview.md]
+    expected_loads: [examples/governance/instructions/core.md]
+    forbidden_loads:
+      - examples/governance/instructions/payments.md
+      - examples/governance/instructions/orders.md
+    max_bundle_tokens: 1200
+    tier: standard

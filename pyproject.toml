@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "corral"
+version = "0.1.0.dev0"
+description = "Repo infrastructure for teams operating fleets of coding agents: code map, guardrails, preflight briefs, agent memory, governed retrospectives."
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+dependencies = [
+    "pyarrow>=14",
+    "pyyaml>=6",
+]
+
+[project.urls]
+Homepage = "https://github.com/dnlrshv/corral"
+Repository = "https://github.com/dnlrshv/corral"
+Documentation = "https://github.com/dnlrshv/corral/tree/main/docs"
+
+[project.optional-dependencies]
+# `corral codemap query` builds a networkx graph; everything else works
+# without it.
+query = ["networkx>=3"]
+# `corral preflight` LLM brief generation. Without this extra the command
+# still works and emits the deterministic code-map fallback brief.
+preflight = ["anthropic>=0.40", "python-dotenv"]
+# `corral memory validate` JSON-Schema validation.
+memory = ["jsonschema>=4"]
+
+[project.scripts]
+corral = "corral.cli:main"
+corral-surface-check = "corral.hooks.surface_check:main"
+corral-surface-reminder = "corral.hooks.surface_reminder:main"
+corral-magic-numbers = "corral.hooks.magic_numbers:main"
+corral-telemetry-capture = "corral.telemetry.capture:main"
+
+[tool.setuptools.packages.find]
+include = ["corral*"]
+exclude = ["tests*", "_import*"]
+
+[tool.setuptools.package-data]
+"corral.memory" = ["schemas/*.json"]
+"corral.governance" = ["schemas/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

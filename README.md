@@ -1,6 +1,6 @@
 # corral
 
-**corral is repository infrastructure for teams operating fleets of coding agents on a shared codebase.** It gives Claude, Codex, Qwen, and other agents a common map of the code, explicit high-risk surfaces, task briefs, durable gotchas, and an evidence-governed way to improve instructions. It was extracted from a production trading system operated day-to-day by a fleet of Claude/Codex/Qwen agents; the source deployment's telemetry covers 13,606 agent sessions across 27 weeks.
+**corral is repository infrastructure for teams operating fleets of coding agents on a shared codebase.** It gives Claude, Codex, Qwen, and other agents a common map of the code, explicit high-risk surfaces, task briefs, durable gotchas, and an evidence-governed way to improve instructions. It was extracted from a production trading system operated day-to-day by a fleet of Claude/Codex/Qwen agents; the source deployment's telemetry covers 10,000+ agent sessions across 6+ months.
 
 ## Why
 

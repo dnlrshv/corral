@@ -202,3 +202,16 @@ def test_reused_holder_pid_does_not_keep_a_crashed_attempt_in_flight(tmp_path):
     assert transport.reconcile(PR, intent, payload)["status"] == "absent"
     transport.advisory(PR, "candidate", intent, payload)
     assert len(http.posts) == 1
+
+
+def test_sparse_post_acknowledgement_is_settled_by_readback_not_accepted(tmp_path):
+    store, http, transport, intent, payload = environment(tmp_path)
+    transport.absence_quiet_seconds = 0
+    http.after_post = lambda review: {"id": review["id"], "state": review["state"]}
+    with pytest.raises(ValueError, match="does not match"):
+        transport.advisory(PR, "candidate", intent, payload)
+    assert _intent_status(store, intent) == "ambiguous" and not transport.has_advisory(intent)
+    receipt = transport.reconcile(PR, intent, payload)
+    assert receipt["review_id"] == 901 and receipt["reconciled"] is True
+    assert transport.has_advisory(intent) and store.records("advisory_absence") == {}
+    assert len(http.posts) == 1

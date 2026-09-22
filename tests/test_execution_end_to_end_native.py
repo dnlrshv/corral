@@ -172,6 +172,42 @@ def test_sandboxed_worker_cannot_forge_receipts_or_read_protected_state(tmp_path
     assert (workspace / "math_ops.py").read_text() == FIXED_CANDIDATE
 
 
+def test_coding_fixture_writes_tests_and_denies_publisher_credentials(tmp_path):
+    """Exercise the maintained coding contract without a provider invocation.
+
+    The real synthetic harness receives the normal coding workspace and its controller-owned
+    verifier runs after the worker exits.  A disposable publisher sentinel is deliberately
+    outside the route's native account grant, so this distinguishes the coding account's
+    runtime state from publication authority.
+    """
+    env = ns.native_env(tmp_path)
+    controller, workspace = env["controller"], env["workspace"]
+    runtime_log = env["fake_home"] / "log"
+    runtime_log.mkdir()
+    publisher_root = tmp_path / "publisher-credentials"
+    publisher_root.mkdir()
+    publisher_sentinel = publisher_root / "publish.token"
+    publisher_sentinel.write_text("SYNTHETIC-PUBLISHER-SENTINEL\n")
+    env["host"]["protected_paths"].append(str(publisher_root))
+    env["host"]["native_routes"][ns.FAKE_ROUTE]["runtime_write"] = [str(runtime_log)]
+
+    task = controller.submit(
+        "owner", "coding-fixture-publisher-boundary",
+        ns.native_spec(env, ops=[*_success_ops(), f"deny-probe {publisher_sentinel}"]),
+    )
+    run = controller.run("owner", task, execution_host=ns.FAKE_HOST)
+    assert run["result"]["accepted"] is True
+    assert (workspace / "math_ops.py").read_text() == FIXED_CANDIDATE
+    assert run["result"]["receipt"]["policy_ok"] is True
+
+    adapter = ns.adapter_result(run)
+    probe = adapter["detail"]["harness_detail"]["probes"][str(publisher_sentinel)]
+    assert probe == {"read": "EPERM", "write": "EPERM"}
+    boundary = json.loads((controller.artifacts / task / "boundary.json").read_text())
+    assert str(runtime_log) in boundary["boundary"]["write_allow"]
+    assert adapter["containment"]["passed"] is True
+
+
 def test_repeat_run_does_not_dispatch_a_second_native_attempt(tmp_path):
     env = ns.native_env(tmp_path)
     controller = env["controller"]

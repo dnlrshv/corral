@@ -28,7 +28,8 @@ def main(argv=None):
         print(json.dumps(safe_config_diagnostic(config), indent=2))
         return
     controller = Controller(config["state"], config["token"], config["hosts"],
-                            default_host=config["default_host"], profiles=config.get("profiles", []))
+                            default_host=config["default_host"], profiles=config.get("profiles", []),
+                            secret_env=config.get("secret_env"))
     token = config["token"]
     if args.execute:
         result = controller.run(token, args.execute, execution_host=config["execution_host"])

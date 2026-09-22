@@ -2,6 +2,7 @@ import io
 import json
 import sys
 import time
+from pathlib import Path
 
 import pytest
 
@@ -147,3 +148,79 @@ def test_cli_reconcile_refuses_reader_bound_to_another_attempt(setup, tmp_path, 
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"action": "reconcile", "task_id": task})))
     with pytest.raises(PermissionError, match="not bound to the current task attempt"):
         cli.main()
+
+
+def test_cli_loads_private_route_secret_and_forwards_only_allowlisted_value(tmp_path):
+    """A detached CLI worker gets the configured route secret, never broad process env."""
+    import os
+    import subprocess
+    from corral.execution.store import Store
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=workspace, check=True)
+    subprocess.run(["git", "-c", "user.name=Fixture", "-c", "user.email=f@example.invalid",
+                    "commit", "--allow-empty", "-qm", "base"], cwd=workspace, check=True)
+    (workspace / "result.py").write_text("value = 'before'\n")
+    home = tmp_path / "native-home"
+    (home / "auth").mkdir(parents=True)
+    (home / "auth" / "fixture.json").write_text("fixture runtime state\n")
+    harness = tmp_path / "credential-harness.py"
+    harness.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, os, sys\nfrom pathlib import Path\n"
+        "args = {sys.argv[i]: sys.argv[i + 1] for i in range(1, len(sys.argv), 2)}\n"
+        "Path(args['--workspace']).joinpath('result.py').write_text(\"value = 'after'\\n\")\n"
+        "Path(args['--result']).write_text(json.dumps({'answer': 'ok', 'changed': ['result.py']}))\n"
+        "print(json.dumps({'schema': 'corral-synthetic-v1', 'synthetic': True, 'status': 'completed',\n"
+        " 'narrative': 'updated fixture', 'identity': {'model': args['--model'], 'effort': args['--effort'],\n"
+        " 'harness': 'credential-harness.py', 'provider': 'fixture', 'account_ref': 'fixture-account'},\n"
+        " 'detail': {'route_secret_is_private': os.environ.get('ROUTE_SECRET') == 'private-fixture',\n"
+        "            'unrelated_present': 'UNRELATED_SECRET' in os.environ},\n"
+        " 'usage': {'input_tokens': 1, 'output_tokens': 1, 'total_tokens': 2}}))\n")
+    harness.chmod(0o755)
+    secrets = tmp_path / "provider-secrets.json"
+    secrets.write_text(json.dumps({"ROUTE_SECRET": "private-fixture",
+                                   "UNRELATED_SECRET": "never-forward"}))
+    secrets.chmod(0o600)
+    profile = {"id": "fixture-coding", "model": "fixture-model", "effort": "medium",
+               "harness": "credential-harness.py", "version": "1", "route": "fixture-route",
+               "roles": ["implementation"], "tools": ["read", "edit", "shell", "test"],
+               "context": 1000, "provider": "fixture", "account_ref": "fixture-account"}
+    config = {"state": str(tmp_path / "state"), "token": "owner", "secret_env": str(secrets),
+              "default_host": "fixture", "execution_host": "fixture", "profiles": [profile],
+              "hosts": {"fixture": {"routes": ["fixture-route"],
+                         "harnesses": ["credential-harness.py"], "cpu": 2, "memory_mb": 256,
+                         "protected_paths": [str(home)],
+                         "native_routes": {"fixture-route": {
+                             "harness": "credential-harness.py", "binary": str(harness),
+                             "argv": ["--workspace", "{workspace}", "--result", "{result_file}",
+                                      "--model", "{model}", "--effort", "{effort}"],
+                             "envelope": "corral-synthetic-v1", "provider": "fixture",
+                             "account_ref": "fixture-account", "endpoint": "local-fixture",
+                             "supported_models": ["fixture-model"],
+                             "supported_efforts": ["medium"], "credential_env": ["ROUTE_SECRET"],
+                             "runtime_read": [str(home)], "runtime_home": str(home),
+                             "synthetic": True, "version": "1"}}}}}
+    config_path = tmp_path / "controller.json"
+    config_path.write_text(json.dumps(config))
+    env = {**os.environ, "ROUTE_SECRET": "ambient-wrong", "UNRELATED_SECRET": "ambient-unrelated"}
+    submit = subprocess.run([sys.executable, "-m", "corral.execution.cli", "--config", str(config_path)],
+                            input=json.dumps({"action": "submit", "request_id": "private-route-secret",
+                                              "spec": {"repo": "fixture/repo", "workspace": str(workspace),
+                                                       "host": "fixture", "role": "implementation",
+                                                       "profile_id": "fixture-coding", "objective": "Update result.",
+                                                       "candidate_paths": ["result.py"], "verifier_paths": [],
+                                                       "verify": ["/usr/bin/true"],
+                                                       "tools": ["read", "edit", "shell", "test"]}}),
+                            text=True, capture_output=True, check=True, env=env)
+    task = json.loads(submit.stdout)["task"]
+    subprocess.run([sys.executable, "-m", "corral.execution.cli", "--config", str(config_path),
+                    "--execute", task], text=True, capture_output=True, check=True, env=env)
+    result = Store(tmp_path / "state" / "controller.sqlite").get("result", task)
+    assert result["accepted"] is True
+    assert result["native"]["credential_env_present"] == ["ROUTE_SECRET"]
+    assert result["structured"] is not None
+    adapter = json.loads((Path(result["artifact_directory"]) / "adapter-result.json").read_text())
+    assert adapter["detail"]["harness_detail"] == {
+        "route_secret_is_private": True, "unrelated_present": False}

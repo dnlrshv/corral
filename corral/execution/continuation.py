@@ -95,10 +95,18 @@ def record_result(store, task_id: str, generation: int, result: dict) -> bool:
     return store.put_once(GENERATION_RESULT_KIND, f"{task_id}:{generation}", result)
 
 
-def schedules(store, task_id: str) -> dict:
+def _records(store, kind: str, db=None) -> dict:
+    """All records of one kind, read inside the caller's open transaction when given."""
+    if db is None:
+        return store.records(kind)
+    return {key: json.loads(value) for key, value in db.execute(
+        "SELECT key,value FROM records WHERE kind=? ORDER BY key", (kind,))}
+
+
+def schedules(store, task_id: str, *, db=None) -> dict:
     """generation -> scheduled continuation record, ordered by generation."""
     found = {}
-    for key, value in store.records(KIND).items():
+    for key, value in _records(store, KIND, db).items():
         if value.get("task") == task_id and key.startswith(task_id + ":"):
             found[int(value["generation"])] = value
     return dict(sorted(found.items()))
@@ -109,10 +117,10 @@ def current_generation(store, task_id: str) -> int:
     return max(scheduled) if scheduled else 1
 
 
-def pending_generation(store, task_id: str):
+def pending_generation(store, task_id: str, *, db=None):
     """The one scheduled generation that no worker has claimed yet, else None."""
-    claims = store.records("claim")
-    for generation in schedules(store, task_id):
+    claims = _records(store, "claim", db)
+    for generation in schedules(store, task_id, db=db):
         if generation > 1 and claim_key(task_id, generation) not in claims:
             return generation
     return None

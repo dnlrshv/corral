@@ -247,17 +247,20 @@ class Service:
             workspace = str(Path(spec.get("workspace")).resolve())
             if any(str(Path(value["workspace"]).resolve()) == workspace for value in active):
                 return None
-            host_active = [value for value in active if value.get("host") == host]
-            capacity = self.controller.hosts[host]
-            used_cpu = sum(value.get("cpu", 1)
-                           for value in host_active)
-            used_memory = sum(value.get("memory_mb", 0)
-                              for value in host_active)
-            if (used_cpu + cpu > capacity["cpu"]
-                    or used_memory + memory > capacity["memory_mb"]):
+            # Capacity is reserved in the store, the single allocation authority that the
+            # controller dispatch adopts. A refusal means not dispatched and nothing acquired.
+            try:
+                if not self.store.allocate(event["task_id"], host, cpu, memory,
+                                           self.controller.capacity(host),
+                                           reservation=event_id, db=db):
+                    return None
+            except PermissionError:
                 return None
+            # Bind the event to the generation its launcher will claim, so reconciliation can
+            # tell "dispatched, launcher not yet claimed" from "scheduled, never dispatched".
+            generation = continuation.pending_generation(self.store, event["task_id"], db=db) or 1
             claimed = {**event, "status": "dispatching", "dispatch_started": now,
-                       "service_runtime": runtime}
+                       "service_runtime": runtime, "dispatch_generation": generation}
             db.execute("UPDATE records SET value=? WHERE kind='service_event' AND key=?",
                        (canonical(claimed), event_id))
             if scheduler_host is not None:
@@ -294,11 +297,36 @@ class Service:
         for event_id, event in self.store.records("service_event").items():
             if event.get("status") not in {"dispatching", "uncertain"} or not event.get("task_id"):
                 continue
-            task = self.controller.status(self.token, event["task_id"])
+            task_id = event["task_id"]
+            # Observe the launcher before any controller state: a launcher writes its final
+            # state before it exits, so a launcher already seen dead left nothing unread below.
+            launcher = process_status(event.get("launcher_identity") or {})
+            cancelled = self.store.get("cancel", task_id) is not None
+            dispatched = event.get("dispatch_generation")
+            if (dispatched is not None and self.store.get(
+                    "claim", continuation.claim_key(task_id, dispatched)) is None):
+                # The launcher has not claimed the generation this event dispatched. The claim
+                # precedes any controller ownership or worker, so while the launcher lives the
+                # dispatch is simply in flight; state from an earlier generation is not its own.
+                if launcher == "alive":
+                    continue
+                if launcher == "dead":
+                    self.store.release_reservation(task_id, event_id)
+                if cancelled and launcher == "dead":
+                    updated = {**event, "status": "cancelled", "reconciled": True,
+                               "service_runtime": runtime}
+                else:
+                    updated = {**event, "status": "uncertain", "error": (
+                        "dispatch acknowledgement lost before the launcher claimed generation "
+                        f"{dispatched}; reconcile task before retry")}
+                self.store.replace("service_event", event_id, updated)
+                reconciled.append(event_id)
+                continue
+            task = self.controller.status(self.token, task_id)
             state = task.get("state") or {}
             if state.get("status") in TERMINAL:
                 result = task.get("result") or {}
-                pending = continuation.pending_generation(self.store, event["task_id"])
+                pending = continuation.pending_generation(self.store, task_id)
                 lineage = task.get("lineage") or {}
                 expected_generation = max(
                     int(lineage.get("current_generation") or 1),
@@ -311,15 +339,22 @@ class Service:
                     or result.get("amendment_pending")
                 )
                 status = None
-                if self.store.get("cancel", event["task_id"]):
+                if cancelled:
                     workspace = request_spec(self.store, event)["workspace"]
                     ownership = self.store.ownership("workspace:" + str(Path(workspace).resolve())) \
                         if workspace else None
-                    allocation = self.store.get("allocation", event["task_id"])
-                    settled = (state.get("status") == "cancelled"
-                               and (ownership is None or ownership[2] == "released")
-                               and (allocation is None or allocation.get("active") is False))
-                    status = "cancelled" if settled else "uncertain"
+                    allocation = self.store.get("allocation", task_id) or {}
+                    released = ((ownership is None or ownership[0] != task_id
+                                 or ownership[2] == "released")
+                                and not (allocation.get("active")
+                                         and allocation.get("reservation") != event_id))
+                    if released and state.get("status") == "cancelled":
+                        status = "cancelled"
+                    elif released and state.get("status") == "completed" and result:
+                        # The cancel landed after the attempt finished: a post-terminal no-op.
+                        status = "completed" if result.get("accepted") else "failed"
+                    else:
+                        status = "uncertain"
                 elif pending is not None:
                     status = "prepared"
                 elif (state.get("status") == "completed"
@@ -337,14 +372,17 @@ class Service:
                     worker.setdefault("coverage", "partial-without-process-start-or-executable")
                     updated = {**event, "status": status, "reconciled": True,
                                "service_runtime": runtime, "worker_identity": worker}
-                    if self.store.get("cancel", event["task_id"]) and status == "uncertain":
+                    if cancelled and status == "uncertain":
                         updated["error"] = (
                             "cancellation requested; controller ownership is unresolved"
                         )
+                    if status != "uncertain":
+                        # Leaving dispatch returns a reservation no controller dispatch adopted.
+                        self.store.release_reservation(task_id, event_id)
                     self.store.replace("service_event", event_id, updated)
                     reconciled.append(event_id)
                     continue
-            elif (process_status(event.get("launcher_identity") or {}) == "alive"
+            elif (launcher == "alive"
                   or (state.get("status") in ("running", "dispatching")
                       and process_status(state.get("worker_identity") or {}) == "alive")):
                 continue

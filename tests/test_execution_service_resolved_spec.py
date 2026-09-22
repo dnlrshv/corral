@@ -48,6 +48,8 @@ def test_snapshot_cancellation_waits_for_resolved_workspace_owner(tmp_path, monk
     epoch = service.store.acquire(resource, task)
     service._claim(event["event_id"], 10, {"pid": os.getpid()})
     service.controller.cancel(service.token, task)
+    # A controller attempt always claims its generation before it records any state.
+    service.store.put_once("claim", task, {"attempt": "cancelled-attempt", "generation": 1})
     service.store.replace("state", task, {"status": "cancelled", "generation": 1})
     service._reconcile({})
     assert service.status(event["event_id"])["event"]["status"] == "uncertain"

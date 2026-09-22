@@ -196,13 +196,13 @@ def check_diff_text_safe(text: str) -> list[str]:
     for line in text.splitlines():
         if line.startswith("--- "):
             old_path = line[4:].split("\t", 1)[0]
-            old_path = old_path[2:] if old_path.startswith("a/") else old_path
+            old_path = old_path.removeprefix("a/")
             in_hunk = False
             metadata.append(line)
             continue
         if line.startswith("+++ "):
             new_path = line[4:].split("\t", 1)[0]
-            new_path = new_path[2:] if new_path.startswith("b/") else new_path
+            new_path = new_path.removeprefix("b/")
             in_hunk = False
             metadata.append(line)
             continue

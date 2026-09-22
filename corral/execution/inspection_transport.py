@@ -138,7 +138,9 @@ def invoke(*, packet_path: Path, result_path: Path, endpoint: str, credential: s
     system = (
         "Inspect only the immutable packet supplied by the controller. You have no tools and "
         "must not claim to run tests, scripts, imports, builds, packages, or shell commands. "
-        "Return a concise source review grounded only in packet contents."
+        "Return exactly one JSON object with keys verdict and report. verdict must be PASS or "
+        "CHANGES_REQUIRED. report must be a concise source review grounded only in packet "
+        "contents. Do not wrap the JSON in Markdown."
     )
     request_body: dict[str, Any] = {
         "model": model,
@@ -165,13 +167,21 @@ def invoke(*, packet_path: Path, result_path: Path, endpoint: str, credential: s
     # This rejection happens before content extraction and before any report is persisted.
     if message.get("tool_calls") or message.get("function_call") or choice.get("finish_reason") == "tool_calls":
         return {**result, "error": "inspection response attempted a tool call; no execution is available"}
-    report = message.get("content")
-    if not isinstance(report, str) or not report.strip():
-        return {**result, "error": "inspection response report is empty"}
+    content = message.get("content")
+    try:
+        review = json.loads(content) if isinstance(content, str) else None
+    except ValueError:
+        review = None
+    if (not isinstance(review, dict) or set(review) != {"verdict", "report"}
+            or review.get("verdict") not in {"PASS", "CHANGES_REQUIRED"}
+            or not isinstance(review.get("report"), str) or not review["report"].strip()):
+        return {**result, "error": "inspection response must be exact verdict/report JSON"}
+    report = review["report"].strip()
     result = {**result,
         "status": "completed",
-        "narrative": report.strip(),
-        "result": {"report": report.strip(), "packet_digest": packet["digest"],
+        "narrative": report,
+        "result": {"verdict": review["verdict"], "report": report,
+                   "packet_digest": packet["digest"],
                    "provenance": packet["provenance"], "capability": packet["capability"]},
     }
     result_path.parent.mkdir(parents=True, exist_ok=True)

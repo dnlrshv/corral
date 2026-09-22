@@ -89,7 +89,8 @@ def test_transport_sends_one_stateless_tool_free_request_and_records_usage(tmp_p
         seen.update(json.loads(request.data))
         payload = {"id": "response-1", "model": "review-model",
                    "choices": [{"finish_reason": "stop", "message": {
-                       "role": "assistant", "content": "The source is internally consistent.",
+                       "role": "assistant", "content": json.dumps({
+                           "verdict": "PASS", "report": "The source is internally consistent."}),
                        "tool_calls": None}}],
                    "usage": {"prompt_tokens": 20, "completion_tokens": 7, "total_tokens": 27,
                              "completion_tokens_details": {"reasoning_tokens": 3}}}
@@ -111,7 +112,33 @@ def test_transport_sends_one_stateless_tool_free_request_and_records_usage(tmp_p
         "effort": "requested-not-attested", "harness": "local-transport"}
     assert result["usage"] == {"input_tokens": 20, "output_tokens": 7,
                                "total_tokens": 27, "thinking_tokens": 3}
-    assert json.loads(result_path.read_text())["report"].startswith("The source")
+    stored = json.loads(result_path.read_text())
+    assert stored["verdict"] == "PASS"
+    assert stored["report"].startswith("The source")
+
+
+def test_transport_rejects_prose_only_verdict_before_report_persistence(tmp_path):
+    packet = _packet(tmp_path)
+    result_path = tmp_path / "must-not-exist.json"
+
+    def opener(_request):
+        payload = {"id": "response-prose", "model": "review-model",
+                   "choices": [{"finish_reason": "stop", "message": {
+                       "content": "PASS: looks good"}}],
+                   "usage": {"prompt_tokens": 3, "completion_tokens": 2,
+                             "total_tokens": 5}}
+        return _Response(json.dumps(payload).encode())
+
+    result = invoke(packet_path=packet, result_path=result_path,
+                    endpoint="https://provider.invalid/v1", credential="fixture-secret",
+                    model="review-model", effort="medium", provider="fixture-provider",
+                    account_ref="fixture-account", route="inspection-route", opener=opener)
+    assert result["status"] == "failed"
+    assert "exact verdict/report JSON" in result["error"]
+    assert result["observed"]["response_id"] == "response-prose"
+    assert result["usage"] == {"input_tokens": 3, "output_tokens": 2,
+                               "total_tokens": 5}
+    assert not result_path.exists()
 
 
 def test_tool_call_is_rejected_before_report_persistence(tmp_path):

@@ -136,6 +136,37 @@ def check_outbound_safe(text: str) -> list[str]:
     return offenders
 
 
+def check_source_text_safe(text: str) -> list[str]:
+    """Find credentials in source bytes without treating expressions as secret literals."""
+    offenders = []
+    assignment = _OUTBOUND_CREDENTIAL_PATTERNS[-1]
+    for pattern in _OUTBOUND_CREDENTIAL_PATTERNS[:-1]:
+        if pattern.search(text):
+            offenders.append(pattern.pattern)
+    type_names = {"str", "bytes", "int", "float", "bool", "dict", "list", "tuple",
+                  "set", "object", "None", "Any", "Optional", "SecretStr"}
+    for match in assignment.finditer(text):
+        key = match.group("key").strip("\"'")
+        raw = match.group("val")
+        value = raw.strip("\"'")
+        if _SAFE_KEYS.match(key) and _NUMERIC_VALUE.match(value):
+            continue
+        if value in ("<redacted>", "[REDACTED]") or value in type_names:
+            continue
+        quoted = raw.startswith(("\"", "'")) and raw.endswith(("\"", "'"))
+        # Unquoted calls, attributes and container lookups are source expressions. A quoted
+        # value is data and remains subject to the credential-assignment boundary.
+        if not quoted and any(char in raw for char in ".()[]{}"):
+            continue
+        # A plain identifier on the right side of Python-style assignment is a reference.
+        # YAML/JSON colon assignments remain data, as do literals containing digits/dashes.
+        if (not quoted and match.group("sep") == "="
+                and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", raw)):
+            continue
+        offenders.append(assignment.pattern)
+    return offenders
+
+
 def safe_config_diagnostic(data: Any) -> Any:
     """Return a deep copy of config/diagnostic data with credentials redacted.
 

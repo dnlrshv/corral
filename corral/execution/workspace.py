@@ -5,7 +5,7 @@ import os
 import subprocess
 from pathlib import Path
 
-from corral.redaction import check_outbound_safe
+from corral.redaction import check_source_text_safe
 
 from .store import digest
 
@@ -39,7 +39,7 @@ def manifest(root, paths, workspace_provenance=None):
     for name in paths:
         path = safe_path(root, name)
         data = path.read_bytes() if path.exists() else None
-        if data and check_outbound_safe(data.decode("utf-8", errors="ignore")):
+        if data and check_source_text_safe(data.decode("utf-8", errors="ignore")):
             raise PermissionError("credential-shaped input refused")
         files[name] = {"digest": file_digest(path),
                        "data": base64.b64encode(data).decode() if data is not None else None,

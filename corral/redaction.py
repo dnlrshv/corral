@@ -11,12 +11,13 @@ _CREDENTIAL_KEY = (
     r"connection[_-]?(?:string|uri|url))[A-Za-z0-9_]*"
 )
 
-# Real numeric token counter keys: plural ``*_tokens`` (including ``max_tokens``) or
-# ``*_token_count/_usage/_limit/_budget``. A bare singular ``*_token`` names a credential.
+# Real numeric token counter keys: ``*_tokens`` (including ``max_tokens``) or
+# ``*_token_count/_usage/_limit/_budget``; the bounded value below is what keeps an
+# opaque number under such a name from passing as a counter.
 _SAFE_KEYS = re.compile(
     r"(?i)^[\"']?(?:"
     r"(?:[a-z0-9_]*_)?(?:input|output|total|candidate|candidates|cache(?:_read|_write)?|cached|"
-    r"cached_?content|thinking|thoughts?|reasoning|prompt|completion|estimated|max)[_-]?tokens|"
+    r"cached_?content|thinking|thoughts?|reasoning|prompt|completion|estimated|max)[_-]?tokens?|"
     r"(?:[a-z0-9_]*?[_-]?)?tokens?[_-]?(?:count|usage|limit|budget)"
     r")[\"']?$"
 )
@@ -129,13 +130,14 @@ def redact_text(text: str, *, marker: str = "[REDACTED]") -> str:
 
 
 def redact_nested_text(value: Any, *, marker: str = "[REDACTED]") -> Any:
-    """Redact every string inside diagnostic lists/dicts, keeping keys and structure."""
+    """Redact every string, including mapping keys, inside diagnostic data."""
     if isinstance(value, str):
         return redact_text(value, marker=marker)
-    if isinstance(value, list):
+    if isinstance(value, (list, tuple)):
         return [redact_nested_text(item, marker=marker) for item in value]
     if isinstance(value, dict):
-        return {key: redact_nested_text(item, marker=marker) for key, item in value.items()}
+        return {redact_nested_text(key, marker=marker): redact_nested_text(item, marker=marker)
+                for key, item in value.items()}
     return value
 
 
@@ -216,9 +218,10 @@ def _github_workflow_script_reference(value: str, source_name: str | None,
     return bool(_WORKFLOW_LOOKUP_CHAIN.fullmatch(value.strip()))
 
 
-def _comment_line(text: str, position: int) -> bool:
+def _in_comment(text: str, position: int) -> bool:
+    """Whether ``position`` follows a ``#`` on its line (a full-line or trailing comment)."""
     line_start = text.rfind("\n", 0, position) + 1
-    return text[line_start:position].lstrip().startswith("#")
+    return "#" in text[line_start:position]
 
 
 def check_source_text_safe(text: str, *, source_name: str | None = None) -> list[str]:
@@ -285,7 +288,7 @@ def check_source_text_safe(text: str, *, source_name: str | None = None) -> list
         # scanner cannot see docstrings: ``api_key: Capitalized`` inside one still
         # passes, which a tokenize-aware pass would have to close.
         if (python_source and not quoted and match.group("sep") == ":"
-                and not _comment_line(text, match.start())
+                and not _in_comment(text, match.start())
                 and (raw in type_names or re.fullmatch(r"[A-Z][A-Za-z0-9_]*", raw)
                      or (match.group("key")[:1] in "\"'"
                          and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", raw)))):
@@ -361,7 +364,8 @@ def safe_config_diagnostic(data: Any) -> Any:
         for k, v in data.items():
             k_str = str(k)
             if re.search(rf"(?i)^(?:{_CREDENTIAL_KEY})$", k_str):
-                if _SAFE_KEYS.match(k_str) and isinstance(v, (int, float)) and not isinstance(v, bool):
+                if (_SAFE_KEYS.match(k_str) and isinstance(v, (int, float)) and not isinstance(v, bool)
+                        and _COUNTER_VALUE.match(str(v))):
                     result[k] = v
                 elif _SAFE_KEYS.match(k_str) and isinstance(v, str) and _COUNTER_VALUE.match(v):
                     result[k] = v

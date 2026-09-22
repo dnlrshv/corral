@@ -49,6 +49,7 @@ def test_source_scanner_allows_github_workflow_references_not_literal_values():
     # Python ':' is an annotation only for known or capitalized type names.
     ("orchestrator.py", "password: hunter2\n"),
     ("orchestrator.py", f"# password: {FAKE}\n"),
+    ("orchestrator.py", f"retries = 1  # api_key: {FAKE}\n"),
     ("orchestrator.py", '"""Example configuration.\n\n    api_key: hunter2\n"""\n'),
     ("orchestrator.py", 'def load():\n    """Read settings."""\n    secret: hunter2\n'),
     ("orchestrator.py", '# {"password": hunter2}\n'),
@@ -104,12 +105,13 @@ def test_redacted_literals_keep_their_prefix_and_stay_idempotent():
     assert not check_outbound_safe(redacted)
 
 
-def test_token_limits_are_counters_but_singular_token_names_are_credentials():
+def test_token_counters_and_limits_are_kept_but_opaque_numbers_are_redacted():
     for text in ("max_tokens: 4096\n", '{"max_output_tokens": 1024, "cached_tokens": 12}',
                  "daily_token_limit: int = 300_000\n"):
         assert redact_text(text) == text
         assert not check_outbound_safe(text)
         assert check_file_text_safe(text, source_name="settings.py") == []
+    assert redact_text("input_token: 4096\n") == "input_token: 4096\n"
     for text in ("output_token: 8374650192837465019283\n",
                  "deploy_input_token: 8374650192837465019283\n",
                  "input_tokens: 8374650192837465019283\n"):

@@ -1,6 +1,7 @@
 """Concurrent scheduler ownership and controller-bound service completion."""
 import json
 import os
+import socket
 import threading
 import time
 from pathlib import Path
@@ -61,6 +62,33 @@ def test_lost_launcher_ack_converges_from_uncertain_when_task_finishes(tmp_path)
     service._reconcile({"pid": os.getpid()})
     assert service.status("lost-ack")["event"]["status"] == "completed"
     assert len(service.store.records("invocation")) == 1
+
+
+def test_controller_worker_birth_identity_keeps_running_event_fenced(tmp_path):
+    from corral.execution.process import _boot_identity, _os_process_identity
+
+    workspace = git_repo(tmp_path / "repo")
+    service = Service(configs(tmp_path, workspace))
+    submitted = service.submit("controller-worker", "demo", "active worker")
+    task = submitted["event"]["task_id"]
+    event = service.store.get("service_event", "controller-worker")
+    service.store.replace("service_event", "controller-worker", {
+        **event, "status": "dispatching",
+        "launcher_identity": {"pid": 987654321, "process_start": "absent"},
+    })
+    observed = _os_process_identity(os.getpid())
+    service.store.replace("state", task, {
+        "status": "running", "generation": 1,
+        "worker_identity": {
+            "pid": os.getpid(), "host": socket.gethostname(),
+            "os_started": observed["started"], "boot_identity": _boot_identity(),
+            "birth_identity_observed": True,
+        },
+    })
+
+    service._reconcile({"pid": os.getpid()})
+
+    assert service.status("controller-worker")["event"]["status"] == "dispatching"
 
 
 def test_terminal_event_keeps_launcher_and_controller_worker_identities_separate(tmp_path):
@@ -234,5 +262,3 @@ def test_atomic_claim_canonicalizes_workspace_aliases(tmp_path):
     runtime = {"pid": os.getpid()}
     assert first._claim("canonical", 10, runtime, scheduler_host="mini2") is not None
     assert second._claim("alias", 10, runtime, scheduler_host="mini2") is None
-
-

@@ -288,7 +288,7 @@ class Service:
         return created
 
     def _reconcile(self, runtime: dict[str, Any]) -> list[str]:
-        from .runtime_identity import alive
+        from .runtime_identity import process_status
 
         reconciled = []
         for event_id, event in self.store.records("service_event").items():
@@ -344,9 +344,9 @@ class Service:
                     self.store.replace("service_event", event_id, updated)
                     reconciled.append(event_id)
                     continue
-            elif (alive(event.get("launcher_identity") or {})
+            elif (process_status(event.get("launcher_identity") or {}) == "alive"
                   or (state.get("status") in ("running", "dispatching")
-                      and alive(state.get("worker_identity") or {}))):
+                      and process_status(state.get("worker_identity") or {}) == "alive")):
                 continue
             else:
                 self.store.replace("service_event", event_id, {**event, "status": "uncertain",

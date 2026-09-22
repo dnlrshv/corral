@@ -117,3 +117,17 @@ def test_token_limits_are_counters_but_singular_token_names_are_credentials():
         assert check_outbound_safe(text)
     assert safe_config_diagnostic({"max_tokens": 4096, "output_token": 8374650192837465019283}) == {
         "max_tokens": 4096, "output_token": "[REDACTED]"}
+
+
+def test_triple_quoted_and_multiline_values_are_redacted_in_place():
+    for text in (f'api_key = """{FAKE}"""\n', f"secret: str = rb'''\n{FAKE}\n'''\n"):
+        assert FAKE not in redact_text(text)
+        assert check_file_text_safe(text, source_name="candidate.py")
+    assert redact_text(f'api_key =\n    "{FAKE}"\n') == 'api_key =\n    "[REDACTED]"\n'
+    assert redact_text(f"password: |\n  {FAKE}\nother: 1\n") == "password: [REDACTED]\nother: 1\n"
+
+
+def test_python_block_colon_before_a_docstring_is_not_an_assignment():
+    source = 'def load() -> AuthToken:\n    """Load the snapshot."""\n    return AuthToken()\n'
+    assert check_file_text_safe(source, source_name="loader.py") == []
+    assert check_file_text_safe(f'CONFIG = {{"password":\n    "{FAKE}"}}\n', source_name="loader.py")

@@ -25,14 +25,16 @@ _COUNTER_VALUE = re.compile(r"^-?\d(?:_?\d){0,11}(?:\.\d+)?$")
 
 # Python string literal prefixes (``f``, ``b``, ``r``, ``u``, ``rb``, ``br``, ``rf``, ``fr``).
 _STRING_PREFIX = r"(?:[rR][bBfF]?|[bBfF][rR]?|[uU])"
-_QUOTED_VALUE = re.compile(rf"(?P<prefix>{_STRING_PREFIX}?)(?P<q>[\"'])(?P<body>.*)(?P=q)", re.DOTALL)
+_QUOTED_VALUE = re.compile(
+    rf"(?P<prefix>{_STRING_PREFIX}?)(?P<q>\"\"\"|'''|[\"'])(?P<body>.*)(?P=q)", re.DOTALL)
 # ``key: Annotation = value`` binds ``value``; the annotation is never the value.
 _ANNOTATION = r"[\"']?[A-Za-z_][\w.\[\], |\"']*?"
 _ASSIGNMENT = (
     rf"(?i)(?<![A-Za-z0-9_])(?P<key>[\"']?{_CREDENTIAL_KEY}[\"']?)"
     rf"(?P<sep_space>\s*(?::[ \t]*{_ANNOTATION}[ \t]*(?==))?(?P<sep>[:=])\s*)"
     r"(?![\"']?(?:<redacted>|\[REDACTED\])[\"']?)"
-    rf"(?P<val>{_STRING_PREFIX}?\"[^\"]*\"|{_STRING_PREFIX}?'[^']*'|[^\s\"',}}]+)"
+    rf"(?P<val>{_STRING_PREFIX}?(?:\"\"\"[\s\S]*?\"\"\"|'''[\s\S]*?''')"
+    rf"|{_STRING_PREFIX}?\"[^\"]*\"|{_STRING_PREFIX}?'[^']*'|[^\s\"',}}]+)"
 )
 
 
@@ -108,9 +110,9 @@ def redact_text(text: str, *, marker: str = "[REDACTED]") -> str:
             else:
                 replacement_val = marker
 
-            if "\n" in match.group(0):
+            if "sep_space" not in groupdict:  # YAML block scalar: ``key: |`` and its lines
                 suffix = "\n" if match.group(0).endswith("\n") else ""
-                return f"{key_raw}:{sep_space}{replacement_val}{suffix}"
+                return f"{key_raw}: {replacement_val}{suffix}"
 
             return f"{key_raw}{sep_space}{replacement_val}"
 
@@ -289,6 +291,11 @@ def check_source_text_safe(text: str, *, source_name: str | None = None) -> list
                          and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", raw)))):
             continue
         if python_source and not quoted and value in type_names:
+            continue
+        # A Python ``:`` that ends its line after an unquoted name opens a block
+        # (``def load() -> Snapshot:``); the docstring that follows is not its value.
+        if (python_source and match.group("sep") == ":" and "\n" in match.group("sep_space")
+                and match.group("key")[:1] not in "\"'"):
             continue
         offenders.append(assignment.pattern)
     return offenders

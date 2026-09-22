@@ -17,6 +17,7 @@ PLACEHOLDERS: tuple[str, ...] = (
     "{workspace}",
     "{scratch}",
     "{prompt_file}",
+    "{prompt}",
     "{model}",
     "{effort}",
     "{result_file}",
@@ -135,6 +136,7 @@ def declare(route_id: str, raw: dict) -> NativeRoute:
 
 
 def _placeholders(item: str) -> list[str]:
+    """Return all braced placeholders so unsupported declarations fail closed."""
     return re.findall(r"\{[^{}]+\}", str(item))
 
 
@@ -175,6 +177,9 @@ def authorize(route: NativeRoute, profile, *, host_routes: tuple[str, ...]) -> N
     if profile.harness != route.harness:
         raise PermissionError(
             f"profile {profile.id} harness {profile.harness!r} does not match route harness {route.harness!r}")
+    if profile.provider != route.provider or profile.account_ref != route.account_ref:
+        raise PermissionError(
+            f"profile {profile.id} provider/account binding does not match route {route.id}")
     if profile.model not in route.supported_models:
         raise PermissionError(
             f"native route {route.id} does not serve model {profile.model!r}; no silent substitution")

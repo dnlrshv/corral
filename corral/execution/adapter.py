@@ -13,6 +13,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -100,12 +101,20 @@ def _boundary(task_dir: Path) -> tuple[containment.Boundary, dict]:
 
 
 def _substitute(argv: list[str], values: dict[str, str]) -> list[str]:
+    """Render a controller-declared argv without interpreting worker prompt text.
+
+    Route placeholders are checked before values are inserted. This preserves literal
+    braces in an objective while still refusing a broken route declaration.
+    """
+    pattern = re.compile(r"\{[A-Za-z_][A-Za-z0-9_]*\}")
     rendered = []
-    for item in argv:
+    for template in argv:
+        unknown = sorted(set(pattern.findall(template)) - {"{" + key + "}" for key in values})
+        if unknown:
+            raise PermissionError(f"route argv retains an unresolved placeholder: {unknown}")
+        item = template
         for key, value in values.items():
             item = item.replace("{" + key + "}", value)
-        if "{" in item and "}" in item:
-            raise PermissionError(f"route argv retains an unresolved placeholder: {item}")
         rendered.append(item)
     return rendered
 
@@ -225,6 +234,7 @@ def run_adapter(task_dir: Path, workspace: Path) -> int:
         schema_path.write_text(json.dumps(context.get("result_schema") or DEFAULT_RESULT_SCHEMA, indent=2))
         values = {"workspace": str(workspace), "scratch": str(scratch),
                   "prompt_file": str(prompt_path), "model": str(plan.get("model") or ""),
+                  "prompt": prompt_path.read_text(),
                   "effort": str(plan.get("effort") or ""), "result_file": str(structured_path),
                   "schema_file": str(schema_path), "log_file": str(task_dir / HARNESS_LOG),
                   "packet_file": str(packet_path)}

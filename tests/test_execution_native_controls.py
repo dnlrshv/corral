@@ -61,6 +61,7 @@ def test_registered_profiles_are_evidenced_and_contain_no_placeholders():
 def test_native_coding_profiles_are_writers_not_read_only_reviewers():
     for profile in STANDARD_NATIVE_PROFILES:
         assert {"implementation", "repair"} <= set(profile.roles), profile.id
+        assert "review" not in profile.roles, profile.id
         assert {"read", "search", "edit", "shell", "test"} <= set(profile.tools), profile.id
 
 
@@ -73,12 +74,21 @@ def test_route_contract_configures_waits_without_artificial_spend_or_turn_caps()
     assert not {item for item in routes.PLACEHOLDERS if "turn" in item or "retry" in item
                 or "spend" in item or "budget" in item}
     # The wait is an explicit task-level knob that reaches the harness contract untouched.
-    assert routes.PLACEHOLDERS == ("{workspace}", "{scratch}", "{prompt_file}", "{model}",
-                                   "{effort}", "{result_file}", "{schema_file}", "{log_file}",
-                                   "{packet_file}")
+    assert routes.PLACEHOLDERS == ("{workspace}", "{scratch}", "{prompt_file}", "{prompt}",
+                                   "{model}", "{effort}", "{result_file}", "{schema_file}",
+                                   "{log_file}", "{packet_file}")
 
 
 # --------------------------------------------------------------------------- submit refusals
+
+def test_route_refuses_provider_or_account_mismatch(tmp_path):
+    env = ns.native_env(tmp_path)
+    profile = ns.fake_profile()
+    route = routes.declare(ns.FAKE_ROUTE, {**env["host"]["native_routes"][ns.FAKE_ROUTE],
+                                           "provider": "other", "account_ref": "other-account"})
+    with pytest.raises(PermissionError, match="provider/account"):
+        routes.authorize(route, profile, host_routes=(ns.FAKE_ROUTE,))
+
 
 def test_unsupported_model_for_the_declared_route_is_refused(tmp_path):
     env = ns.native_env(tmp_path, supported_models=("some-other-model",))

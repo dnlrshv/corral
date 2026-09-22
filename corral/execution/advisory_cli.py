@@ -12,7 +12,7 @@ from typing import Any
 from .advisory import compute_advisory_intent, validate_advisory_payload
 from .github_advisory import GitHubAdvisoryTransport
 from .github_support import compute_canonical_wire_hash, parse_pr_identity
-from .publication_validation import validate_payload
+from .publication_validation import require_approval_provenance, validate_payload
 from .policy import _get_auth_token, load_policy_snapshot
 from .store import Store, record_advisory_approval
 from .policy_inputs import load as load_policy_inputs
@@ -160,8 +160,7 @@ def cmd_import_approved(args: argparse.Namespace) -> int:
     for field in ("repo", "pr", "head", "base", "policy", "publisher"):
         if artifact[field] != payload[field]:
             raise PermissionError("approved artifact top-level and full payload differ")
-    if not isinstance(artifact["authorized_by"], str) or not artifact["authorized_by"].strip():
-        raise PermissionError("explicit approval provenance required")
+    require_approval_provenance(artifact["authorized_by"])
     if artifact["canonical_wire_hash"] != computed_wire_hash:
         raise PermissionError("canonical wire hash mismatch")
     if "wire_payload" in artifact and artifact["wire_payload"] != expected_wire:

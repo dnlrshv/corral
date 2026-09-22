@@ -186,6 +186,54 @@ def check_source_text_safe(text: str, *, source_name: str | None = None) -> list
     return offenders
 
 
+def check_diff_text_safe(text: str) -> list[str]:
+    """Scan each Git diff hunk using the syntax of the file that owns its bytes."""
+    documents: dict[str, list[str]] = {}
+    metadata: list[str] = []
+    old_path = new_path = None
+    in_hunk = False
+    saw_hunk = False
+    for line in text.splitlines():
+        if line.startswith("--- "):
+            old_path = line[4:].split("\t", 1)[0]
+            old_path = old_path[2:] if old_path.startswith("a/") else old_path
+            in_hunk = False
+            metadata.append(line)
+            continue
+        if line.startswith("+++ "):
+            new_path = line[4:].split("\t", 1)[0]
+            new_path = new_path[2:] if new_path.startswith("b/") else new_path
+            in_hunk = False
+            metadata.append(line)
+            continue
+        if line.startswith("@@"):
+            in_hunk = True
+            saw_hunk = True
+            metadata.append(line)
+            continue
+        if in_hunk and line[:1] in ("+", "-", " "):
+            path = old_path if line.startswith("-") else new_path
+            if path and path != "/dev/null":
+                documents.setdefault(path, []).append(line[1:])
+            else:
+                metadata.append(line)
+        else:
+            metadata.append(line)
+    if not saw_hunk or not documents:
+        return check_outbound_safe(text)
+    offenders = check_outbound_safe("\n".join(metadata))
+    for name, lines in documents.items():
+        offenders.extend(check_source_text_safe("\n".join(lines), source_name=name))
+    return offenders
+
+
+def check_file_text_safe(text: str, *, source_name: str) -> list[str]:
+    """Dispatch outbound source scanning using explicit file syntax."""
+    if source_name.lower().endswith(('.diff', '.patch')):
+        return check_diff_text_safe(text)
+    return check_source_text_safe(text, source_name=source_name)
+
+
 def safe_config_diagnostic(data: Any) -> Any:
     """Return a deep copy of config/diagnostic data with credentials redacted.
 

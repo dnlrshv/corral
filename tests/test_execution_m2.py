@@ -63,6 +63,30 @@ def test_manifest_allows_source_token_expressions_and_annotations(tmp_path):
     assert manifest(repo, ["selected.py"])["files"]["selected.py"]["digest"]
 
 
+def test_manifest_diff_uses_each_hunk_file_syntax(tmp_path):
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-c", "user.name=Fixture", "-c", "user.email=f@example.invalid",
+                    "commit", "--allow-empty", "-qm", "fixture"], cwd=repo, check=True)
+    safe = """diff --git a/parser.py b/parser.py
+--- a/parser.py
++++ b/parser.py
+@@ -0,0 +1 @@
++_TOKEN = re.compile(r"(\\d+)([dhm])")
+"""
+    (repo / "candidate.diff").write_text(safe)
+    assert manifest(repo, ["candidate.diff"])["files"]["candidate.diff"]["digest"]
+    unsafe = """diff --git a/config.yaml b/config.yaml
+--- a/config.yaml
++++ b/config.yaml
+@@ -0,0 +1 @@
++password: actual.password
+"""
+    (repo / "candidate.diff").write_text(unsafe)
+    with pytest.raises(PermissionError, match="credential-shaped"):
+        manifest(repo, ["candidate.diff"])
+
+
 @pytest.mark.parametrize("content", [
     "password: actual.password\n",
     "token: str\n",

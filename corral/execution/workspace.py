@@ -5,7 +5,7 @@ import os
 import subprocess
 from pathlib import Path
 
-from corral.redaction import check_source_text_safe
+from corral.redaction import check_file_text_safe
 
 from .store import digest
 
@@ -39,7 +39,7 @@ def manifest(root, paths, workspace_provenance=None):
     for name in paths:
         path = safe_path(root, name)
         data = path.read_bytes() if path.exists() else None
-        if data and check_source_text_safe(
+        if data and check_file_text_safe(
             data.decode("utf-8", errors="ignore"), source_name=name
         ):
             raise PermissionError("credential-shaped input refused")
@@ -103,7 +103,7 @@ def apply_manifest(root, incoming, expected):
         data = base64.b64decode(value["data"], validate=True) if value["data"] is not None else None
         if data is not None and hashlib.sha256(data).hexdigest() != value["digest"]:
             raise ValueError("file digest mismatch")
-        if data and check_source_text_safe(
+        if data and check_file_text_safe(
             data.decode("utf-8", errors="ignore"), source_name=name
         ):
             raise PermissionError("credential-shaped input refused")

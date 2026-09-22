@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import platform
+import signal
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -33,6 +34,14 @@ ISOLATED_ENV = {
 }
 
 _FLAG_WITH_VALUE = {"-c", "-m", "-W", "-X", "--module"}
+
+#: Default wall-clock bound for one verifier run; hosts override it with
+#: ``verifier_timeout_seconds``. A verifier that exceeds it is killed with its whole process
+#: group and receipted as timed out (exit 124), so a hung verifier cannot pin the controller.
+VERIFIER_TIMEOUT_SECONDS = 3600
+TIMEOUT_EXIT_CODE = 124
+#: Bound on collecting output after the killed group, in case a descendant left the group.
+_DRAIN_SECONDS = 5
 
 
 @dataclass(frozen=True)
@@ -190,6 +199,35 @@ def _digest(path: Path) -> str | None:
         return None
 
 
+def timeout_for(host: dict | None) -> float:
+    """The verifier wall-clock bound a host declares, validated before anything runs."""
+    value = (host or {}).get("verifier_timeout_seconds", VERIFIER_TIMEOUT_SECONDS)
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 < value < float("inf"):
+        raise ValueError("verifier_timeout_seconds must be a positive number of seconds")
+    return float(value)
+
+
+def _run_bounded(command: list[str], *, cwd: str, env: dict[str, str],
+                 timeout: float) -> tuple[int, bytes, bytes, bool]:
+    """Run the verifier in its own process group and kill that group at the bound."""
+    with subprocess.Popen(command, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                          stderr=subprocess.PIPE, env=env, start_new_session=True) as process:
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+            return process.returncode, stdout, stderr, False
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            try:
+                stdout, stderr = process.communicate(timeout=_DRAIN_SECONDS)
+            except subprocess.TimeoutExpired as partial:
+                process.kill()
+                stdout, stderr = partial.stdout or b"", partial.stderr or b""
+            return TIMEOUT_EXIT_CODE, stdout, stderr, True
+
+
 @dataclass
 class Receipt:
     payload: dict = field(default_factory=dict)
@@ -200,7 +238,8 @@ class Receipt:
 def execute(policy: Policy, workspace: str | Path, *, candidate_paths: list[str], task: str,
             attempt: str, pre_verifier_manifest: dict | None, workspace_provenance: dict | None = None,
             seatbelt_profile: str | None = None, containment_evidence: dict | None = None,
-            containment_env: dict[str, str] | None = None) -> Receipt:
+            containment_env: dict[str, str] | None = None,
+            timeout: float = VERIFIER_TIMEOUT_SECONDS) -> Receipt:
     """Run the bound verifier outside the worker boundary and retain pre/post digests."""
     root = Path(workspace).resolve()
     candidate_pre = manifest(root, candidate_paths, workspace_provenance)
@@ -254,8 +293,12 @@ def execute(policy: Policy, workspace: str | Path, *, candidate_paths: list[str]
     if policy.kind != "external":
         env.pop("PYTHONPATH", None)
     command = containment.wrapped(seatbelt_profile, list(policy.argv)) if seatbelt_profile else list(policy.argv)
-    completed = subprocess.run(command, cwd=str(root), capture_output=True, env=env)
+    exit_code, stdout, stderr, timed_out = _run_bounded(command, cwd=str(root), env=env, timeout=timeout)
     candidate_post = manifest(root, candidate_paths, workspace_provenance)
-    base.update({"exit_code": completed.returncode, "candidate_post": candidate_post["digest"],
-                 "unchanged": candidate_pre["digest"] == candidate_post["digest"]})
-    return Receipt(payload=base, stdout=completed.stdout, stderr=completed.stderr)
+    base.update({"exit_code": exit_code, "candidate_post": candidate_post["digest"],
+                 "unchanged": candidate_pre["digest"] == candidate_post["digest"],
+                 "timed_out": timed_out, "timeout_seconds": timeout})
+    if timed_out:
+        base["refused"] = (f"verifier exceeded its {timeout:g} s wall-clock bound; "
+                           "its process group was killed")
+    return Receipt(payload=base, stdout=stdout, stderr=stderr)

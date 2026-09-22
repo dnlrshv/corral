@@ -34,6 +34,12 @@ class Controller:
         self.profiles = list(registered.values())
 
 
+    def capacity(self, host):
+        """Registered capacity that the store admits allocations against for one host."""
+        declared = self.hosts[host]
+        return {"cpu": declared.get("cpu", os.cpu_count() or 1),
+                "memory_mb": declared.get("memory_mb", 0)}
+
     def authorize(self, token):
         if not hmac.compare_digest(token, self.token):
             raise PermissionError("authenticated client authority required")
@@ -314,74 +320,70 @@ class Controller:
         # native preparation or model inference can start.
         require_active_review_owner(self.store, spec)
         resource = "workspace:" + workspace
-        epoch = self.store.acquire(resource, task_id)
-        capacity = self.hosts[execution_host]
-        if not self.store.allocate(task_id, execution_host, spec.get("cpu", 1),
-                                   spec.get("memory_mb", 0), {
-                                       "cpu": capacity.get("cpu", os.cpu_count() or 1),
-                                       "memory_mb": capacity.get("memory_mb", 0)}):
-            return self.status(token, task_id)
         attempt = str(uuid.uuid4())
-        state = {"status": "dispatching", "attempt": attempt, "epoch": epoch,
+        state = {"status": "dispatching", "attempt": attempt, "epoch": None,
                  "host": execution_host, "profile": spec.get("selection"),
                  "process_status": None, "endpoint": "local", "generation": generation,
                  "workspace_provenance": workspace_provenance}
-        # Serialized claim prevents concurrent identical clients starting two workers, once per
-        # generation: a repeated dispatch of the same generation finds the claim and returns.
-        try:
-            self.store.put_once("claim", continuation.claim_key(task_id, generation),
-                                {"attempt": attempt, "generation": generation})
-        except ValueError:
+        # The generation claim (one worker per generation, even for concurrent identical
+        # clients), workspace ownership, host allocation, state and invocation commit in one
+        # transaction: a duplicate, busy, invalid or over-capacity dispatch acquires nothing.
+        dispatched = self.store.begin_dispatch(
+            resource=resource, task=task_id, claim_key=continuation.claim_key(task_id, generation),
+            claim={"attempt": attempt, "generation": generation}, host=execution_host,
+            cpu=spec.get("cpu", 1), memory_mb=spec.get("memory_mb", 0),
+            capacity=self.capacity(execution_host), state=state,
+            invocation={"task": task_id, "generation": generation,
+                        "role": spec.get("role", "implementation"), "selection": spec["selection"],
+                        "observed": None, "usage": "unknown-until-native-events"})
+        if dispatched is None:
             return self.status(token, task_id)
-        self.store.replace("state", task_id, state)
-        self.store.put_once("invocation", attempt, {"task": task_id, "generation": generation,
-            "role": spec.get("role", "implementation"), "selection": spec["selection"],
-            "observed": None,
-            "usage": "unknown-until-native-events"})
-        # A continuation generation gets its own artifact directory and native scratch, so no
-        # stale file from the accepted prior attempt can masquerade as this invocation's result.
-        output = continuation.artifact_dir(self.artifacts, task_id, generation)
-        output.mkdir(parents=True, exist_ok=True)
-        spool = Spool(output / "usage-spool.sqlite")
-        telemetry_errors = []
-        context_path = output / "context.json"
-        usage_path = output / "native-usage.json"
-        checkpoint = continuation.checkpoint_for(self.store, task_id, generation)
-        if checkpoint:
-            (output / "continuation-checkpoint.json").write_text(
-                json.dumps(checkpoint, indent=2, sort_keys=True))
-        def update_context_and_usage():
-            amendments = [{"amendment_id": key.split(":", 1)[1], "sequence": value["sequence"],
-                           "value": value["value"]}
-                          for key, value in sorted(self.store.records("amendment").items())
-                          if key.startswith(task_id + ":")]
-            payload = {**self.context(task_id), "task": task_id, "generation": generation,
-                       "attempt": attempt, "amendment_history": amendments,
-                       "workspace_provenance": workspace_provenance}
-            if checkpoint:
-                payload["prior_generation"] = checkpoint
-                payload["prompt_extras"] = "\n\n".join(
-                    part for part in (spec.get("prompt_extras"),
-                                      continuation.checkpoint_text(checkpoint)) if part)
-            write_json(context_path, payload)
-            usage_file = usage_path
-            if usage_file.is_file():
-                try:
-                    events = json.loads(usage_file.read_text())
-                    if not isinstance(events, list):
-                        raise ValueError("native usage must be an event list")
-                    for event in events:
-                        spool.append({**event, "invocation": attempt, "task": task_id})
-                except (ValueError, TypeError, KeyError, OSError, sqlite3.Error) as error:
-                    telemetry_errors.append(type(error).__name__)
-        host = self.hosts[execution_host]
-        verifier_roots = tuple(str(item) for item in (host.get("verifier_roots") or ()))
-        protected_paths = [str(self.store.path.parent.resolve()), str(self.artifacts.resolve()),
-                           *verifier_roots, *(host.get("protected_paths") or [])]
-        # A refusal before any worker process exists must not strand ownership as
-        # active: nothing ran, so the workspace is released and the refusal recorded.
+        epoch, newly_acquired = dispatched
+        state["epoch"] = epoch
+        # Every failure from here until a worker process exists is a refusal before launch:
+        # it releases this dispatch's allocation and only an ownership epoch it newly acquired.
         launched = False
         try:
+            # A continuation generation gets its own artifact directory and native scratch, so no
+            # stale file from the accepted prior attempt can masquerade as this invocation's result.
+            output = continuation.artifact_dir(self.artifacts, task_id, generation)
+            output.mkdir(parents=True, exist_ok=True)
+            spool = Spool(output / "usage-spool.sqlite")
+            telemetry_errors = []
+            context_path = output / "context.json"
+            usage_path = output / "native-usage.json"
+            checkpoint = continuation.checkpoint_for(self.store, task_id, generation)
+            if checkpoint:
+                (output / "continuation-checkpoint.json").write_text(
+                    json.dumps(checkpoint, indent=2, sort_keys=True))
+            def update_context_and_usage():
+                amendments = [{"amendment_id": key.split(":", 1)[1], "sequence": value["sequence"],
+                               "value": value["value"]}
+                              for key, value in sorted(self.store.records("amendment").items())
+                              if key.startswith(task_id + ":")]
+                payload = {**self.context(task_id), "task": task_id, "generation": generation,
+                           "attempt": attempt, "amendment_history": amendments,
+                           "workspace_provenance": workspace_provenance}
+                if checkpoint:
+                    payload["prior_generation"] = checkpoint
+                    payload["prompt_extras"] = "\n\n".join(
+                        part for part in (spec.get("prompt_extras"),
+                                          continuation.checkpoint_text(checkpoint)) if part)
+                write_json(context_path, payload)
+                usage_file = usage_path
+                if usage_file.is_file():
+                    try:
+                        events = json.loads(usage_file.read_text())
+                        if not isinstance(events, list):
+                            raise ValueError("native usage must be an event list")
+                        for event in events:
+                            spool.append({**event, "invocation": attempt, "task": task_id})
+                    except (ValueError, TypeError, KeyError, OSError, sqlite3.Error) as error:
+                        telemetry_errors.append(type(error).__name__)
+            host = self.hosts[execution_host]
+            verifier_roots = tuple(str(item) for item in (host.get("verifier_roots") or ()))
+            protected_paths = [str(self.store.path.parent.resolve()), str(self.artifacts.resolve()),
+                               *verifier_roots, *(host.get("protected_paths") or [])]
             selection = spec.get("selection") or {}
             declared_profile = selection.get("profile") or {}
             harness = declared_profile.get("harness")
@@ -396,6 +398,7 @@ class Controller:
                 inspection_only = bool(route and route.inspection_only)
             policy = None
             verifier_paths, pre_verifier_manifest = [], None
+            verifier_timeout = verifier.timeout_for(host)
             if not inspection_only:
                 policy = verifier.policy(spec, workspace, host=host, worker_writable=(workspace,))
                 verifier_paths = list(policy.verifier_paths)
@@ -462,6 +465,17 @@ class Controller:
 
             if group_alive:
                 raise RuntimeError("parent exited with live descendants; ownership uncertain")
+            if "cancellation" in state or self.store.get("cancel", task_id) is not None:
+                # The one cancellation decision for this attempt. A cancelled worker is never
+                # verified or recorded as a normal result: the attempt stays fenced (owner
+                # uncertain, allocation held) until evidence-bound reconciliation settles it.
+                # A cancel landing after this point is post-terminal and cannot split the
+                # release of ownership from the release of the allocation.
+                state.update(status="uncertain", process_status=code,
+                             reason="cancelled-before-verification")
+                self.store.finish_attempt(task=task_id, resource=resource, epoch=epoch,
+                                          state=state, owner_status="uncertain")
+                return self.status(token, task_id)
             inspection_validation = None
             if inspection_only:
                 packet_record = (native_evidence or {}).get("inspection_packet")
@@ -487,7 +501,8 @@ class Controller:
                                           workspace_provenance=workspace_provenance,
                                           seatbelt_profile=verifier_seatbelt,
                                           containment_evidence=verifier_evidence,
-                                          containment_env=verifier_env)
+                                          containment_env=verifier_env,
+                                          timeout=verifier_timeout)
                 receipt = record.payload
             receipt["native"] = native_evidence
             if native_evidence:
@@ -546,33 +561,31 @@ class Controller:
                       "amendment_pending": amendment_pending,
                       "dispatch_objective": dispatch_objective,
                       "current_objective": current_obj}
-            # The current attempt is recorded exactly as it executed against its old objective.
-            continuation.record_result(self.store, task_id, generation, result)
-
             state.update(status="completed", process_status=code,
                          amended_objective_pending=amendment_pending)
-            self.store.replace("state", task_id, state)
-
-            self.store.transition_owner(resource, task_id, epoch,
-                                        "uncertain" if self.store.get("cancel", task_id) else "released")
-
-            # If it succeeded but an amendment is pending, automatically schedule the next generation.
-            if accepted and amendment_pending and not self.store.get("cancel", task_id):
-                auto_id = f"auto-amend-g{generation+1}-{uuid.uuid4().hex[:8]}"
-                # The amendment dict only needs to carry the new objective; bindings are inherited
-                self.continue_task(token, task_id, auto_id, {"objective": current_obj})
-            if not self.store.get("cancel", task_id):
-                self.store.release_allocation(task_id)
+            # The current attempt is recorded exactly as it executed against its old objective,
+            # together with its terminal state and the release of its workspace and capacity.
+            self.store.finish_attempt(task=task_id, resource=resource, epoch=epoch, state=state,
+                                      result=result, owner_status="released",
+                                      release_allocation=True)
         except BaseException as error:
             # Post-launch failures keep ownership uncertain: a worker may have touched the
             # workspace and its descendants may be unknown. A pre-launch refusal proved no
-            # process was created, so the workspace is truthfully released for reconciliation.
+            # process was created, so the refusal is recorded, the allocation released, and a
+            # workspace epoch this dispatch newly acquired is released for reconciliation.
             state.update(status="uncertain" if launched else "refused-before-launch",
                          error=type(error).__name__)
-            self.store.replace("state", task_id, state)
-            self.store.transition_owner(resource, task_id, epoch,
-                                        "uncertain" if launched else "released")
-            if not launched:
-                self.store.release_allocation(task_id)
+            if launched:
+                self.store.finish_attempt(task=task_id, resource=resource, epoch=epoch,
+                                          state=state, owner_status="uncertain")
+            else:
+                self.store.finish_attempt(task=task_id, resource=resource, epoch=epoch,
+                                          state=state, release_allocation=True,
+                                          owner_status="released" if newly_acquired else None)
             raise
+        # If it succeeded but an amendment is pending, automatically schedule the next generation.
+        if accepted and amendment_pending and not self.store.get("cancel", task_id):
+            auto_id = f"auto-amend-g{generation+1}-{uuid.uuid4().hex[:8]}"
+            # The amendment dict only needs to carry the new objective; bindings are inherited
+            self.continue_task(token, task_id, auto_id, {"objective": current_obj})
         return self.status(token, task_id)

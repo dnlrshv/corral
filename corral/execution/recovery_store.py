@@ -1,12 +1,54 @@
-"""Fenced transactional settlement for cancelled execution attempts."""
+"""Fenced transactional settlement for execution attempts."""
 import json
+
+
+def _result_record(task, generation):
+    return ("result", task) if generation <= 1 else ("generation_result", f"{task}:{generation}")
+
+
+def finish_attempt(store, *, task, resource, epoch, state, owner_status=None, owner_from=("active",),
+                   release_allocation=False, result=None, expected_state=None):
+    """Persist one attempt's outcome and release exactly its fences in a single transaction.
+
+    ``owner_status=None`` leaves workspace ownership untouched (an epoch this attempt did not
+    newly acquire is never released by it). A result is written once per generation and a
+    different result for the same generation is refused, as is a state that changed since
+    ``expected_state`` was read; nothing is persisted when any fence fails.
+    """
+    from .store import canonical
+
+    with store.transaction() as db:
+        if expected_state is not None:
+            current = db.execute("SELECT value FROM records WHERE kind='state' AND key=?", (task,)).fetchone()
+            if not current or current[0] != canonical(expected_state):
+                raise PermissionError("attempt state changed before finalization")
+        if owner_status is not None:
+            row = db.execute("SELECT owner,epoch,status FROM owners WHERE resource=?", (resource,)).fetchone()
+            if row is None or row[:2] != (task, epoch) or row[2] not in owner_from:
+                raise PermissionError("stale ownership fence")
+            db.execute("UPDATE owners SET status=? WHERE resource=? AND owner=? AND epoch=?",
+                       (owner_status, resource, task, epoch))
+        if result is not None:
+            kind, key = _result_record(task, int(state.get("generation") or 1))
+            old = db.execute("SELECT value FROM records WHERE kind=? AND key=?", (kind, key)).fetchone()
+            if old and old[0] != canonical(result):
+                raise ValueError("conflicting attempt result")
+            if not old:
+                db.execute("INSERT INTO records VALUES(?,?,?)", (kind, key, canonical(result)))
+        db.execute("INSERT OR REPLACE INTO records VALUES('state',?,?)", (task, canonical(state)))
+        if release_allocation:
+            allocation = db.execute("SELECT value FROM records WHERE kind='allocation' AND key=?",
+                                    (task,)).fetchone()
+            if allocation:
+                db.execute("INSERT OR REPLACE INTO records VALUES('allocation',?,?)",
+                           (task, canonical({**json.loads(allocation[0]), "active": False})))
 
 
 def settle_cancelled(store, *, resource, owner, epoch, task, generation, result, audit, expected_state, state):
     """Atomically persist a cancelled result and release exactly its fenced resources."""
     from .store import canonical
 
-    result_kind, result_key = ("result", task) if generation <= 1 else ("generation_result", f"{task}:{generation}")
+    result_kind, result_key = _result_record(task, generation)
     with store.transaction() as db:
         owner_row = db.execute("SELECT owner,epoch,status FROM owners WHERE resource=?", (resource,)).fetchone()
         if owner_row != (owner, epoch, "uncertain"):

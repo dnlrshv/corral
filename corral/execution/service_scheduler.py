@@ -11,8 +11,19 @@ from .service_specs import request_spec
 TICK_RESOURCE = "service-scheduler:tick"
 
 
+def _forget_identity(service, owner: str) -> None:
+    """Drop a tick identity once no lease can depend on it, so they do not accumulate."""
+    with service.store.transaction() as db:
+        db.execute("DELETE FROM records WHERE kind='service_tick_identity' AND key=?", (owner,))
+
+
 def acquire_tick(service, runtime: dict[str, Any]) -> tuple[str, int] | None:
-    """Serialize scheduler ticks and recover a lease only after its process is proven dead."""
+    """Serialize scheduler ticks and recover a lease only after its process is proven dead.
+
+    Only the identity of a live lease holder is retained: a tick that loses the race forgets
+    its own identity, a recovered lease forgets its dead holder's, and a release forgets the
+    releasing tick's.
+    """
     from .runtime_identity import process_status
 
     owner = "service-tick:" + uuid.uuid4().hex
@@ -21,20 +32,25 @@ def acquire_tick(service, runtime: dict[str, Any]) -> tuple[str, int] | None:
     if current is not None and current[2] != "released":
         prior = service.store.get("service_tick_identity", current[0])
         if not isinstance(prior, dict) or process_status(prior) != "dead":
+            _forget_identity(service, owner)
             return None
         try:
             service.store.transition_owner(TICK_RESOURCE, current[0], current[1], "released")
         except PermissionError:
+            _forget_identity(service, owner)
             return None
+        _forget_identity(service, current[0])
     try:
         return owner, service.store.acquire(TICK_RESOURCE, owner)
     except PermissionError:
+        _forget_identity(service, owner)
         return None
 
 
 def release_tick(service, lease: tuple[str, int]) -> None:
     owner, epoch = lease
     service.store.transition_owner(TICK_RESOURCE, owner, epoch, "released")
+    _forget_identity(service, owner)
 
 
 def _host_order(service) -> list[str]:
@@ -81,12 +97,9 @@ def dispatch_ready(service, events: dict[str, dict[str, Any]], now: float,
                 and str(Path(specs[key]["workspace"]).resolve())
                 not in busy
             ]
-            running = [
-                specs[key] for key, value in events.items()
-                if value.get("host") == host
-                and value.get("status") in {"dispatching", "uncertain"}
-            ]
-            capacity = {**host_cfg, "interactive_boost_seconds":
+            # Capacity in use is read from the store, the authority the claim reserves against.
+            running = service.store.active_allocations(host)
+            capacity = {**host_cfg, **service.controller.capacity(host), "interactive_boost_seconds":
                         host_cfg.get("interactive_boost_seconds", 60)}
             eligible = ready(pending, set(), running, capacity, now)
             if not eligible:
@@ -108,6 +121,8 @@ def dispatch_ready(service, events: dict[str, dict[str, Any]], now: float,
                                   development_mode=service.development_mode)
                 updated = {**event, "launcher_identity": launcher}
             except Exception as exc:
+                # No launcher process exists, so its reservation is returned to the host.
+                service.store.release_reservation(event["task_id"], event_id)
                 updated = {**event, "status": "uncertain", "error": str(exc)}
             service.store.replace("service_event", event_id, updated)
             events[event_id] = updated

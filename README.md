@@ -147,9 +147,14 @@ No provider calls, service installation, or GitHub writes occur in these demos.
 channels. Requests use `submit`, `steer`, `status`, `dispatch`, `dispatch-wave`,
 `continue`, `cancel`, `snapshot`, and `transfer`; worker execution is detached
 from the client. Host capacity, enabled routes, profiles and controller paths
-are private config. Input/result manifests bind the Git base and explicitly
-selected file digests; changed destinations fail closed. Use isolated
-repositories for development.
+are private config. The controller store is the only capacity authority: the
+service reserves capacity when it claims an event, the dispatch adopts that
+reservation, and a refused dispatch acquires no ownership or capacity.
+Input/result manifests bind the Git base and explicitly selected file digests;
+changed destinations fail closed. Verifiers run in their own process group under
+a wall-clock bound (`verifier_timeout_seconds` per host, default 3600 s); one
+that exceeds it is killed and receipted as timed out with exit code 124. Use
+isolated repositories for development.
 
 `continue` is the only post-terminal action. It checkpoints a task's terminal
 attempt and schedules exactly one later generation under the same task id, with
@@ -174,11 +179,16 @@ fixture verdicts do not establish native isolation.
 
 Checkout workspaces require readable Git metadata before inference. An immutable
 snapshot instead declares its source revisions and export digest; the controller
-checks its candidate bytes without inventing Git history. Cancelled attempts
-whose finalization was interrupted can be reconciled through the authenticated
-client. Reconciliation collects process, artifact and delivery observations,
-retains the original failure and usage, and releases only the matching ownership
-epoch. An unresolved external effect prevents settlement.
+checks its candidate bytes without inventing Git history. Cancelling a running
+attempt stops its worker's process group and leaves the attempt fenced as
+`uncertain`, with its workspace and capacity held, without running the verifier
+or recording a result. That attempt, like any whose finalization was
+interrupted, is settled through the authenticated client's `reconcile`.
+Reconciliation collects process, artifact and delivery observations (a cancelled
+attempt without a completed adapter result reports its artifacts as
+unavailable), retains the original failure and usage, and releases only the
+matching ownership epoch and allocation. An unresolved external effect prevents
+settlement.
 
 GitHub advisory publication is a separate trusted transport with candidate-bound
 authorization, ownership fencing, authenticated receipt readback and duplicate

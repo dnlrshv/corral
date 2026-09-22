@@ -33,6 +33,9 @@ class GitHubMergeTransport:
         if not resolved:
             raise PermissionError("authenticated GitHub merge token is required")
         self.store, self.token, self.actor = store, resolved, actor
+        self.account_ref = str(merge_policy.get("account_ref") or "")
+        if not self.account_ref:
+            raise PermissionError("merge policy requires a configured account reference")
         self.http_client, self.allow_network = http_client, allow_network
         self._opener = urllib.request.build_opener(_NoRedirectHandler())
         self.merge_policy = self._bind_policy(merge_policy)
@@ -42,8 +45,11 @@ class GitHubMergeTransport:
     def _bind_policy(policy: dict) -> dict:
         """Validate a controller-loaded immutable policy snapshot before any network effect."""
         required = ("repo", "base", "campaign_authorization", "required_checks",
-                    "required_reviewers", "policy_snapshot", "base_ref", "live_policy_digest")
-        if not isinstance(policy, dict) or any(not policy.get(key) for key in required):
+                    "required_reviewers", "required_internal_reviews", "policy_snapshot",
+                    "base_ref", "live_policy_digest", "account_ref")
+        if (not isinstance(policy, dict) or any(key not in policy for key in required)
+                or any(not policy.get(key) for key in required
+                       if key not in {"required_reviewers", "required_internal_reviews"})):
             raise PermissionError("merge requires a complete controller policy binding")
         snapshot = policy["policy_snapshot"]
         if not isinstance(snapshot, dict):
@@ -67,6 +73,20 @@ class GitHubMergeTransport:
             raise PermissionError("merge required checks must be explicit")
         if not all(isinstance(actor, str) and actor for actor in policy["required_reviewers"]):
             raise PermissionError("merge required reviewers must be explicit")
+        internal = policy["required_internal_reviews"]
+        if (not isinstance(internal, list)
+                or any(not isinstance(item, dict) or not item
+                       or set(item) - {"profile_id", "policy_id"}
+                       or any(not isinstance(value, str) or not value for value in item.values())
+                       for item in internal)):
+            raise PermissionError("merge required internal reviews must be explicit")
+        if not policy["required_reviewers"] and not internal:
+            raise PermissionError("merge requires remote or trusted internal review evidence")
+        if internal:
+            value = policy.get("review_policy_digest")
+            if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+                raise PermissionError("internal review requirements need a source policy digest")
+            required = (*required, "review_policy_digest")
         return json.loads(json.dumps({key: policy[key] for key in (*required, "risk_excluded") if key in policy}))
 
     def _request(self, method: str, path: str, *, json_data: dict | None = None) -> Any:
@@ -138,8 +158,7 @@ class GitHubMergeTransport:
             protection = _strip_dynamic_protection_metadata(protection)
         return compute_policy_digest({"rulesets": rulesets, "classic_protection": protection})
 
-    @staticmethod
-    def _eligible(facts: dict, head: str, policy: dict) -> None:
+    def _eligible(self, facts: dict, pr: str, head: str, base: str, policy: dict) -> None:
         latest_reviews: dict[str, dict] = {}
         for item in facts["reviews"]:
             actor = item.get("user", {}).get("login") if isinstance(item.get("user"), dict) else None
@@ -154,6 +173,12 @@ class GitHubMergeTransport:
                    if latest_reviews.get(actor, {}).get("state") != "APPROVED"}
         if missing:
             raise PermissionError("required GitHub review missing")
+        if policy["required_internal_reviews"]:
+            from .internal_review import matching
+
+            matching(self.store, pr=pr, head=head, base=base,
+                     policy_digest=policy["review_policy_digest"],
+                     requirements=policy["required_internal_reviews"])
         latest_checks: dict[str, dict] = {}
         for item in facts["checks"]:
             item_id = item.get("id") if isinstance(item, dict) else None
@@ -169,7 +194,8 @@ class GitHubMergeTransport:
 
     def _intent(self, *, pr: str, owner: str, epoch: int, head: str, base: str) -> str:
         return digest({"pr": pr, "owner": owner, "epoch": epoch, "head": head, "base": base,
-                       "policy": self.merge_policy, "actor": self.actor})
+                       "policy": self.merge_policy, "actor": self.actor,
+                       "account_ref": self.account_ref})
 
     def _audit_preflight_failure(self, intent: str, error: Exception) -> None:
         """Preserve read-only failure history without creating an external-effect intent."""
@@ -196,14 +222,16 @@ class GitHubMergeTransport:
                 raise PermissionError("merge ownership fence is stale")
             if self._live_policy_digest(repo) != self.merge_policy["live_policy_digest"]:
                 raise PermissionError("live GitHub protection or rulesets drifted from the controller policy")
-            self._eligible(self._read(repo, number, head, base), head, self.merge_policy)
+            self._eligible(self._read(repo, number, head, base), pr, head, base,
+                           self.merge_policy)
         except Exception as error:
             self._audit_preflight_failure(intent, error)
             raise
         created = self.store.owned_operation(
             resource, owner, epoch, "merge_intent", intent,
             {"pr": pr, "head": head, "base": base, "policy": self.merge_policy,
-             "actor": self.actor, "transport": self.transport_name},
+             "actor": self.actor, "account_ref": self.account_ref,
+             "transport": self.transport_name},
         )
         if not created:
             observed = self.reconcile(intent)
@@ -239,6 +267,7 @@ class GitHubMergeTransport:
             raise PermissionError("merge acknowledgement was not confirmed by exact-head authenticated readback")
         receipt = {"intent": intent, "pr": stored["pr"], "head": stored["head"], "base": stored["base"],
                    "actor": stored["actor"], "transport": self.transport_name, "merged": bool(merged),
+                   "configured_account_ref": stored["account_ref"],
                    "observed": True, "merge_commit_sha": merge_sha, "merged_by": merged_by}
         if merged:
             self.store.put_once("merge_receipt", intent, receipt)

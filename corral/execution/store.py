@@ -132,6 +132,8 @@ class Store:
                 raise ValueError("conflicting operation identity")
             if not old:
                 db.execute("INSERT INTO records VALUES(?,?,?)", (kind, key, raw))
+                return True
+            return False
 
     def acquire(self, resource, owner):
         with self.transaction() as db:

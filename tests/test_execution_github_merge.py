@@ -61,7 +61,9 @@ def transport(tmp_path, github):
     store = Store(tmp_path / "state")
     epoch = store.acquire("pr:fixture/repo#1", "corral")
     policy = {"repo": "fixture/repo", "base": "b" * 40, "base_ref": "main", "campaign_authorization": "campaign-1",
+              "account_ref": "fixture-merge-account",
               "required_checks": ["test"], "required_reviewers": ["reviewer"], "policy_snapshot": snapshot(github),
+              "required_internal_reviews": [],
               "live_policy_digest": compute_policy_digest({"rulesets": github.rulesets, "classic_protection": github.protection})}
     return GitHubMergeTransport(store=store, token="fixture-token", actor="fixture-merge",
                                 http_client=github, merge_policy=policy), store, epoch
@@ -117,6 +119,59 @@ def test_merge_refuses_missing_required_evidence_empty_token_and_installation_id
     with pytest.raises(PermissionError, match="installation-token"):
         GitHubMergeTransport(store=Store(tmp_path / "other"), token="fixture-token", actor="fixture-merge",
                              http_client=github, auth_mode="installation-token", merge_policy=client.merge_policy)
+
+
+def test_internal_review_can_satisfy_explicit_policy_without_remote_approval(tmp_path):
+    from corral.execution.internal_review import SCHEMA
+    from corral.execution.store import digest
+
+    github = GitHub()
+    client, store, epoch = transport(tmp_path, github)
+    github.reviews = []
+    policy = dict(client.merge_policy)
+    policy.update(required_reviewers=[],
+                  required_internal_reviews=[{"profile_id": "inspection-medium",
+                                              "policy_id": "advisory"}],
+                  review_policy_digest="d" * 64)
+    receipt = {"schema": SCHEMA, "task": "review-task", "attempt": "review-attempt",
+               "generation": 1, "export_id": "e" * 64, "repo": "fixture/repo",
+               "pr": "fixture/repo#1", "head": "a" * 40, "base": "b" * 40,
+               "policy_id": "advisory", "review_policy_digest": "d" * 64,
+               "profile_id": "inspection-medium", "verdict": "PASS",
+               "identity": {"configured": {"provider": "fixture", "model": "reviewer",
+                                            "account_ref": "account", "route": "inspection"},
+                            "observed": {"model": "reviewer",
+                                         "harness": "inspection-packet-http"}},
+               "report_digest": "f" * 64, "packet_digest": "1" * 64}
+    receipt = {"receipt_id": digest(receipt), **receipt}
+    store.put_once("internal_review_receipt", receipt["receipt_id"], receipt)
+    client = GitHubMergeTransport(store=store, token="fixture-token", actor="fixture-merge",
+                                  http_client=github, merge_policy=policy)
+    assert client.merge(**payload(epoch))["merged"] is True
+
+
+def test_internal_review_policy_rejects_missing_or_tampered_receipt(tmp_path):
+    github = GitHub()
+    client, store, epoch = transport(tmp_path, github)
+    github.reviews = []
+    policy = dict(client.merge_policy)
+    policy.update(required_reviewers=[],
+                  required_internal_reviews=[{"profile_id": "inspection-medium"}],
+                  review_policy_digest="d" * 64)
+    client = GitHubMergeTransport(store=store, token="fixture-token", actor="fixture-merge",
+                                  http_client=github, merge_policy=policy)
+    with pytest.raises(PermissionError, match="internal model review"):
+        client.merge(**payload(epoch))
+    assert github.puts == 0 and not store.records("merge_intent")
+    store.put_once("internal_review_receipt", "bad", {
+        "receipt_id": "bad", "schema": "corral-internal-review-v1",
+        "pr": "fixture/repo#1", "head": "a" * 40, "base": "b" * 40,
+        "review_policy_digest": "d" * 64, "profile_id": "inspection-medium",
+        "verdict": "PASS",
+    })
+    with pytest.raises(PermissionError, match="internal model review"):
+        client.merge(**payload(epoch))
+    assert github.puts == 0 and not store.records("merge_intent")
 
 
 def test_latest_review_and_check_run_states_override_older_success(tmp_path):

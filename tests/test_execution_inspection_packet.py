@@ -12,6 +12,7 @@ from corral.execution.agent import AgentConfig, CorralAgent
 from corral.execution.controller import Controller
 from corral.execution.inspection_packet import bind_candidate, build, persist
 from corral.execution.inspection_transport import invoke
+from corral.execution.internal_review import record as record_internal_review
 from corral.execution.profiles import Profile
 from corral.execution.store import Store, digest
 from corral.execution.workspace import file_digest
@@ -394,12 +395,6 @@ print(json.dumps({"schema": "corral-inspection-report-v1", "status": "completed"
 def test_controller_adapter_denies_candidate_execution_and_workspace_access(tmp_path, monkeypatch):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    subprocess.run(["git", "init", "-q"], cwd=workspace, check=True)
-    subprocess.run(["git", "-c", "user.name=Fixture", "-c", "user.email=f@example.invalid",
-                    "commit", "--allow-empty", "-qm", "base"], cwd=workspace, check=True)
-    subprocess.run(["git", "remote", "add", "origin", "https://github.com/example/repo.git"],
-                   cwd=workspace, check=True)
-    head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=workspace, text=True).strip()
     marker = workspace / "candidate-executed"
     candidate = workspace / "candidate.py"
     candidate.write_text(f"from pathlib import Path\nPath({str(marker)!r}).write_text('ran')\n")
@@ -425,13 +420,11 @@ def test_controller_adapter_denies_candidate_execution_and_workspace_access(tmp_
     monkeypatch.setenv("FIXTURE_INSPECTION_KEY", "fixture-only")
     controller = Controller(tmp_path / "state", "owner", {"fixture": host},
                             default_host="fixture", profiles=[profile])
-    spec = {"repo": "example/repo", "workspace": str(workspace), "host": "fixture",
+    export_spec, _store = _register_export(workspace, controller.store.path)
+    spec = {"trusted_export_id": export_spec["trusted_export_id"], "host": "fixture",
             "role": "review", "profile_id": profile.id,
             "objective": "Run the candidate tests, then inspect the supplied source and diff.",
-            "candidate_paths": ["candidate.py", "candidate.diff"], "verifier_paths": [],
-            "tools": ["inspect-packet", "report"],
-            "inspection_paths": ["candidate.py"], "inspection_diff_path": "candidate.diff",
-            "inspection_base_ref": head, "inspection_pr": 12}
+            "tools": ["inspect-packet", "report"]}
     task = controller.submit("owner", "inspection-fixture", spec)
     run = controller.run("owner", task, execution_host="fixture")
     assert run["result"]["accepted"] is True
@@ -452,6 +445,10 @@ def test_controller_adapter_denies_candidate_execution_and_workspace_access(tmp_
     assert run["result"]["observed"].get("effort") is None
     assert run["result"]["usage"]["measured_fields"] == {
         "input_tokens": 9, "output_tokens": 4, "total_tokens": 13}
+    internal = record_internal_review(controller.store, task)
+    assert internal["verdict"] == "CHANGES_REQUIRED"
+    assert internal["export_id"] == export_spec["trusted_export_id"]
+    assert internal["identity"]["configured"]["provider"] == "fixture-provider"
 
 
 def test_post_inference_recheck_refuses_mutated_packet_document(tmp_path):

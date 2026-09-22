@@ -35,6 +35,21 @@ def test_dirty_binary_untracked_transfer_and_newer_dev(tmp_path):
         apply_manifest(repo, broken, result)
 
 
+@pytest.mark.parametrize("secret", [
+    "OPENAI_API_KEY=sk-proj-abcdefghijk12345",
+    "SLACK_TOKEN=xoxb-12345678-abcdefgh",
+    "GITHUB_TOKEN=github_pat_abcdefghijk",
+])
+def test_manifest_refuses_additional_credential_shapes(tmp_path, secret):
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-c", "user.name=Fixture", "-c", "user.email=f@example.invalid",
+                    "commit", "--allow-empty", "-qm", "fixture"], cwd=repo, check=True)
+    (repo / "selected.txt").write_text(secret)
+    with pytest.raises(PermissionError, match="credential-shaped"):
+        manifest(repo, ["selected.txt"])
+
+
 def test_fairness_resources_dependencies_and_recurrence(tmp_path):
     host = {"cpu": 4, "memory_mb": 400, "routes": ["fixture"], "interactive_boost_seconds": 10}
     tasks = [{"id": "wave", "mode": "wave", "submitted": 0, "route": "fixture", "cpu": 4},

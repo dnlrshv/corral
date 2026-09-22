@@ -94,25 +94,83 @@ class Store:
             seq = db.execute("SELECT COUNT(*) FROM records WHERE kind=?", (kind,)).fetchone()[0] + 1
             db.execute("INSERT INTO records VALUES(?,?,?)", (kind, key, canonical({"sequence": seq, "value": value})))
 
-    def allocate(self, task, host, cpu, memory_mb, capacity):
-        with self.transaction() as db:
-            rows = db.execute("SELECT key,value FROM records WHERE kind='allocation'").fetchall()
-            allocations = {k: json.loads(v) for k, v in rows}
-            if task in allocations and allocations[task]["active"]:
+    def allocate(self, task, host, cpu, memory_mb, capacity, *, reservation=None, db=None):
+        """Allocate registered host capacity to one task; the store is the only capacity authority.
+
+        Service admission passes ``reservation`` (its event id) so capacity is held from the
+        moment the event is claimed; the controller dispatch that runs the task adopts that
+        reservation instead of counting the task twice. Returns False, writing nothing, while
+        the task already holds a live allocation; a refusal never leaves a partial record.
+        """
+        if db is None:
+            with self.transaction() as opened:
+                return self.allocate(task, host, cpu, memory_mb, capacity,
+                                     reservation=reservation, db=opened)
+        rows = db.execute("SELECT key,value FROM records WHERE kind='allocation'").fetchall()
+        allocations = {k: json.loads(v) for k, v in rows}
+        own = allocations.get(task)
+        if own and own["active"]:
+            held = own.get("reservation")
+            if held is None or reservation not in (None, held):
                 return False
-            active = [v for v in allocations.values() if v["active"] and v["host"] == host]
-            if cpu <= 0 or memory_mb < 0:
-                raise ValueError("invalid resource request")
-            if sum(v["cpu"] for v in active) + cpu > capacity["cpu"] or sum(v["memory_mb"] for v in active) + memory_mb > capacity["memory_mb"]:
-                raise PermissionError("registered host capacity unavailable")
-            db.execute("INSERT OR REPLACE INTO records VALUES('allocation',?,?)", (task, canonical({
-                "host": host, "cpu": cpu, "memory_mb": memory_mb, "active": True})))
-            return True
+        active = [v for k, v in allocations.items() if k != task and v["active"] and v["host"] == host]
+        if cpu <= 0 or memory_mb < 0:
+            raise ValueError("invalid resource request")
+        if sum(v["cpu"] for v in active) + cpu > capacity["cpu"] or sum(v["memory_mb"] for v in active) + memory_mb > capacity["memory_mb"]:
+            raise PermissionError("registered host capacity unavailable")
+        value = {"host": host, "cpu": cpu, "memory_mb": memory_mb, "active": True}
+        if reservation is not None:
+            value["reservation"] = reservation
+        db.execute("INSERT OR REPLACE INTO records VALUES('allocation',?,?)", (task, canonical(value)))
+        return True
+
+    def active_allocations(self, host):
+        return [value for value in self.records("allocation").values()
+                if value.get("active") and value.get("host") == host]
 
     def release_allocation(self, task):
         value = self.get("allocation", task)
         if value:
             self.replace("allocation", task, {**value, "active": False})
+
+    def release_reservation(self, task, reservation):
+        """Release a service admission reservation that no controller dispatch adopted."""
+        with self.transaction() as db:
+            row = db.execute("SELECT value FROM records WHERE kind='allocation' AND key=?",
+                             (task,)).fetchone()
+            value = json.loads(row[0]) if row else None
+            if not value or not value["active"] or value.get("reservation") != reservation:
+                return False
+            db.execute("INSERT OR REPLACE INTO records VALUES('allocation',?,?)",
+                       (task, canonical({**value, "active": False})))
+            return True
+
+    def begin_dispatch(self, *, resource, task, claim_key, claim, host, cpu, memory_mb, capacity,
+                       state, invocation):
+        """Make this call the one dispatcher of a task generation, or write nothing at all.
+
+        Claim, host allocation, workspace ownership, dispatching state and invocation commit
+        in one transaction, so every refusal (generation already claimed, a live dispatcher of
+        the same task, busy workspace, invalid or unavailable capacity) leaves no residue to
+        strand. Returns ``(epoch, newly_acquired)``, or None when another dispatch owns it.
+        """
+        with self.transaction() as db:
+            if db.execute("SELECT 1 FROM records WHERE kind='claim' AND key=?", (claim_key,)).fetchone():
+                return None
+            if not self.allocate(task, host, cpu, memory_mb, capacity, db=db):
+                return None
+            epoch, newly_acquired = self._acquire(db, resource, task)
+            db.execute("INSERT INTO records VALUES('claim',?,?)", (claim_key, canonical(claim)))
+            db.execute("INSERT OR REPLACE INTO records VALUES('state',?,?)",
+                       (task, canonical({**state, "epoch": epoch})))
+            db.execute("INSERT INTO records VALUES('invocation',?,?)",
+                       (claim["attempt"], canonical(invocation)))
+            return epoch, newly_acquired
+
+    def finish_attempt(self, **kwargs):
+        from .recovery_store import finish_attempt
+
+        return finish_attempt(self, **kwargs)
 
     def settle_cancelled(self, *, resource, owner, epoch, task, generation, result, audit, expected_state, state):
         from .recovery_store import settle_cancelled
@@ -137,16 +195,21 @@ class Store:
 
     def acquire(self, resource, owner):
         with self.transaction() as db:
-            row = db.execute("SELECT owner,epoch,status FROM owners WHERE resource=?",
-                             (resource,)).fetchone()
-            if row and row[2] != "released":
-                if row[0] == owner and row[2] == "active":
-                    return row[1]
-                raise PermissionError("resource still owned or outcome uncertain")
-            epoch = row[1] + 1 if row else 1
-            db.execute("INSERT OR REPLACE INTO owners VALUES(?,?,?,?)",
-                       (resource, owner, epoch, "active"))
-            return epoch
+            return self._acquire(db, resource, owner)[0]
+
+    @staticmethod
+    def _acquire(db, resource, owner):
+        """Return ``(epoch, newly_acquired)``; re-entry by the active owner acquires nothing."""
+        row = db.execute("SELECT owner,epoch,status FROM owners WHERE resource=?",
+                         (resource,)).fetchone()
+        if row and row[2] != "released":
+            if row[0] == owner and row[2] == "active":
+                return row[1], False
+            raise PermissionError("resource still owned or outcome uncertain")
+        epoch = row[1] + 1 if row else 1
+        db.execute("INSERT OR REPLACE INTO owners VALUES(?,?,?,?)",
+                   (resource, owner, epoch, "active"))
+        return epoch, True
 
     def ownership(self, resource):
         with self.transaction() as db:

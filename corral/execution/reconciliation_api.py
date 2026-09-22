@@ -87,24 +87,39 @@ def _github_readback(reader: dict, task_id: str, state: dict) -> dict:
             "review_count": len(reviews), "matching_review_ids": matching}
 
 
-def _artifact_observation(controller, task_id: str, state: dict) -> dict:
+def _artifact_observation(controller, task_id: str, state: dict, *, cancelled: bool = False) -> dict:
+    """Observe the interrupted attempt's preserved artifacts.
+
+    Every artifact present must bind the interrupted attempt. A cancelled attempt may settle
+    without a completed adapter result: a deterministic dispatch never writes one and a native
+    worker stopped mid-run has not. That absence is reported as ``unavailable`` evidence (with
+    whatever adapter status was observed), never as a preserved result.
+    """
     generation = int(state.get("generation") or 1)
     directory = continuation.artifact_dir(controller.artifacts, task_id, generation)
     paths = {"context": directory / "context.json", "adapter": directory / "adapter-result.json"}
-    if not all(path.is_file() for path in paths.values()):
+    present = {name: path for name, path in paths.items() if path.is_file()}
+    if "context" not in present or ("adapter" not in present and not cancelled):
         raise PermissionError("reconciliation requires preserved context and adapter result artifacts")
     try:
-        context, adapter = (json.loads(path.read_text()) for path in paths.values())
+        loaded = {name: json.loads(path.read_text()) for name, path in present.items()}
     except (OSError, ValueError) as error:
         raise PermissionError("reconciliation artifacts are not valid JSON") from error
-    if (context.get("task") != task_id or context.get("attempt") != state.get("attempt")
-            or context.get("generation") != generation or adapter.get("task") != task_id
-            or adapter.get("attempt") != state.get("attempt")
-            or adapter.get("status") != "completed"):
+    context, adapter = loaded["context"], loaded.get("adapter")
+    completed = isinstance(adapter, dict) and adapter.get("status") == "completed"
+    if (not isinstance(context, dict) or context.get("task") != task_id
+            or context.get("attempt") != state.get("attempt") or context.get("generation") != generation
+            or (adapter is not None and (not isinstance(adapter, dict) or adapter.get("task") != task_id
+                                         or adapter.get("attempt") != state.get("attempt")))
+            or (not cancelled and not completed)):
         raise PermissionError("reconciliation artifacts do not bind the interrupted attempt")
-    return {"status": "preserved", "directory": str(directory), "attempt": state.get("attempt"),
-            "generation": generation, "context_sha256": hashlib.sha256(paths["context"].read_bytes()).hexdigest(),
-            "adapter_sha256": hashlib.sha256(paths["adapter"].read_bytes()).hexdigest()}
+    observed = {"directory": str(directory), "attempt": state.get("attempt"), "generation": generation,
+                **{f"{name}_sha256": hashlib.sha256(path.read_bytes()).hexdigest()
+                   for name, path in present.items()}}
+    if completed:
+        return {"status": "preserved", **observed}
+    return {"status": "unavailable", **observed, "adapter_status": (adapter or {}).get("status"),
+            "reason": "adapter-result-absent" if adapter is None else "adapter-result-incomplete"}
 
 
 def controller_only_observation(controller, task_id: str, state: dict) -> dict:
@@ -124,7 +139,8 @@ def controller_only_observation(controller, task_id: str, state: dict) -> dict:
                  {"searched": True, "status": "absent", "reader": "controller-records-only",
                  "task": task_id, "attempt": state.get("attempt"), "generation": generation})
     return {"process": _local_process(state),
-            "artifact": _artifact_observation(controller, task_id, state),
+            "artifact": _artifact_observation(
+                controller, task_id, state, cancelled=controller.store.get("cancel", task_id) is not None),
             "delivery": delivery}
 
 

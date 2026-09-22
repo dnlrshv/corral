@@ -129,7 +129,8 @@ def reconcile(controller, token, task, probe):
     record = verifier.execute(policy, workspace, candidate_paths=spec["candidate_paths"],
                               task=task, attempt=attempt,
                               pre_verifier_manifest=(persisted if bound and persisted is not None
-                                                     else None), workspace_provenance=workspace_provenance)
+                                                     else None), workspace_provenance=workspace_provenance,
+                              timeout=verifier.timeout_for(host))
     receipt = dict(record.payload)
     if verifier_intact is None and bound:
         receipt["verifier_intact"] = None
@@ -155,9 +156,10 @@ def reconcile(controller, token, task, probe):
     result = {"structured": structured, "accepted": accepted, "receipt": receipt,
               "usage": usage, "endpoint": spec["endpoint"], "generation": generation,
               "artifact_directory": str(directory)}
-    continuation.record_result(controller.store, task, generation, result)
-    controller.store.replace("state", task, {**state, "status": "reconciled"})
-    controller.store.transition_owner("workspace:" + str(Path(workspace).resolve()), task,
-                                      state["epoch"], "released")
-    controller.store.release_allocation(task)
+    # One transaction: the result, the reconciled state and the release of exactly this
+    # attempt's workspace fence and allocation, refused if the state changed meanwhile.
+    controller.store.finish_attempt(task=task, resource="workspace:" + str(Path(workspace).resolve()),
+                                    epoch=state["epoch"], state={**state, "status": "reconciled"},
+                                    expected_state=state, result=result, owner_status="released",
+                                    owner_from=("active", "uncertain"), release_allocation=True)
     return result

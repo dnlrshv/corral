@@ -38,24 +38,27 @@ def _route_env(tmp_path: Path, env: dict, **route_changes) -> Controller:
 def test_registered_profiles_are_evidenced_and_contain_no_placeholders():
     """Only routes/models actually observed on this host may be registered."""
     ids = {profile.id for profile in STANDARD_NATIVE_PROFILES}
-    assert ids == {"gemini-3.8-flash-high", "qwen3.8-max-high-codex-baba"}
+    assert ids == {"gemini-3.8-flash-high", "gemini-3.8-flash-medium",
+                   "qwen3.8-max-high-codex-baba"}
     for profile in STANDARD_NATIVE_PROFILES:
         assert profile.model not in PLACEHOLDER_MODELS
         assert profile.context > 0, profile.id
         assert profile.version and profile.version != "0", profile.id
         assert profile.route.startswith("native-"), profile.id
         assert profile.provider and profile.account_ref, profile.id
-        # Requested effort is bound to the profile, never defaulted at launch time.
-        assert profile.effort == "high", profile.id
+        # Requested effort is bound to each profile, never defaulted at launch time.
+        assert profile.effort in {"medium", "high"}, profile.id
     qwen = next(p for p in STANDARD_NATIVE_PROFILES if p.id == "qwen3.8-max-high-codex-baba")
     # The Qwen route is the existing Baba Token Plan binding: Codex harness, Qwen model.
     assert (qwen.harness, qwen.model, qwen.account_ref, qwen.provider) == \
         ("codex", "qwen3.8-max", "baba-token-plan", "alibaba")
     assert qwen.context == 258400 and qwen.version == "0.144.1"
     gemini = next(p for p in STANDARD_NATIVE_PROFILES if p.id == "gemini-3.8-flash-high")
-    assert (gemini.harness, gemini.route, gemini.account_ref) == \
-        ("agy", "native-antigravity-agy", "antigravity-signed-in")
-    assert gemini.context == 235849 and gemini.version == "1.2.3"
+    assert (gemini.harness, gemini.model, gemini.route, gemini.account_ref) == \
+        ("agy", "gemini-3.8-flash-high", "native-antigravity-agy", "antigravity-signed-in")
+    assert gemini.context == 235849 and gemini.version == "1.2.8"
+    medium = next(p for p in STANDARD_NATIVE_PROFILES if p.id == "gemini-3.8-flash-medium")
+    assert (medium.model, medium.effort, medium.version) == ("gemini-3.8-flash-medium", "medium", "1.2.8")
 
 
 def test_native_coding_profiles_are_writers_not_read_only_reviewers():
@@ -242,6 +245,8 @@ def test_route_runtime_log_write_is_probed_and_must_stay_inside_a_read_grant(tmp
                             runtime_write=[str(log_root)])
     task = controller.submit("owner", "runtime-log-grant", ns.native_spec(env, ops=[]))
     controller.run("owner", task, execution_host=ns.FAKE_HOST)
+    adapter = json.loads((controller.artifacts / task / "adapter-result.json").read_text())
+    assert adapter["containment"]["passed"] is True
     receipt = json.loads((controller.artifacts / task / "boundary.json").read_text())
     assert str(log_root) in receipt["boundary"]["write_allow"]
 

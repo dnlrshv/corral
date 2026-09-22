@@ -93,6 +93,7 @@ def _boundary(task_dir: Path) -> tuple[containment.Boundary, dict]:
                                         tmpdir=str(declared["tmpdir"]), deny=tuple(declared.get("deny") or ()),
                                         allow=tuple(declared.get("allow") or ()),
                                         deny_write=tuple(declared.get("deny_write") or ()),
+                                        write_allow=tuple(declared.get("write_allow") or ()),
                                         sentinels=tuple(declared.get("sentinels") or ()),
                                         network=bool(declared.get("network", True)))
     except KeyError as error:
@@ -267,7 +268,7 @@ def run_adapter(task_dir: Path, workspace: Path) -> int:
         with (task_dir / "harness.stdout").open("wb") as out, (task_dir / "harness.stderr").open("wb") as err:
             child = subprocess.Popen(command, cwd=str(scratch if inspection_only else workspace),
                                      stdout=out, stderr=err,
-                                     env=env, start_new_session=False)
+                                     stdin=subprocess.DEVNULL, env=env, start_new_session=False)
             try:
                 exit_code = child.wait(timeout=float(wait_seconds) if wait_seconds else None)
             except subprocess.TimeoutExpired:

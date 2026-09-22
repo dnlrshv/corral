@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from corral.execution import containment, native
+from corral.execution import adapter, containment, native
 from corral.execution.adapter import (
     ADAPTER_RESULT,
     BASE_ENV_NAMES,
@@ -188,6 +188,20 @@ def test_adapter_refuses_a_workspace_that_disagrees_with_the_boundary(tmp_path):
     with pytest.raises(PermissionError, match="does not match the declared worker boundary"):
         run_adapter(task_dir, other)
     assert env["workspace"].is_dir()
+
+
+def test_adapter_launches_harness_with_devnull_stdin(tmp_path, monkeypatch):
+    env, _plan, task_dir = _prepared(tmp_path)
+    actual = adapter.subprocess.Popen
+    seen = {}
+
+    def checked_launch(*args, **kwargs):
+        seen["stdin"] = kwargs.get("stdin")
+        return actual(*args, **kwargs)
+
+    monkeypatch.setattr(adapter.subprocess, "Popen", checked_launch)
+    assert run_adapter(task_dir, env["workspace"]) == 0
+    assert seen["stdin"] is subprocess.DEVNULL
 
 
 def test_adapter_refuses_a_route_argv_with_an_unresolved_placeholder(tmp_path):

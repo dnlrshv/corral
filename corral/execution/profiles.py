@@ -29,18 +29,36 @@ class Profile:
 # gemini-3.1-pro-high is deliberately absent rather than declared with a borrowed number). Each entry binds a
 # harness binary version, a provider, an account reference and the context window that the
 # harness itself reported; a placeholder model or an unobserved route is not a profile.
-# Evidence: agy 1.2.3 `agy models` label `gemini-3.8-flash-high` with an observed
-# max_context_window of 235849 tokens (M4_EVIDENCE/route-diagnosis-metadata.json), and
+# Evidence: Mini2 agy 1.2.8 model catalogue exposed the exact labels
+# gemini-3.8-flash-medium and gemini-3.8-flash-high. The historical context observation
+# remains 235849 tokens; a route must still record its actual harness version at launch.
 # codex-cli 0.144.1 `thread_settings_applied` model=qwen3.8-max effort=high over the
 # Alibaba Baba Token Plan endpoint with model_context_window 258400
 # (M4_EVIDENCE/qwen-command-map-native-metadata.json).
 STANDARD_NATIVE_PROFILES = (
     Profile(
         id="gemini-3.8-flash-high",
-        model="gemini-3.8-flash",
+        model="gemini-3.8-flash-high",
         effort="high",
         harness="agy",
-        version="1.2.3",
+        version="1.2.8",
+        route="native-antigravity-agy",
+        roles=("implementation", "repair", "adjudication"),
+        tools=("read", "search", "edit", "shell", "test"),
+        context=235849,
+        speed="normal",
+        provider="google",
+        family="gemini",
+        account_ref="antigravity-signed-in",
+        subscription_product="antigravity-subscription",
+        quota_pool="antigravity-subscription",
+    ),
+    Profile(
+        id="gemini-3.8-flash-medium",
+        model="gemini-3.8-flash-medium",
+        effort="medium",
+        harness="agy",
+        version="1.2.8",
         route="native-antigravity-agy",
         roles=("implementation", "repair", "adjudication"),
         tools=("read", "search", "edit", "shell", "test"),

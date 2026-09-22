@@ -10,7 +10,7 @@ def test_agy_coding_contract_uses_supported_flags_and_unbounded_wait():
     argv = argv_for("agy")
     assert "--dangerously-skip-permissions" in argv
     assert argv[argv.index("--print-timeout") + 1] == "0"
-    assert "{prompt}" in argv and "{workspace}" in argv
+    assert "{prompt}" in argv and "{workspace}" in argv and "{schema_file}" in argv
     route = declare("coding", {"harness": "agy", "binary": "agy", "argv": argv,
                                 "envelope": "agy-json-v1", "provider": "google",
                                 "account_ref": "host-private", "endpoint": "host-private",

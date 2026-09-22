@@ -18,8 +18,8 @@ def argv_for(harness: str, *, model_provider: str | None = None) -> list[str]:
     """
     if harness == "agy":
         return ["--add-dir", "{workspace}", "--model", "{model}", "--effort", "{effort}",
-                "--output-format", "json", "--print-timeout", "0",
-                "--dangerously-skip-permissions", "--print", "{prompt}"]
+                "--output-format", "json", "--json-schema", "{schema_file}",
+                "--print-timeout", "0", "--dangerously-skip-permissions", "--print", "{prompt}"]
     if harness == "codex":
         if not isinstance(model_provider, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", model_provider):
             raise PermissionError("Codex coding route requires a trusted model_provider identifier")

@@ -12,6 +12,7 @@ from . import (completion, containment, continuation, inspection_packet, inspect
 from .adapter import source_root
 from .atomic_io import write_json
 from .process import Process, boundary_for
+from .pr_fence import require_active_review_owner
 from .profiles import Profile, STANDARD_NATIVE_PROFILES, resolve
 from .store import Store, canonical, digest
 from .usage import Spool
@@ -308,6 +309,10 @@ class Controller:
             raise PermissionError("dispatch paused")
         workspace = str(Path(spec["workspace"]).resolve())
         workspace_provenance = workspace_contract.preflight(spec, workspace, store=self.store)
+        # A PR review is fenced twice: service admission binds the owner/epoch and
+        # this controller check repeats it after provenance preflight, before any
+        # native preparation or model inference can start.
+        require_active_review_owner(self.store, spec)
         resource = "workspace:" + workspace
         epoch = self.store.acquire(resource, task_id)
         capacity = self.hosts[execution_host]

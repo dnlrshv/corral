@@ -30,10 +30,10 @@ class _Response(io.BytesIO):
         return None
 
 
-def _register_export(root: Path, state_path: Path) -> tuple[dict, Store]:
+def _register_export(root: Path, state_path: Path, *, extra_paths: tuple[str, ...] = ()) -> tuple[dict, Store]:
     base_spec = {
-        "role": "review", "candidate_paths": ["candidate.py", "candidate.diff"],
-        "inspection_paths": ["candidate.py"], "inspection_diff_path": "candidate.diff",
+        "role": "review", "candidate_paths": ["candidate.py", "candidate.diff", *extra_paths],
+        "inspection_paths": ["candidate.py", *extra_paths], "inspection_diff_path": "candidate.diff",
         "workspace_kind": "immutable_snapshot", "inspection_pr": 12,
     }
     files = {name: {"digest": file_digest(root / name),
@@ -201,6 +201,29 @@ def test_model_misroute_retains_failed_usage_and_observed_identity(tmp_path):
         "input_tokens": 5, "output_tokens": 2, "total_tokens": 7}
     assert parsed.detail["provider_receipt"]["response_id"] == "response-misroute"
     assert parsed.detail["identity_coverage"]["effort"] == "requested-not-attested"
+
+
+def test_packet_allows_policy_markdown_prose_without_weakening_literal_assignment_scan(tmp_path):
+    """A Markdown sentence about credentials/tokens is prose, not a token assignment."""
+    root, _spec, _store = _workspace(tmp_path)
+    policy_path = ".github/CODEX_PR_REVIEW.md"
+    policy = root / policy_path
+    policy.parent.mkdir()
+    policy.write_text("# Review rules\n\n- Credentials/tokens: secrets in code or YAML block review.\n")
+    spec, store = _register_export(root, tmp_path / "policy-state.sqlite", extra_paths=(policy_path,))
+    packet = _built(root, spec, "Inspect the policy and candidate", store)
+    assert {item["path"] for item in packet["documents"]} == {
+        "candidate.py", "candidate.diff", policy_path}
+
+    policy.write_text("- API_KEY: literal-credential-value\n")
+    spec, store = _register_export(root, tmp_path / "literal-policy-state.sqlite", extra_paths=(policy_path,))
+    with pytest.raises(PermissionError, match="credential-shaped"):
+        _built(root, spec, "Inspect the policy and candidate", store)
+
+    policy.write_text("- docs/api_key=opaque-credential-value\n")
+    spec, store = _register_export(root, tmp_path / "path-policy-state.sqlite", extra_paths=(policy_path,))
+    with pytest.raises(PermissionError, match="credential-shaped"):
+        _built(root, spec, "Inspect the policy and candidate", store)
 
 
 def test_packet_refuses_credential_shaped_candidate_content(tmp_path):

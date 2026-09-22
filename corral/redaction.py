@@ -136,6 +136,24 @@ def check_outbound_safe(text: str) -> list[str]:
     return offenders
 
 
+def _markdown_credential_token_prose(match: re.Match[str], text: str, source_name: str | None) -> bool:
+    """Recognize the literal Markdown label ``Credentials/tokens: secrets ...``.
+
+    This label describes a review rule.  It is not an assignment, and all other
+    credential-shaped Markdown syntax continues through the ordinary scanner.
+    """
+    if not source_name or not source_name.lower().endswith(".md"):
+        return False
+    start = text.rfind("\n", 0, match.start()) + 1
+    prefix = text[start:match.start()]
+    line_end = text.find("\n", match.end())
+    suffix = text[match.end():None if line_end < 0 else line_end]
+    return (bool(re.fullmatch(r"[ \t]*[-*+]\s+credentials/", prefix, re.IGNORECASE))
+            and match.group("key").strip("\"'").lower() == "tokens"
+            and match.group("val").strip("\"'").lower() == "secrets"
+            and bool(re.match(r"\s+[A-Za-z]", suffix)))
+
+
 def check_source_text_safe(text: str, *, source_name: str | None = None) -> list[str]:
     """Find credentials while allowing expressions only in recognized source files.
 
@@ -169,6 +187,8 @@ def check_source_text_safe(text: str, *, source_name: str | None = None) -> list
         separator_at = line.find(match.group("sep"))
         line_value = line[separator_at + 1:].strip().strip("\"'")
         if explicit_reference.fullmatch(line_value):
+            continue
+        if _markdown_credential_token_prose(match, text, source_name):
             continue
         quoted = raw.startswith(("\"", "'")) and raw.endswith(("\"", "'"))
         # Unquoted calls, attributes and container lookups are source expressions. A quoted

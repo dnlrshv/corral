@@ -136,32 +136,51 @@ def check_outbound_safe(text: str) -> list[str]:
     return offenders
 
 
-def check_source_text_safe(text: str) -> list[str]:
-    """Find credentials in source bytes without treating expressions as secret literals."""
+def check_source_text_safe(text: str, *, source_name: str | None = None) -> list[str]:
+    """Find credentials while allowing expressions only in recognized source files.
+
+    The generic outbound check treats every credential-shaped assignment as data.
+    This variant narrowly recognizes Python expressions and explicit environment
+    references.  A dotted or callable value in YAML/text is still data and is
+    rejected.
+    """
     offenders = []
     assignment = _OUTBOUND_CREDENTIAL_PATTERNS[-1]
     for pattern in _OUTBOUND_CREDENTIAL_PATTERNS[:-1]:
         if pattern.search(text):
             offenders.append(pattern.pattern)
+    python_source = bool(source_name and source_name.lower().endswith((".py", ".pyi")))
     type_names = {"str", "bytes", "int", "float", "bool", "dict", "list", "tuple",
                   "set", "object", "None", "Any", "Optional", "SecretStr"}
+    explicit_reference = re.compile(
+        r"^(?:\$\{\{\s*(?:secrets|env)\.[A-Za-z_][A-Za-z0-9_]*\s*\}\}"
+        r"|\$\{[A-Za-z_][A-Za-z0-9_]*\}|\$[A-Za-z_][A-Za-z0-9_]*)$"
+    )
     for match in assignment.finditer(text):
         key = match.group("key").strip("\"'")
         raw = match.group("val")
         value = raw.strip("\"'")
         if _SAFE_KEYS.match(key) and _NUMERIC_VALUE.match(value):
             continue
-        if value in ("<redacted>", "[REDACTED]") or value in type_names:
+        if value in ("<redacted>", "[REDACTED]"):
+            continue
+        line_end = text.find("\n", match.start())
+        line = text[match.start():None if line_end < 0 else line_end]
+        separator_at = line.find(match.group("sep"))
+        line_value = line[separator_at + 1:].strip().strip("\"'")
+        if explicit_reference.fullmatch(line_value):
             continue
         quoted = raw.startswith(("\"", "'")) and raw.endswith(("\"", "'"))
         # Unquoted calls, attributes and container lookups are source expressions. A quoted
         # value is data and remains subject to the credential-assignment boundary.
-        if not quoted and any(char in raw for char in ".()[]{}"):
+        if python_source and not quoted and any(char in raw for char in ".()[]{}"):
             continue
         # A plain identifier on the right side of Python-style assignment is a reference.
         # YAML/JSON colon assignments remain data, as do literals containing digits/dashes.
-        if (not quoted and match.group("sep") == "="
+        if (python_source and not quoted and match.group("sep") == "="
                 and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", raw)):
+            continue
+        if python_source and not quoted and value in type_names:
             continue
         offenders.append(assignment.pattern)
     return offenders

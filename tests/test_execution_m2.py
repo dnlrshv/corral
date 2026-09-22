@@ -63,6 +63,33 @@ def test_manifest_allows_source_token_expressions_and_annotations(tmp_path):
     assert manifest(repo, ["selected.py"])["files"]["selected.py"]["digest"]
 
 
+@pytest.mark.parametrize("content", [
+    "password: actual.password\n",
+    "token: str\n",
+    "api_key: lookup(provider)\n",
+])
+def test_manifest_refuses_expression_lookalikes_in_data_files(tmp_path, content):
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-c", "user.name=Fixture", "-c", "user.email=f@example.invalid",
+                    "commit", "--allow-empty", "-qm", "fixture"], cwd=repo, check=True)
+    (repo / "selected.yaml").write_text(content)
+    with pytest.raises(PermissionError, match="credential-shaped"):
+        manifest(repo, ["selected.yaml"])
+
+
+@pytest.mark.parametrize("reference", [
+    "${{ secrets.PROVIDER_KEY }}", "${PROVIDER_KEY}", "$PROVIDER_KEY",
+])
+def test_manifest_allows_explicit_environment_references(tmp_path, reference):
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-c", "user.name=Fixture", "-c", "user.email=f@example.invalid",
+                    "commit", "--allow-empty", "-qm", "fixture"], cwd=repo, check=True)
+    (repo / "selected.yaml").write_text(f"api_key: {reference}\n")
+    assert manifest(repo, ["selected.yaml"])["files"]["selected.yaml"]["digest"]
+
+
 def test_apply_manifest_refuses_forged_secret_before_write(tmp_path):
     repo = tmp_path / "repo"
     subprocess.run(["git", "init", "-q", str(repo)], check=True)

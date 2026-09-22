@@ -39,7 +39,9 @@ def manifest(root, paths, workspace_provenance=None):
     for name in paths:
         path = safe_path(root, name)
         data = path.read_bytes() if path.exists() else None
-        if data and check_source_text_safe(data.decode("utf-8", errors="ignore")):
+        if data and check_source_text_safe(
+            data.decode("utf-8", errors="ignore"), source_name=name
+        ):
             raise PermissionError("credential-shaped input refused")
         files[name] = {"digest": file_digest(path),
                        "data": base64.b64encode(data).decode() if data is not None else None,
@@ -101,7 +103,9 @@ def apply_manifest(root, incoming, expected):
         data = base64.b64decode(value["data"], validate=True) if value["data"] is not None else None
         if data is not None and hashlib.sha256(data).hexdigest() != value["digest"]:
             raise ValueError("file digest mismatch")
-        if data and check_source_text_safe(data.decode("utf-8", errors="ignore")):
+        if data and check_source_text_safe(
+            data.decode("utf-8", errors="ignore"), source_name=name
+        ):
             raise PermissionError("credential-shaped input refused")
         decoded.append((name, data, value["mode"]))
     for name, data, mode in decoded:

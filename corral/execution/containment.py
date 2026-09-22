@@ -27,6 +27,8 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from .containment_grants import refuse_overlaps as _refuse_overlaps
+
 # Credential/account stores a coding worker never needs, whatever route it runs.
 SENSITIVE_HOME_ENTRIES: tuple[str, ...] = (
     ".ssh",
@@ -124,8 +126,19 @@ def open_for_write(target):
     os.close(fd)
 
 
+def append_or_create(target):
+    try:
+        open_for_write(target)
+    except FileNotFoundError:
+        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        os.close(fd)
+        os.unlink(target)
+
+
 for target in checks.get("write_allowed_dirs", []):
     attempt(lambda t=target: create_and_remove(t), "write:" + target, "allowed")
+for target in checks.get("write_allowed_files", []):
+    attempt(lambda t=target: append_or_create(t), "append-or-create:" + target, "allowed")
 for target in checks.get("sentinels", []):
     attempt(lambda t=target: read_one_byte(t), "read-file:" + target, "denied")
     attempt(lambda t=target: open_for_write(t), "write-file:" + target, "denied")
@@ -145,6 +158,7 @@ class Boundary:
     allow: tuple[str, ...] = ()
     deny_write: tuple[str, ...] = ()
     write_allow: tuple[str, ...] = ()
+    write_file_allow: tuple[str, ...] = ()
     sentinels: tuple[str, ...] = ()
     network: bool = True
     label: str = "seatbelt-worker-boundary"
@@ -153,6 +167,7 @@ class Boundary:
         return {"workspace": self.workspace, "scratch": self.scratch, "tmpdir": self.tmpdir,
                 "deny": list(self.deny), "allow": list(self.allow),
                 "deny_write": list(self.deny_write), "write_allow": list(self.write_allow),
+                "write_file_allow": list(self.write_file_allow),
                 "sentinels": list(self.sentinels),
                 "network": self.network, "label": self.label}
 
@@ -172,12 +187,12 @@ def _real(item: str) -> Path:
     return Path(os.path.realpath(str(item)))
 
 
-def _inside(child: Path, parent: Path) -> bool:
-    return child == parent or parent in child.parents
-
-
 def _quote(path: str) -> str:
     return '"' + str(path).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def refuse_overlaps(boundary: Boundary, *, scratch_root: str | None = None) -> list[str]:
+    return _refuse_overlaps(boundary, scratch_root=scratch_root)
 
 
 def build_profile(boundary: Boundary) -> str:
@@ -193,6 +208,7 @@ def build_profile(boundary: Boundary) -> str:
     allow = [str(_real(item)) for item in boundary.allow]
     deny_write = [str(_real(item)) for item in boundary.deny_write]
     write_allow = [str(_real(item)) for item in boundary.write_allow]
+    write_file_allow = [str(_real(item)) for item in boundary.write_file_allow]
     rules = [
         "(version 1)",
         "(deny default)",
@@ -231,6 +247,8 @@ def build_profile(boundary: Boundary) -> str:
         # because scratch legitimately lives inside denied controller state. refuse_overlaps
         # proves this can only ever re-open the declared per-task scratch, never a sibling.
         rules.append(f"(allow file-read* file-write* (subpath {_quote(root)}))")
+    for file in write_file_allow:
+        rules.append(f"(allow file-read* file-write* (literal {_quote(file)}))")
     rules.append(
         '(allow file-write-data (literal "/dev/null") (literal "/dev/stdout") (literal "/dev/stderr"))')
     for denied in deny_write:
@@ -295,11 +313,18 @@ def demonstrate(boundary: Boundary) -> dict:
     workspace = Path(boundary.workspace)
     scratch = Path(boundary.scratch)
     writable = [Path(item) for item in boundary.writable_roots()]
+    writable_files = [Path(item) for item in boundary.write_file_allow]
     for item in (workspace, scratch):
         item.mkdir(parents=True, exist_ok=True)
     missing_writable = [str(item) for item in writable if not item.is_dir()]
     if missing_writable:
         receipt["blocker"] = "declared writable runtime path is absent: " + ", ".join(missing_writable)
+        return receipt
+    invalid_files = [str(item) for item in writable_files
+                     if (item.exists() and (not item.is_file() or item.is_symlink()))
+                     or not item.parent.is_dir()]
+    if invalid_files:
+        receipt["blocker"] = "declared writable runtime file is invalid: " + ", ".join(invalid_files)
         return receipt
     sentinels = receipt["sentinels"]
     missing = [item for item in sentinels if not Path(item).is_file()]
@@ -309,6 +334,7 @@ def demonstrate(boundary: Boundary) -> dict:
         return receipt
     before = {item: _digest_file(item) for item in sentinels}
     payload = {"write_allowed_dirs": [str(item.resolve()) for item in writable],
+               "write_allowed_files": [str(item.resolve()) for item in writable_files],
                "sentinels": sentinels}
     command = wrapped(profile, [sys.executable, "-I", "-", json.dumps(payload)])
     receipt["probe_command_digest"] = hashlib.sha256(json.dumps(command).encode()).hexdigest()
@@ -335,6 +361,7 @@ def demonstrate(boundary: Boundary) -> dict:
     failed = sorted({check["check"] for check in checks if not check.get("passed")})
     observed = {check["check"] for check in checks}
     required = {f"write:{Path(item).resolve()}" for item in writable}
+    required |= {f"append-or-create:{Path(item).resolve()}" for item in writable_files}
     required |= {f"{kind}:{item}" for item in sentinels for kind in ("read-file", "write-file")}
     missing_checks = sorted(required - observed)
     if mutated:
@@ -355,40 +382,3 @@ def require(boundary: Boundary) -> dict:
         raise PermissionError("worker containment could not be demonstrated: "
                               + str(receipt.get("blocker") or "unknown blocker"))
     return receipt
-
-
-def refuse_overlaps(boundary: Boundary, *, scratch_root: str | None = None) -> list[str]:
-    """Reject configurations where an allow reopens a denied controller/credential subtree.
-
-    Symlinks are resolved before comparison, so an alias cannot be used to smuggle a
-    writable root inside trusted state or a grant around a denial.
-    """
-    problems: list[str] = []
-    deny = {_real(item) for item in tuple(boundary.deny) + tuple(boundary.deny_write)}
-    scratch_parent = _real(scratch_root) if scratch_root else None
-    runtime_write = {_real(item) for item in boundary.write_allow}
-    for raw in boundary.writable_roots():
-        root = _real(raw)
-        is_runtime_write = root in runtime_write
-        if str(root) in ("/", str(Path.home())):
-            problems.append(f"writable root is a whole-filesystem path: {root}")
-        if is_runtime_write and not any(_inside(root, _real(grant)) for grant in boundary.allow):
-            problems.append(f"runtime writable root lacks a declared read grant: {root}")
-        for denied in deny:
-            permitted_runtime = is_runtime_write and any(_inside(root, _real(grant)) for grant in boundary.allow)
-            if _inside(root, denied) and not (scratch_parent and _inside(root, scratch_parent)) and not permitted_runtime:
-                problems.append(f"writable root reopens a denied subtree: {root} under {denied}")
-            if _inside(denied, root):
-                problems.append(f"denied path is reachable for write from a writable root: {denied} under {root}")
-    for raw in boundary.allow:
-        granted = _real(raw)
-        matched = {denied for denied in deny if denied == granted}
-        if not matched:
-            problems.append(f"grant is not an exact denied root, so it reopens more than declared: {granted}")
-        for denied in deny:
-            if denied != granted and _inside(denied, granted):
-                problems.append(f"grant reopens a denied subtree: {granted} contains {denied}")
-        for raw_root in boundary.writable_roots():
-            if _inside(granted, _real(raw_root)):
-                problems.append(f"grant is inside a worker-writable root: {granted}")
-    return sorted(set(problems))

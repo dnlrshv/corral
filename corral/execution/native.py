@@ -18,6 +18,7 @@ from . import containment, inspection_packet, routes
 from .adapter import build_adapter_command
 
 SENTINEL_NAME = ".corral-containment-sentinel"
+_RUNTIME_WRITE_SECRET_MARKERS = ("auth", "credential", "key", "oauth", "publisher", "token")
 
 
 @dataclass
@@ -37,11 +38,16 @@ def _scratch_root(state_dir: Path) -> Path:
     return root
 
 
+def _runtime_file_is_sensitive(path: Path) -> bool:
+    return any(marker in part.lower() for part in path.parts
+               for marker in _RUNTIME_WRITE_SECRET_MARKERS)
+
+
 def build_boundary(*, workspace: str, state_dir: Path, artifacts: Path, task_dir: Path,
                    source_root: Path, verifier_roots: tuple[str, ...] = (),
                    host_protected: tuple[str, ...] = (), route_read: tuple[str, ...] = (),
-                   route_write: tuple[str, ...] = (), task_id: str,
-                   packet_only: bool = False) -> tuple[containment.Boundary, Path, list[str]]:
+                   route_write: tuple[str, ...] = (), route_write_files: tuple[str, ...] = (),
+                   task_id: str, packet_only: bool = False) -> tuple[containment.Boundary, Path, list[str]]:
     """Deny controller state, artifacts, source, verifier bundles and account stores.
 
     Disposable sentinels are created inside already-denied trusted state so the probe can
@@ -66,6 +72,16 @@ def build_boundary(*, workspace: str, state_dir: Path, artifacts: Path, task_dir
     if packet_only:
         denied.add(str(Path(workspace).resolve()))
     granted = {str(Path(item).expanduser().resolve()) for item in route_read if item}
+    writable_files = {Path(item).expanduser().resolve() for item in route_write_files if item}
+    invalid_file_grants = [str(item) for item in writable_files
+                           if (item.exists() and (not item.is_file() or item.is_symlink()))
+                           or not item.parent.is_dir()
+                           or _runtime_file_is_sensitive(item)
+                           or not any(item != Path(grant) and item.is_relative_to(Path(grant))
+                                      for grant in granted)]
+    if invalid_file_grants:
+        raise PermissionError("runtime writable files must be regular paths below a declared read root: "
+                              + ", ".join(sorted(invalid_file_grants)))
     # A grant is a narrow read-only exception that must match one denied root exactly. The
     # denial itself stays in the profile: Seatbelt applies the last matching rule, so the
     # audited text keeps "deny this store" plus "except this route's own credential home".
@@ -82,6 +98,7 @@ def build_boundary(*, workspace: str, state_dir: Path, artifacts: Path, task_dir
                                     scratch=str(scratch.resolve()), tmpdir=str(scratch.resolve()),
                                     deny=tuple(sorted(denied)), allow=tuple(sorted(granted)),
                                     write_allow=tuple(sorted({str(Path(item).expanduser().resolve()) for item in route_write if item})),
+                                    write_file_allow=tuple(sorted(str(item) for item in writable_files)),
                                     sentinels=sentinels)
     return boundary, scratch, auth_read_granted
 
@@ -103,7 +120,8 @@ def prepare(*, spec: dict, host: dict, profile, task_dir: Path, workspace: str, 
         source_root=source_root, verifier_roots=verifier_roots,
         host_protected=tuple(host.get("protected_paths") or ()),
         route_read=route.runtime_read, route_write=route.runtime_write,
-        task_id=task_id, packet_only=route.inspection_only)
+        route_write_files=route.runtime_write_files, task_id=task_id,
+        packet_only=route.inspection_only)
     overlaps = containment.refuse_overlaps(boundary, scratch_root=str(_scratch_root(Path(state_dir))))
     if overlaps:
         raise PermissionError("worker boundary configuration overlaps trusted state: " + "; ".join(overlaps))

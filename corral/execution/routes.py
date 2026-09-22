@@ -51,6 +51,7 @@ class NativeRoute:
     runtime_env: tuple[str, ...] = ()
     runtime_read: tuple[str, ...] = ()
     runtime_write: tuple[str, ...] = ()
+    runtime_write_files: tuple[str, ...] = ()
     runtime_home: str | None = None
     synthetic: bool = False
     launch_authorized: bool = False
@@ -62,7 +63,7 @@ class NativeRoute:
         value = {name: getattr(self, name) for name in self.__dataclass_fields__}
         value["argv"] = list(self.argv)
         for name in ("supported_models", "supported_efforts", "credential_env", "runtime_env",
-                 "runtime_read", "runtime_write"):
+                 "runtime_read", "runtime_write", "runtime_write_files"):
             value[name] = list(value[name])
         return value
 
@@ -98,6 +99,7 @@ def declare(route_id: str, raw: dict) -> NativeRoute:
     runtime_env = _as_tuple(raw.get("runtime_env"))
     runtime_read = _as_tuple(raw.get("runtime_read"))
     runtime_write = _as_tuple(raw.get("runtime_write"))
+    runtime_write_files = _as_tuple(raw.get("runtime_write_files"))
     runtime_home = str(raw["runtime_home"]) if raw.get("runtime_home") else None
     credential_env = _as_tuple(raw.get("credential_env"))
     if inspection_only:
@@ -111,7 +113,7 @@ def declare(route_id: str, raw: dict) -> NativeRoute:
             raise PermissionError("inspection-only route must bind packet, result, model, and effort")
         if envelope != "corral-inspection-report-v1":
             raise PermissionError("inspection-only route requires the inspection report envelope")
-        if runtime_env or runtime_read or runtime_write or runtime_home:
+        if runtime_env or runtime_read or runtime_write or runtime_write_files or runtime_home:
             raise PermissionError("inspection-only route cannot declare runtime hooks, homes, or file grants")
         if len(credential_env) != 1:
             raise PermissionError("inspection-only route requires exactly one whitelisted credential variable")
@@ -130,6 +132,7 @@ def declare(route_id: str, raw: dict) -> NativeRoute:
         runtime_env=runtime_env,
         runtime_read=runtime_read,
         runtime_write=runtime_write,
+        runtime_write_files=runtime_write_files,
         runtime_home=runtime_home,
         synthetic=bool(raw.get("synthetic", False)),
         launch_authorized=bool(raw.get("launch_authorized", False)),
@@ -239,6 +242,7 @@ def plan(route: NativeRoute, profile, *, host_routes: tuple[str, ...],
         "runtime_home": route.runtime_home,
         "runtime_read": list(route.runtime_read),
         "runtime_write": list(route.runtime_write),
+        "runtime_write_files": list(route.runtime_write_files),
         "notes": route.notes,
         "inspection_only": route.inspection_only,
     }

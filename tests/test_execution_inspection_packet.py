@@ -279,6 +279,8 @@ def test_inspection_route_rejects_broad_tools_and_runtime_hooks(tmp_path):
         routes.declare("bad", {**raw, "runtime_read": [str(tmp_path)]})
     with pytest.raises(PermissionError, match="runtime hooks"):
         routes.declare("bad", {**raw, "runtime_write": [str(tmp_path)]})
+    with pytest.raises(PermissionError, match="runtime hooks"):
+        routes.declare("bad", {**raw, "runtime_write_files": [str(tmp_path / "history.jsonl")]})
     with pytest.raises(PermissionError, match="only packet"):
         routes.declare("bad", {**raw, "argv": [*raw["argv"], "--prompt", "{prompt}"]})
     with pytest.raises(PermissionError, match="only packet"):

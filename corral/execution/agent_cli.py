@@ -38,6 +38,7 @@ def _parser() -> argparse.ArgumentParser:
     review.add_argument("--expected-head")
     review.add_argument("--expected-base")
     review.add_argument("--host")
+    review.add_argument("--replacement-of-task")
     status = sub.add_parser("status")
     status.add_argument("--event-id", required=True)
     amend = sub.add_parser("amend")
@@ -96,7 +97,7 @@ def main(argv: list[str] | None = None) -> int:
         result = client.call("submit-pr-review", repository=args.repository,
                              pr_number=args.pr, policy_id=args.policy,
                              expected_head=args.expected_head, expected_base=args.expected_base,
-                             host=args.host)
+                             host=args.host, replacement_of_task=args.replacement_of_task)
     elif args.command == "status":
         result = client.call("status", event_id=args.event_id)
     elif args.command == "amend":

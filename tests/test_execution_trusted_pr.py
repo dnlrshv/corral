@@ -68,7 +68,8 @@ def repository_config(tmp_path, remote, fake_gh):
             "remote_url": str(remote), "git_object_cache": str(tmp_path / "objects.git"),
             "development_file_remote": True, "allowed_roles": ["implementation", "review"],
             "review_policies": {"advisory": {"inputs": {
-                "required_sources": ["input.txt"], "base_ref": "main"}}}}
+                "required_sources": ["input.txt"], "base_ref": "main"},
+                "owner": "corral", "owner_epoch": 1, "profile_id": None}}}
 
 
 def service_config(tmp_path: Path, repo: dict) -> Path:
@@ -87,6 +88,15 @@ def service_config(tmp_path: Path, repo: dict) -> Path:
                                 "development_mode": True,
                                 "repositories": {"demo": repo}}))
     return path
+
+
+def stub_controller_submission(service, monkeypatch):
+    def submit(_token, request_id, spec):
+        task = digest({"request": request_id, "repo": "fixture/repo"})
+        service.store.put_once("request", task, spec)
+        service.store.replace("initial", task, {"status": "submitted"})
+        return task
+    monkeypatch.setattr(service.controller, "submit", submit)
 
 
 def test_controller_owned_pr_export_is_immutable_registered_shape(tmp_path, monkeypatch):
@@ -158,6 +168,7 @@ def test_pr_admission_rejects_wrong_head_and_fetched_source_before_task(tmp_path
     monkeypatch.setenv("CORRAL_PR_FIXTURE", str(fixture))
     path = service_config(tmp_path, repository_config(tmp_path, remote, fake_gh))
     service = Service(path)
+    service.store.acquire("pr:fixture/repo#7", "corral")
     with pytest.raises(PermissionError, match="requested head"):
         service.submit_pr_review("demo", 7, "advisory", expected_head="f" * 40)
     assert service.store.records("request") == {}
@@ -173,5 +184,51 @@ def test_pr_admission_rejects_wrong_head_and_fetched_source_before_task(tmp_path
         git_object_cache=str(tmp_path / "bad.git"))
     path.write_text(json.dumps(changed))
     with pytest.raises(PermissionError, match="differs from fetched"):
-        Service(path).submit_pr_review("demo", 7, "advisory")
+        changed_service = Service(path)
+        # The same authoritative Store retains the active cohort owner.
+        changed_service.submit_pr_review("demo", 7, "advisory")
     assert service.store.records("request") == {}
+
+
+def test_pr_admission_requires_exact_active_cohort_owner(tmp_path, monkeypatch):
+    _, remote, fixture, _, _, _, fake_gh = pr_fixture(tmp_path)
+    monkeypatch.setenv("CORRAL_PR_FIXTURE", str(fixture))
+    path = service_config(tmp_path, repository_config(tmp_path, remote, fake_gh))
+    service = Service(path)
+    with pytest.raises(PermissionError, match="ownership fence"):
+        service.submit_pr_review("demo", 7, "advisory")
+    assert service.store.records("trusted_export") == {}
+    service.store.acquire("pr:fixture/repo#7", "corral")
+    stub_controller_submission(service, monkeypatch)
+    admitted = service.submit_pr_review("demo", 7, "advisory")
+    request = service.store.get("request", admitted["event"]["task_id"])
+    assert (request["pr_owner"], request["pr_owner_epoch"]) == ("corral", 1)
+
+
+def test_linked_replacement_preserves_cancelled_task_and_exact_binding(tmp_path, monkeypatch):
+    _, remote, fixture, base, head, _, fake_gh = pr_fixture(tmp_path)
+    monkeypatch.setenv("CORRAL_PR_FIXTURE", str(fixture))
+    path = service_config(tmp_path, repository_config(tmp_path, remote, fake_gh))
+    service = Service(path)
+    service.store.acquire("pr:fixture/repo#7", "corral")
+    stub_controller_submission(service, monkeypatch)
+    old_task = "d" * 64
+    old_workspace = tmp_path / "old-workspace"
+    old_workspace.mkdir()
+    service.store.replace("request", old_task, {"workspace": str(old_workspace)})
+    service.store.replace("state", old_task, {"status": "reconciled"})
+    service.store.replace("cancel", old_task, {"requested": True})
+    service.store.replace("result", old_task, {
+        "accepted": False, "structured": {"provenance": {
+            "repo": "fixture/repo", "pr": 7, "head": head, "base": base}}})
+    old_epoch = service.store.acquire("workspace:" + str(old_workspace.resolve()), old_task)
+    service.store.transition_owner(
+        "workspace:" + str(old_workspace.resolve()), old_task, old_epoch, "released")
+
+    admitted = service.submit_pr_review(
+        "demo", 7, "advisory", replacement_of_task=old_task)
+    replacement = service.store.get("review_replacement", old_task)
+    assert replacement["new_task"] == admitted["event"]["task_id"]
+    assert replacement["candidate_binding"]["head"] == head
+    assert service.store.get("state", old_task) == {"status": "reconciled"}
+    assert service.store.get("cancel", old_task) == {"requested": True}

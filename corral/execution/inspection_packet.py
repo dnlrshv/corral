@@ -14,7 +14,7 @@ import urllib.parse
 from pathlib import Path
 from typing import Any
 
-from corral.redaction import check_outbound_safe
+from corral.redaction import check_outbound_safe, check_source_text_safe
 
 from .store import digest
 from .workspace import safe_path
@@ -139,7 +139,7 @@ def build(spec: dict, context: dict, workspace: Path | str,
             text = data.decode("utf-8")
         except UnicodeDecodeError as error:
             raise PermissionError(f"inspection input must be UTF-8 text: {name}") from error
-        if check_outbound_safe(text):
+        if check_source_text_safe(text):
             raise PermissionError(f"credential-shaped inspection input refused: {name}")
         documents.append({"path": name, "kind": "diff" if name == diff_path else "source",
                           "sha256": _sha(data), "bytes": len(data), "content": text})

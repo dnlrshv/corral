@@ -37,6 +37,10 @@ corral-magic-numbers = "corral.hooks.magic_numbers:main"
 corral-telemetry-capture = "corral.telemetry.capture:main"
 corral-execution-client = "corral.execution.client:main"
 corral-inspection-packet = "corral.execution.inspection_transport:main"
+corral-service = "corral.execution.service:main"
+corral-service-install = "corral.execution.service_install:main"
+corral-agent = "corral.execution.agent_cli:main"
+corral-usage = "corral.execution.usage_api:main"
 
 [tool.setuptools.packages.find]
 include = ["corral*"]

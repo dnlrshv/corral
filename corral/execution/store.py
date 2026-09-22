@@ -1,6 +1,7 @@
 """Single-controller transactional state, request deduplication and fencing."""
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import sqlite3
@@ -8,6 +9,23 @@ import time
 import uuid
 from contextlib import contextmanager
 
+
+
+def lease_holder_alive(pid) -> bool:
+    """Whether a lease's local holder process still exists.
+
+    PID reuse can make a dead holder look alive, which fails closed; a pid that can
+    name no process holds nothing.
+    """
+    if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+    return True
 
 
 def canonical(value):
@@ -217,11 +235,15 @@ class Store:
         if not attempt_id:
             raise ValueError("attempt_id is required for record_intent_pending")
         now = time.time()
+        payload_str = canonical(payload) if isinstance(payload, (dict, list)) else str(payload)
         with self.transaction() as db:
             existing = db.execute(
-                "SELECT status, payload FROM publication_intents WHERE intent=?", (intent,)
+                "SELECT status, payload, resource, head_sha, base_sha FROM publication_intents WHERE intent=?",
+                (intent,),
             ).fetchone()
-            if existing:
+            # Only an attempt proven absent by authenticated readback may be attempted
+            # again, and only with the identical immutable payload and candidate.
+            if existing and existing != ("absent", payload_str, resource, head_sha, base_sha):
                 raise PermissionError(
                     f"intent '{intent}' already recorded with status '{existing[0]}'; re-posting prohibited"
                 )
@@ -248,7 +270,13 @@ class Store:
             if l_attempt != attempt_id:
                 raise PermissionError(f"lease attempt_id mismatch for '{resource}': expected {attempt_id}, got {l_attempt}")
 
-            payload_str = canonical(payload) if isinstance(payload, (dict, list)) else str(payload)
+            if existing:
+                db.execute(
+                    "UPDATE publication_intents SET owner=?,epoch=?,status='pending',error=NULL,"
+                    "review_id=NULL,updated_at=?,attempt_id=? WHERE intent=? AND status='absent'",
+                    (owner, epoch, now, attempt_id, intent),
+                )
+                return
             db.execute(
                 "INSERT INTO publication_intents VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, NULL, NULL, ?, ?, ?)",
                 (intent, resource, owner, epoch, head_sha, base_sha, payload_str, now, now, attempt_id),
@@ -275,7 +303,11 @@ class Store:
             db.execute("DELETE FROM leases WHERE resource=? AND attempt_id=?", (resource, attempt_id))
 
     def recover_lease_operator(self, resource: str, authorized_by: str) -> bool:
-        """Explicit safe operator recovery ONLY if no pending or ambiguous intent exists."""
+        """Explicit operator recovery of a lease whose holder is gone.
+
+        Refused while any pending or ambiguous intent exists (authenticated
+        reconciliation settles those) and while an in-flight holder is still alive.
+        """
         if not authorized_by:
             raise PermissionError("explicit operator authorization required for lease recovery")
         with self.transaction() as db:
@@ -285,6 +317,9 @@ class Store:
             ).fetchone()
             if pending:
                 raise PermissionError(f"cannot recover lease for '{resource}': unresolved intent '{pending[0]}' exists")
+            lease = db.execute("SELECT holder_pid, status FROM leases WHERE resource=?", (resource,)).fetchone()
+            if lease and lease[1] in ("in_flight", "active") and lease_holder_alive(lease[0]):
+                raise PermissionError(f"cannot recover lease for '{resource}': holder process {lease[0]} is alive")
             db.execute("DELETE FROM leases WHERE resource=?", (resource,))
             return True
 

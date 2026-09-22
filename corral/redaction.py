@@ -11,15 +11,36 @@ _CREDENTIAL_KEY = (
     r"connection[_-]?(?:string|uri|url))[A-Za-z0-9_]*"
 )
 
-# Supported real numeric token counter keys (input, output, total, cache, thinking, reasoning, candidates, etc.)
+# Real numeric token counter keys: plural ``*_tokens`` (including ``max_tokens``) or
+# ``*_token_count/_usage/_limit/_budget``. A bare singular ``*_token`` names a credential.
 _SAFE_KEYS = re.compile(
     r"(?i)^[\"']?(?:"
-    r"(?:[a-z0-9_]*_)?(?:input|output|total|candidate|candidates|cache(?:_read|_write)?|"
-    r"cached_?content|thinking|thoughts?|reasoning|prompt|completion|estimated)[_-]?tokens?(?:[_-]?(?:count|usage))?|"
-    r"token[_-]?(?:count|usage)"
+    r"(?:[a-z0-9_]*_)?(?:input|output|total|candidate|candidates|cache(?:_read|_write)?|cached|"
+    r"cached_?content|thinking|thoughts?|reasoning|prompt|completion|estimated|max)[_-]?tokens|"
+    r"(?:[a-z0-9_]*?[_-]?)?tokens?[_-]?(?:count|usage|limit|budget)"
     r")[\"']?$"
 )
-_NUMERIC_VALUE = re.compile(r"^-?\d+(?:\.\d+)?$")
+# A counter is a bounded number (``300_000`` grouping allowed); 20 digits are opaque.
+_COUNTER_VALUE = re.compile(r"^-?\d(?:_?\d){0,11}(?:\.\d+)?$")
+
+# Python string literal prefixes (``f``, ``b``, ``r``, ``u``, ``rb``, ``br``, ``rf``, ``fr``).
+_STRING_PREFIX = r"(?:[rR][bBfF]?|[bBfF][rR]?|[uU])"
+_QUOTED_VALUE = re.compile(rf"(?P<prefix>{_STRING_PREFIX}?)(?P<q>[\"'])(?P<body>.*)(?P=q)", re.DOTALL)
+# ``key: Annotation = value`` binds ``value``; the annotation is never the value.
+_ANNOTATION = r"[\"']?[A-Za-z_][\w.\[\], |\"']*?"
+_ASSIGNMENT = (
+    rf"(?i)(?<![A-Za-z0-9_])(?P<key>[\"']?{_CREDENTIAL_KEY}[\"']?)"
+    rf"(?P<sep_space>\s*(?::[ \t]*{_ANNOTATION}[ \t]*(?==))?(?P<sep>[:=])\s*)"
+    r"(?![\"']?(?:<redacted>|\[REDACTED\])[\"']?)"
+    rf"(?P<val>{_STRING_PREFIX}?\"[^\"]*\"|{_STRING_PREFIX}?'[^']*'|[^\s\"',}}]+)"
+)
+
+
+def _literal_body(raw: str) -> str:
+    """Return a captured value without its string prefix and quotes."""
+    quoted = _QUOTED_VALUE.fullmatch(raw)
+    return quoted.group("body") if quoted else raw.strip("\"'")
+
 
 _CREDENTIAL_PATTERNS = (
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", re.DOTALL),
@@ -38,12 +59,7 @@ _CREDENTIAL_PATTERNS = (
         rf"(?im)^[ \t]*(?P<key>[\"']?{_CREDENTIAL_KEY}[\"']?)\s*:\s*"
         r"[>|][-+0-9]*[^\n]*\n(?:(?:[ \t]+[^\n]*|[ \t]*)\n|[ \t]+[^\n]*\Z)+"
     ),
-    re.compile(
-        rf"(?i)(?<![A-Za-z0-9_])(?P<key>[\"']?{_CREDENTIAL_KEY}[\"']?)"
-        r"(?P<sep_space>\s*(?P<sep>[:=])\s*)"
-        r"(?![\"']?(?:<redacted>|\[REDACTED\])[\"']?)"
-        r"(?P<val>\"[^\"]*\"|'[^']*'|[^\s\"',}]+)"
-    ),
+    re.compile(_ASSIGNMENT),
 )
 
 _OUTBOUND_CREDENTIAL_PATTERNS = (
@@ -57,12 +73,7 @@ _OUTBOUND_CREDENTIAL_PATTERNS = (
     re.compile(r"\beyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*\b"),
     re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{8,}\b"),
     re.compile(r"(?i)\b[a-z][a-z0-9+.-]*://[^/\s@]+@"),
-    re.compile(
-        rf"(?i)(?<![A-Za-z0-9_])(?P<key>[\"']?{_CREDENTIAL_KEY}[\"']?)"
-        r"(?P<sep_space>\s*(?P<sep>[:=])\s*)"
-        r"(?![\"']?(?:<redacted>|\[REDACTED\])[\"']?)"
-        r"(?P<val>\"[^\"]*\"|'[^']*'|[^\s\"',}]+)"
-    ),
+    re.compile(_ASSIGNMENT),
 )
 
 
@@ -76,12 +87,12 @@ def redact_text(text: str, *, marker: str = "[REDACTED]") -> str:
         if "key" in groupdict and groupdict["key"]:
             key_raw = groupdict["key"]
             key_str = key_raw.strip("\"'")
-            val_raw = groupdict.get("val", "")
-            val_str = val_raw.strip("\"'")
+            val_raw = groupdict.get("val") or ""
+            val_str = _literal_body(val_raw)
             sep_space = groupdict.get("sep_space") or groupdict.get("sep") or "="
 
             # Real numeric token counters are preserved
-            if _SAFE_KEYS.match(key_str) and _NUMERIC_VALUE.match(val_str):
+            if _SAFE_KEYS.match(key_str) and _COUNTER_VALUE.match(val_str):
                 return match.group(0)
 
             # Already redacted values are preserved
@@ -89,10 +100,9 @@ def redact_text(text: str, *, marker: str = "[REDACTED]") -> str:
                 return match.group(0)
 
             # Maintain valid JSON quoting and syntax
-            if val_raw.startswith('"') and val_raw.endswith('"'):
-                replacement_val = f'"{marker}"'
-            elif val_raw.startswith("'") and val_raw.endswith("'"):
-                replacement_val = f"'{marker}'"
+            quoted = _QUOTED_VALUE.fullmatch(val_raw)
+            if quoted:
+                replacement_val = f"{quoted.group('prefix')}{quoted.group('q')}{marker}{quoted.group('q')}"
             elif key_raw.startswith('"') and key_raw.endswith('"') and ":" in sep_space:
                 replacement_val = f'"{marker}"'
             else:
@@ -124,10 +134,9 @@ def check_outbound_safe(text: str) -> list[str]:
             groupdict = match.groupdict()
             if "key" in groupdict and groupdict["key"]:
                 key_str = groupdict["key"].strip("\"'")
-                val_raw = groupdict.get("val", "")
-                val_str = val_raw.strip("\"'")
+                val_str = _literal_body(groupdict.get("val") or "")
                 # Exemption for real numeric token counters
-                if _SAFE_KEYS.match(key_str) and _NUMERIC_VALUE.match(val_str):
+                if _SAFE_KEYS.match(key_str) and _COUNTER_VALUE.match(val_str):
                     continue
                 # Exemption for already-redacted values
                 if val_str in ("<redacted>", "[REDACTED]"):
@@ -150,7 +159,7 @@ def _markdown_credential_token_prose(match: re.Match[str], text: str, source_nam
     suffix = text[match.end():None if line_end < 0 else line_end]
     return (bool(re.fullmatch(r"[ \t]*[-*+]\s+credentials/", prefix, re.IGNORECASE))
             and match.group("key").strip("\"'").lower() == "tokens"
-            and match.group("val").strip("\"'").lower() == "secrets"
+            and _literal_body(match.group("val")).lower() == "secrets"
             and bool(re.match(r"\s+[A-Za-z]", suffix)))
 
 
@@ -222,8 +231,8 @@ def check_source_text_safe(text: str, *, source_name: str | None = None) -> list
     for match in assignment.finditer(text):
         key = match.group("key").strip("\"'")
         raw = match.group("val")
-        value = raw.strip("\"'")
-        if _SAFE_KEYS.match(key) and _NUMERIC_VALUE.match(value):
+        value = _literal_body(raw)
+        if _SAFE_KEYS.match(key) and _COUNTER_VALUE.match(value):
             continue
         if value in ("<redacted>", "[REDACTED]"):
             continue
@@ -239,7 +248,9 @@ def check_source_text_safe(text: str, *, source_name: str | None = None) -> list
             continue
         if _github_workflow_script_reference(line_value, source_name, match.group("sep")):
             continue
-        quoted = raw.startswith(("\"", "'")) and raw.endswith(("\"", "'"))
+        quoted = bool(_QUOTED_VALUE.fullmatch(raw))
+        if quoted and not value:
+            continue  # An empty literal carries no credential value.
         # Unquoted calls, attributes and container lookups are source expressions. A quoted
         # value is data and remains subject to the credential-assignment boundary.
         if python_source and not quoted and any(char in raw for char in ".()[]{}"):
@@ -249,11 +260,11 @@ def check_source_text_safe(text: str, *, source_name: str | None = None) -> list
         if (python_source and not quoted and match.group("sep") == "="
                 and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", raw)):
             continue
-        # Fencing tokens are integer concurrency epochs, not bearer credentials.
-        # Keep this source-only exception literal and typed: a quoted value remains
-        # a credential-shaped data assignment and is rejected below.
-        if (python_source and not quoted and key.lower() == "fencing_token"
-                and _NUMERIC_VALUE.match(raw)):
+        # Fencing epochs, counters and limits bound to *token* names are integers, not
+        # bearer credentials. Keep this source-only exception literal and typed: a
+        # quoted value remains a credential-shaped data assignment and is rejected below.
+        if (python_source and not quoted and "token" in key.lower()
+                and _COUNTER_VALUE.match(raw)):
             continue
         # In Python source, ``key: Name`` is an annotation only for a known or
         # capitalized type name, and ``"key": name`` in a mapping literal references a
@@ -334,7 +345,7 @@ def safe_config_diagnostic(data: Any) -> Any:
             if re.search(rf"(?i)^(?:{_CREDENTIAL_KEY})$", k_str):
                 if _SAFE_KEYS.match(k_str) and isinstance(v, (int, float)) and not isinstance(v, bool):
                     result[k] = v
-                elif _SAFE_KEYS.match(k_str) and isinstance(v, str) and _NUMERIC_VALUE.match(v):
+                elif _SAFE_KEYS.match(k_str) and isinstance(v, str) and _COUNTER_VALUE.match(v):
                     result[k] = v
                 else:
                     result[k] = "[REDACTED]"

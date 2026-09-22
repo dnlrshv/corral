@@ -130,6 +130,9 @@ def test_triple_quoted_and_multiline_values_are_redacted_in_place():
 
 
 def test_python_block_colon_before_a_docstring_is_not_an_assignment():
-    source = 'def load() -> AuthToken:\n    """Load the snapshot."""\n    return AuthToken()\n'
+    source = ('def load() -> AuthToken:\n    """Load the snapshot."""\n    return AuthToken()\n'
+              'def read(\n    path,\n) -> Token:\n    """Read one token."""\n'
+              'if not token:\n    raise ValueError("token required")\n')
     assert check_file_text_safe(source, source_name="loader.py") == []
-    assert check_file_text_safe(f'CONFIG = {{"password":\n    "{FAKE}"}}\n', source_name="loader.py")
+    for mapping in (f'CONFIG = {{"password":\n    "{FAKE}"}}\n', f'CONFIG = {{password:\n    "{FAKE}"}}\n'):
+        assert check_file_text_safe(mapping, source_name="loader.py")

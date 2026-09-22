@@ -89,6 +89,9 @@ class CorralAgent:
         result_file: str = "result.json",
         usage_file: str = "usage.json",
         tools: list[str] | None = None,
+        inspection_paths: list[str] | None = None,
+        inspection_diff_path: str | None = None,
+        inspection_provenance: dict[str, Any] | None = None,
     ) -> str:
         """Submit a task without manually authoring JSON files."""
         repo_path = str(Path(repo).resolve())
@@ -136,10 +139,25 @@ class CorralAgent:
             spec["model"] = model
         if effort:
             spec["effort"] = effort
+        if inspection_paths is not None:
+            spec["inspection_paths"] = inspection_paths
+        if inspection_diff_path is not None:
+            spec["inspection_diff_path"] = inspection_diff_path
+        if inspection_provenance is not None:
+            spec["inspection_provenance"] = inspection_provenance
         if tools is not None:
             spec["tools"] = tools
+        elif inspection_paths is not None:
+            spec["tools"] = ["inspect-packet", "report"]
         elif profile_id or model:
             spec["tools"] = ["read", "search", "edit", "shell", "test"]
+
+        if inspection_paths is not None:
+            inspection_candidates = [*inspection_paths]
+            if inspection_diff_path:
+                inspection_candidates.append(inspection_diff_path)
+            spec["candidate_paths"] = list(dict.fromkeys(
+                [*spec["candidate_paths"], *inspection_candidates]))
 
         response = self.client.call("submit", request_id=req_id, spec=spec)
         return str(response["task"])
@@ -262,6 +280,14 @@ def main() -> int:
     run_parser.add_argument("--effort", default=None)
     run_parser.add_argument("--candidates", nargs="*", default=[])
     run_parser.add_argument("--profile", default=None)
+    run_parser.add_argument("--role", default="implementation")
+    run_parser.add_argument("--inspection-paths", nargs="*")
+    run_parser.add_argument("--inspection-diff")
+    run_parser.add_argument("--inspection-kind", choices=("git-checkout", "immutable-snapshot"))
+    run_parser.add_argument("--inspection-repo")
+    run_parser.add_argument("--head")
+    run_parser.add_argument("--base")
+    run_parser.add_argument("--pr", type=int)
 
     # status
     status_parser = subparsers.add_parser("status", help="Query task status")
@@ -300,8 +326,23 @@ def main() -> int:
     agent = CorralAgent(args.config)
 
     if args.command == "run":
+        provenance_values = (args.inspection_kind, args.inspection_repo, args.head, args.base)
+        if any(provenance_values) and not all(provenance_values):
+            parser.error("inspection provenance requires --inspection-kind, --inspection-repo, --head, and --base")
+        inspection_provenance = None
+        if all(provenance_values):
+            inspection_provenance = {
+                "kind": args.inspection_kind, "repo": args.inspection_repo,
+                "head": args.head, "base": args.base,
+            }
+            if args.pr is not None:
+                inspection_provenance["pr"] = args.pr
         result = agent.run(args.repo, args.objective, host=args.host, model=args.model,
-                           effort=args.effort, candidate_paths=args.candidates, profile_id=args.profile)
+                           effort=args.effort, candidate_paths=args.candidates,
+                           profile_id=args.profile, role=args.role,
+                           inspection_paths=args.inspection_paths,
+                           inspection_diff_path=args.inspection_diff,
+                           inspection_provenance=inspection_provenance)
         print(json.dumps(result, indent=2))
     elif args.command == "status":
         print(json.dumps(agent.status(args.task_id), indent=2))

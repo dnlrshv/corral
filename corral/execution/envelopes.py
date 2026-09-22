@@ -36,6 +36,13 @@ CODEX_TOTAL_COUNTERS = {
     "total_tokens": "total_tokens",
 }
 SYNTHETIC_COUNTERS = dict(AGY_COUNTERS)
+INSPECTION_COUNTERS = {
+    "input_tokens": "input_tokens",
+    "output_tokens": "output_tokens",
+    "thinking_tokens": "thinking_tokens",
+    "cache_read_tokens": "cache_read_tokens",
+    "total_tokens": "total_tokens",
+}
 
 # Text a harness writes into a nominally successful payload when the turn actually failed.
 ERROR_IN_SUCCESS_MARKERS = (
@@ -135,6 +142,10 @@ def parse(schema: str, *, stdout_text: str, stderr_text: str, exit_code: int,
     if schema == "agy-json-v1":
         return _parse_agy(stdout_text=stdout_text, stderr_text=stderr_text, exit_code=exit_code,
                           invocation=invocation, log_text=log_text)
+    if schema == "corral-inspection-report-v1":
+        return _parse_inspection(stdout_text=stdout_text, stderr_text=stderr_text,
+                                 exit_code=exit_code, invocation=invocation,
+                                 synthetic_expected=synthetic_expected)
     if schema in ("codex-jsonl-v1", "qwen-code-stream-v1"):
         # Imported here to keep the stream parsers in their own module without an import cycle.
         from . import envelope_streams
@@ -146,6 +157,56 @@ def parse(schema: str, *, stdout_text: str, stderr_text: str, exit_code: int,
         return envelope_streams.parse_qwen_stream(stdout_text=stdout_text, stderr_text=stderr_text,
                                                  exit_code=exit_code, invocation=invocation)
     raise ValueError(f"unsupported envelope schema: {schema}")
+
+
+def _parse_inspection(*, stdout_text: str, stderr_text: str, exit_code: int,
+                      invocation: str, synthetic_expected: bool) -> Envelope:
+    """Parse the one-response, no-tool inspection transport envelope."""
+    envelope = Envelope(schema="corral-inspection-report-v1", status="unknown")
+    payload = _load_json_text(stdout_text)
+    if not isinstance(payload, dict):
+        envelope.status = "failed"
+        envelope.errors.append("inspection transport produced no parsable envelope")
+        envelope.detail = {"exit_code": exit_code, "stderr_tail": (stderr_text or "")[-500:]}
+        return envelope
+    if payload.get("schema") != envelope.schema:
+        envelope.errors.append("inspection envelope schema mismatch")
+    if bool(payload.get("synthetic")) != bool(synthetic_expected):
+        envelope.errors.append("inspection envelope synthetic identity mismatch")
+    envelope.status = str(payload.get("status") or "unknown")
+    if envelope.status != "completed":
+        envelope.errors.append("inspection transport did not report completion")
+    envelope.narrative = str(payload.get("narrative") or "")
+    if not envelope.narrative.strip():
+        envelope.errors.append("inspection report is empty")
+    envelope.structured = payload.get("result")
+    _reject_empty(envelope, envelope.structured)
+    identity = payload.get("identity")
+    if isinstance(identity, dict):
+        envelope.identity = {key: value for key, value in identity.items()
+                             if key in ("model", "provider", "account_ref", "route",
+                                        "harness", "version")}
+    else:
+        envelope.errors.append("inspection response identity is missing")
+    counters = counters_from(payload.get("usage"), INSPECTION_COUNTERS)
+    if counters:
+        envelope.usage_events.append(usage_event(
+            event_id=f"{invocation}-inspection", scope="turn", mode="delta", sequence=1,
+            counters=counters, invocation=invocation, schema=envelope.schema,
+            origin="native-measured"))
+    else:
+        envelope.warnings.append("inspection response reported no usable usage counters")
+    observed = payload.get("observed") if isinstance(payload.get("observed"), dict) else {}
+    envelope.detail = {"exit_code": exit_code, "stderr_tail": (stderr_text or "")[-500:],
+                       "requested": payload.get("requested"), "observed": observed,
+                       "session_mode": observed.get("session_mode"),
+                       "effort_attested": observed.get("effort_attested")}
+    if observed.get("session_mode") != "stateless":
+        envelope.errors.append("inspection transport did not attest stateless invocation")
+    if exit_code != 0:
+        envelope.errors.append(f"inspection transport exited {exit_code}")
+    apply_error_in_success(envelope, envelope.narrative, counters)
+    return envelope
 
 
 def _reject_empty(envelope: Envelope, structured: Any) -> None:

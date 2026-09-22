@@ -20,6 +20,8 @@ from pathlib import Path
 from typing import Any
 
 from . import containment, envelopes
+from .inspection_packet import PACKET_FILE
+from .store import digest
 from .workspace import safe_path
 
 ADAPTER_RESULT = "adapter-result.json"
@@ -174,7 +176,10 @@ def run_adapter(task_dir: Path, workspace: Path) -> int:
     usage_path = Path(os.environ.get("CORRAL_USAGE_PATH") or (task_dir / "native-usage.json"))
     if not safe_path(str(workspace), str(Path(context.get("result_file") or "result.json"))).parent:
         raise PermissionError("unsafe result path")
-    if str(workspace) != str(Path(boundary.workspace).resolve()):
+    route = plan.get("route") or {}
+    inspection_only = route.get("inspection_only") is True
+    expected_worker_workspace = Path(boundary.scratch).resolve() if inspection_only else workspace
+    if str(expected_worker_workspace) != str(Path(boundary.workspace).resolve()):
         raise PermissionError("adapter workspace does not match the declared worker boundary")
 
     result: dict[str, Any] = {
@@ -204,17 +209,25 @@ def run_adapter(task_dir: Path, workspace: Path) -> int:
 
     scratch = Path(boundary.scratch)
     scratch.mkdir(parents=True, exist_ok=True)
-    route = plan.get("route") or {}
     schema = str(route.get("envelope") or "")
     try:
         prompt_path = _write_prompt(scratch, context)
+        packet_path = scratch / PACKET_FILE
+        if inspection_only:
+            packet = _load_json(packet_path, "inspection packet")
+            declared_packet = plan.get("inspection_packet") or {}
+            if packet.get("digest") != declared_packet.get("digest"):
+                raise PermissionError("inspection packet changed after controller preparation")
+            if digest({key: value for key, value in packet.items() if key != "digest"}) != packet.get("digest"):
+                raise PermissionError("inspection packet digest is invalid")
         structured_path = scratch / "structured-result.json"
         schema_path = scratch / RESULT_SCHEMA_FILE
         schema_path.write_text(json.dumps(context.get("result_schema") or DEFAULT_RESULT_SCHEMA, indent=2))
         values = {"workspace": str(workspace), "scratch": str(scratch),
                   "prompt_file": str(prompt_path), "model": str(plan.get("model") or ""),
                   "effort": str(plan.get("effort") or ""), "result_file": str(structured_path),
-                  "schema_file": str(schema_path), "log_file": str(task_dir / HARNESS_LOG)}
+                  "schema_file": str(schema_path), "log_file": str(task_dir / HARNESS_LOG),
+                  "packet_file": str(packet_path)}
         argv = _substitute([str(plan.get("binary") or "")] + list(plan.get("argv") or ()), values)
     except PermissionError as error:
         result["errors"].append(str(error))
@@ -242,7 +255,8 @@ def run_adapter(task_dir: Path, workspace: Path) -> int:
     exit_code = None
     try:
         with (task_dir / "harness.stdout").open("wb") as out, (task_dir / "harness.stderr").open("wb") as err:
-            child = subprocess.Popen(command, cwd=str(workspace), stdout=out, stderr=err,
+            child = subprocess.Popen(command, cwd=str(scratch if inspection_only else workspace),
+                                     stdout=out, stderr=err,
                                      env=env, start_new_session=False)
             try:
                 exit_code = child.wait(timeout=float(wait_seconds) if wait_seconds else None)

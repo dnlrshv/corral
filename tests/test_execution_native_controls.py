@@ -74,7 +74,8 @@ def test_route_contract_configures_waits_without_artificial_spend_or_turn_caps()
                 or "spend" in item or "budget" in item}
     # The wait is an explicit task-level knob that reaches the harness contract untouched.
     assert routes.PLACEHOLDERS == ("{workspace}", "{scratch}", "{prompt_file}", "{model}",
-                                   "{effort}", "{result_file}", "{schema_file}", "{log_file}")
+                                   "{effort}", "{result_file}", "{schema_file}", "{log_file}",
+                                   "{packet_file}")
 
 
 # --------------------------------------------------------------------------- submit refusals

@@ -8,6 +8,7 @@ profile id, and the profile's route must be declared and authorized by the host.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -21,6 +22,7 @@ PLACEHOLDERS: tuple[str, ...] = (
     "{result_file}",
     "{schema_file}",
     "{log_file}",
+    "{packet_file}",
 )
 
 ENVELOPE_SCHEMAS: tuple[str, ...] = (
@@ -28,6 +30,7 @@ ENVELOPE_SCHEMAS: tuple[str, ...] = (
     "agy-json-v1",
     "codex-jsonl-v1",
     "qwen-code-stream-v1",
+    "corral-inspection-report-v1",
 )
 
 
@@ -51,6 +54,7 @@ class NativeRoute:
     launch_authorized: bool = False
     version: str | None = None
     notes: str = ""
+    inspection_only: bool = False
 
     def as_dict(self) -> dict:
         value = {name: getattr(self, name) for name in self.__dataclass_fields__}
@@ -88,6 +92,25 @@ def declare(route_id: str, raw: dict) -> NativeRoute:
     models = _as_tuple(raw.get("supported_models"))
     if not models:
         raise PermissionError(f"native route {route_id} must pin the models it actually serves")
+    inspection_only = bool(raw.get("inspection_only", False))
+    runtime_env = _as_tuple(raw.get("runtime_env"))
+    runtime_read = _as_tuple(raw.get("runtime_read"))
+    runtime_home = str(raw["runtime_home"]) if raw.get("runtime_home") else None
+    credential_env = _as_tuple(raw.get("credential_env"))
+    if inspection_only:
+        forbidden = {"{workspace}", "{scratch}", "{prompt_file}", "{schema_file}", "{log_file}"}
+        used = {token for item in argv for token in _placeholders(item)}
+        if used & forbidden:
+            raise PermissionError("inspection-only route may receive only packet/model/effort/result placeholders")
+        required = {"{packet_file}", "{result_file}", "{model}", "{effort}"}
+        if not required.issubset(used):
+            raise PermissionError("inspection-only route must bind packet, result, model, and effort")
+        if envelope != "corral-inspection-report-v1":
+            raise PermissionError("inspection-only route requires the inspection report envelope")
+        if runtime_env or runtime_read or runtime_home:
+            raise PermissionError("inspection-only route cannot declare runtime hooks, homes, or read grants")
+        if len(credential_env) != 1:
+            raise PermissionError("inspection-only route requires exactly one whitelisted credential variable")
     return NativeRoute(
         id=route_id,
         harness=str(raw.get("harness") or route_id),
@@ -99,20 +122,20 @@ def declare(route_id: str, raw: dict) -> NativeRoute:
         endpoint=str(raw.get("endpoint") or "unknown"),
         supported_models=models,
         supported_efforts=_as_tuple(raw.get("supported_efforts")),
-        credential_env=_as_tuple(raw.get("credential_env")),
-        runtime_env=_as_tuple(raw.get("runtime_env")),
-        runtime_read=_as_tuple(raw.get("runtime_read")),
-        runtime_home=(str(raw["runtime_home"]) if raw.get("runtime_home") else None),
+        credential_env=credential_env,
+        runtime_env=runtime_env,
+        runtime_read=runtime_read,
+        runtime_home=runtime_home,
         synthetic=bool(raw.get("synthetic", False)),
         launch_authorized=bool(raw.get("launch_authorized", False)),
         version=raw.get("version"),
         notes=str(raw.get("notes") or ""),
+        inspection_only=inspection_only,
     )
 
 
 def _placeholders(item: str) -> list[str]:
-    return [token for token in str(item).split() if token.startswith("{") and token.endswith("}")] \
-        if "{" in str(item) else []
+    return re.findall(r"\{[^{}]+\}", str(item))
 
 
 def declared_routes(host: dict) -> dict[str, NativeRoute]:
@@ -158,6 +181,9 @@ def authorize(route: NativeRoute, profile, *, host_routes: tuple[str, ...]) -> N
     if profile.effort not in route.supported_efforts:
         raise PermissionError(
             f"native route {route.id} does not serve effort {profile.effort!r} for model {profile.model!r}")
+    if route.inspection_only and (set(profile.roles) != {"review"}
+                                  or set(profile.tools) != {"inspect-packet", "report"}):
+        raise PermissionError("inspection-only route requires a review-only, packet/report profile")
     if not route.synthetic and not route.launch_authorized:
         raise PermissionError(
             f"native route {route.id} is declared but live launch is not authorized on this host")
@@ -204,6 +230,7 @@ def plan(route: NativeRoute, profile, *, host_routes: tuple[str, ...],
         "runtime_home": route.runtime_home,
         "runtime_read": list(route.runtime_read),
         "notes": route.notes,
+        "inspection_only": route.inspection_only,
     }
     return LaunchPlan(route=route, binary=binary, argv=route.argv, model=profile.model,
                       effort=profile.effort, credential_env=route.credential_env,

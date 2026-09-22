@@ -389,6 +389,11 @@ class Controller:
                 profile = next((item for item in self.profiles if item.id == declared_profile.get("id")), None)
                 if profile is None:
                     raise PermissionError("native selection is not a controller-registered profile")
+                # Inspection-only preparation copies the controller-bound objective and
+                # invocation identity into an immutable packet.  Persist that trusted
+                # context before the route is prepared; the worker still cannot access
+                # the controller artifact directory.
+                update_context_and_usage()
                 prepared = native.prepare(spec=spec, host=host, profile=profile, task_dir=output,
                                           workspace=workspace, state_dir=self.store.path.parent,
                                           artifacts=self.artifacts, source_root=source_root(),

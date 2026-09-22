@@ -14,7 +14,7 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import containment, routes
+from . import containment, inspection_packet, routes
 from .adapter import build_adapter_command
 
 SENTINEL_NAME = ".corral-containment-sentinel"
@@ -40,7 +40,7 @@ def _scratch_root(state_dir: Path) -> Path:
 def build_boundary(*, workspace: str, state_dir: Path, artifacts: Path, task_dir: Path,
                    source_root: Path, verifier_roots: tuple[str, ...] = (),
                    host_protected: tuple[str, ...] = (), route_read: tuple[str, ...] = (),
-                   task_id: str) -> tuple[containment.Boundary, Path, list[str]]:
+                   task_id: str, packet_only: bool = False) -> tuple[containment.Boundary, Path, list[str]]:
     """Deny controller state, artifacts, source, verifier bundles and account stores.
 
     Disposable sentinels are created inside already-denied trusted state so the probe can
@@ -62,6 +62,8 @@ def build_boundary(*, workspace: str, state_dir: Path, artifacts: Path, task_dir
         *{str(Path(item).expanduser().resolve()) for item in host_protected},
         *containment.sensitive_account_stores(),
     }
+    if packet_only:
+        denied.add(str(Path(workspace).resolve()))
     granted = {str(Path(item).expanduser().resolve()) for item in route_read if item}
     # A grant is a narrow read-only exception that must match one denied root exactly. The
     # denial itself stays in the profile: Seatbelt applies the last matching rule, so the
@@ -74,7 +76,8 @@ def build_boundary(*, workspace: str, state_dir: Path, artifacts: Path, task_dir
         containment.write_sentinel(scratch_root / f"{task_id}-sibling{SENTINEL_NAME}",
                                    "sibling task scratch"),
     )
-    boundary = containment.Boundary(workspace=str(Path(workspace).resolve()),
+    worker_workspace = scratch if packet_only else Path(workspace).resolve()
+    boundary = containment.Boundary(workspace=str(worker_workspace),
                                     scratch=str(scratch.resolve()), tmpdir=str(scratch.resolve()),
                                     deny=tuple(sorted(denied)), allow=tuple(sorted(granted)),
                                     sentinels=sentinels)
@@ -97,20 +100,35 @@ def prepare(*, spec: dict, host: dict, profile, task_dir: Path, workspace: str, 
         workspace=workspace, state_dir=Path(state_dir), artifacts=artifacts, task_dir=task_dir,
         source_root=source_root, verifier_roots=verifier_roots,
         host_protected=tuple(host.get("protected_paths") or ()),
-        route_read=route.runtime_read, task_id=task_id)
+        route_read=route.runtime_read, task_id=task_id, packet_only=route.inspection_only)
     overlaps = containment.refuse_overlaps(boundary, scratch_root=str(_scratch_root(Path(state_dir))))
     if overlaps:
         raise PermissionError("worker boundary configuration overlaps trusted state: " + "; ".join(overlaps))
     demonstration = containment.require(boundary)
+    packet_record = None
+    if route.inspection_only:
+        context = json.loads(Path(context_path).read_text())
+        packet = inspection_packet.build(spec, context, workspace)
+        packet_path = inspection_packet.persist(packet, scratch)
+        packet_record = {"path": str(packet_path), "digest": packet["digest"],
+                         "documents": [{"path": item["path"], "kind": item["kind"],
+                                        "sha256": item["sha256"], "bytes": item["bytes"]}
+                                       for item in packet["documents"]],
+                         "capability": packet["capability"], "provenance": packet["provenance"]}
     (task_dir / "boundary.json").write_text(json.dumps(
         {"boundary": boundary.as_dict(), "profile_digest": demonstration.get("profile_digest"),
          "auth_read_granted": auth_read_granted,
          "containment_scope": {"contained": demonstration.get("contained_operations"),
                                "not_contained": demonstration.get("not_contained"),
                                "isolation_claim": demonstration.get("isolation_claim")},
-         "note": "read is default-allow with curated credential/controller denials; write is default-deny"},
+         "note": ("inspection route receives only a copied packet and cannot read the candidate workspace"
+                  if route.inspection_only else
+                  "read is default-allow with curated credential/controller denials; write is default-deny")},
         indent=2, sort_keys=True))
-    (task_dir / "launch-plan.json").write_text(json.dumps(plan.as_dict(), indent=2, sort_keys=True))
+    plan_dict = plan.as_dict()
+    if packet_record:
+        plan_dict["inspection_packet"] = packet_record
+    (task_dir / "launch-plan.json").write_text(json.dumps(plan_dict, indent=2, sort_keys=True))
     command = build_adapter_command(task_dir=task_dir, workspace=workspace, source=source_root)
     env = {"CORRAL_CONTEXT_PATH": str(context_path), "CORRAL_USAGE_PATH": str(usage_path)}
     for name in plan.credential_env:
@@ -128,7 +146,8 @@ def prepare(*, spec: dict, host: dict, profile, task_dir: Path, workspace: str, 
                                 "isolation_claim": demonstration.get("isolation_claim"),
                                 "blocker": demonstration.get("blocker")},
                 "auth_read_granted": auth_read_granted, "scratch": str(scratch),
+                "inspection_packet": packet_record,
                 "credential_env_present": sorted(name for name in plan.credential_env if env.get(name)),
                 "credential_env_missing": sorted(name for name in plan.credential_env if not env.get(name))}
     return Prepared(command=command, run_cwd=str(task_dir), env=env, boundary=boundary,
-                    demonstration=demonstration, plan=plan.as_dict(), evidence=evidence)
+                    demonstration=demonstration, plan=plan_dict, evidence=evidence)

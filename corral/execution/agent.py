@@ -253,11 +253,19 @@ class CorralAgent:
             st = self.status(task_id)
             state = st.get("state") or {}
             status_val = state.get("status")
-            if status_val in ("completed", "uncertain", "failed", "refused-before-launch"):
-                pending = st.get("lineage", {}).get("pending_generation")
+            if status_val in ("completed", "reconciled", "cancelled", "uncertain", "failed",
+                              "refused-before-launch"):
+                lineage = st.get("lineage") or {}
+                pending = lineage.get("pending_generation")
                 if pending:
                     self.dispatch(task_id)
-                elif not state.get("amended_objective_pending"):
+                elif (not state.get("amended_objective_pending")
+                      and state.get("generation", 1) == lineage.get("current_generation", 1)
+                      and (status_val not in ("completed", "reconciled")
+                           or (st.get("result") or {}).get("generation", 1)
+                           == lineage.get("current_generation", 1))):
+                    # A continuation claim precedes its new state record. A status
+                    # read in that window must not return the prior accepted result.
                     return st
             if deadline and time.time() >= deadline:
                 return st

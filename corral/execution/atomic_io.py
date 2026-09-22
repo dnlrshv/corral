@@ -1,4 +1,4 @@
-"""Atomic controller-to-worker JSON updates on the destination filesystem."""
+"""Atomic JSON updates on the destination filesystem."""
 from __future__ import annotations
 
 import json
@@ -7,8 +7,8 @@ import tempfile
 from pathlib import Path
 
 
-def write_json(path: Path, payload: dict) -> None:
-    """Readers see the previous complete context or the new complete context."""
+def write_json(path: Path, payload: dict | list) -> None:
+    """Readers see either complete version of a controller/worker JSON message."""
     encoded = json.dumps(payload).encode("utf-8")
     fd, name = tempfile.mkstemp(prefix="." + path.name + ".", dir=path.parent)
     temporary = Path(name)

@@ -271,11 +271,16 @@ def test_inspection_route_rejects_broad_tools_and_runtime_hooks(tmp_path):
            "credential_env": ["FIXTURE_KEY"], "inspection_only": True, "synthetic": True}
     route = routes.declare("packet-route", raw)
     broad = Profile(id="broad", model="m", effort="medium", harness="packet", version="1",
-                    route="packet-route", roles=("review",), tools=("shell", "test"), context=10)
+                    route="packet-route", roles=("review",), tools=("shell", "test"), context=10,
+                    provider="fixture", account_ref="fixture")
     with pytest.raises(PermissionError, match="packet/report profile"):
         routes.authorize(route, broad, host_routes=("packet-route",))
     with pytest.raises(PermissionError, match="runtime hooks"):
         routes.declare("bad", {**raw, "runtime_read": [str(tmp_path)]})
+    with pytest.raises(PermissionError, match="runtime hooks"):
+        routes.declare("bad", {**raw, "runtime_write": [str(tmp_path)]})
+    with pytest.raises(PermissionError, match="only packet"):
+        routes.declare("bad", {**raw, "argv": [*raw["argv"], "--prompt", "{prompt}"]})
     with pytest.raises(PermissionError, match="only packet"):
         routes.declare("bad", {**raw, "argv": ["--workspace", "{workspace}"]})
     with pytest.raises(PermissionError, match="only packet"):

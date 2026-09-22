@@ -6,6 +6,7 @@ import threading
 import pytest
 
 from corral.execution.atomic_io import write_json
+from corral.execution.adapter import write_native_usage
 
 
 def test_failed_replace_preserves_previous_context(tmp_path, monkeypatch):
@@ -51,3 +52,22 @@ def test_amendments_are_complete_for_concurrent_worker(tmp_path):
         reader.join()
     assert observed and not failures
     assert json.loads(path.read_text())["sequence"] == 49
+
+
+def test_usage_append_is_atomic_for_controller_reader(tmp_path, monkeypatch):
+    path = tmp_path / "native-usage.json"
+    original = {"id": "first", "counters": {"input_tokens": 10}}
+    added = {"id": "second", "counters": {"input_tokens": 20}}
+    write_native_usage(path, [original])
+    replace = os.replace
+    observed = []
+
+    def observe_before_replace(source, destination):
+        observed.append(json.loads(path.read_text()))
+        assert json.loads(source.read_text()) == [original, added]
+        replace(source, destination)
+
+    monkeypatch.setattr(os, "replace", observe_before_replace)
+    write_native_usage(path, [added])
+    assert observed == [[original]]
+    assert json.loads(path.read_text()) == [original, added]

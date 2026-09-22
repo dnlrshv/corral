@@ -334,7 +334,8 @@ def _finish(task_dir: Path, result: dict, usage_path: Path, started: float, atte
         write_native_usage(usage_path, events)
     elif usage_path.exists() is False:
         # Telemetry absence is preserved as an explicit empty record, never as zeros.
-        usage_path.write_text("[]")
+        from .atomic_io import write_json
+        write_json(usage_path, [])
 
 
 def write_native_usage(usage_file: Path, events: list[dict]) -> None:
@@ -347,7 +348,8 @@ def write_native_usage(usage_file: Path, events: list[dict]) -> None:
         except (ValueError, OSError):
             existing = []
     existing.extend(events)
-    usage_file.write_text(json.dumps(existing, indent=2))
+    from .atomic_io import write_json
+    write_json(usage_file, existing)
 
 
 def main() -> int:

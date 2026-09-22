@@ -97,10 +97,12 @@ def declare(route_id: str, raw: dict) -> NativeRoute:
     inspection_only = bool(raw.get("inspection_only", False))
     runtime_env = _as_tuple(raw.get("runtime_env"))
     runtime_read = _as_tuple(raw.get("runtime_read"))
+    runtime_write = _as_tuple(raw.get("runtime_write"))
     runtime_home = str(raw["runtime_home"]) if raw.get("runtime_home") else None
     credential_env = _as_tuple(raw.get("credential_env"))
     if inspection_only:
-        forbidden = {"{workspace}", "{scratch}", "{prompt_file}", "{schema_file}", "{log_file}"}
+        forbidden = {"{workspace}", "{scratch}", "{prompt_file}", "{prompt}",
+                     "{schema_file}", "{log_file}"}
         used = {token for item in argv for token in _placeholders(item)}
         if used & forbidden:
             raise PermissionError("inspection-only route may receive only packet/model/effort/result placeholders")
@@ -109,8 +111,8 @@ def declare(route_id: str, raw: dict) -> NativeRoute:
             raise PermissionError("inspection-only route must bind packet, result, model, and effort")
         if envelope != "corral-inspection-report-v1":
             raise PermissionError("inspection-only route requires the inspection report envelope")
-        if runtime_env or runtime_read or runtime_home:
-            raise PermissionError("inspection-only route cannot declare runtime hooks, homes, or read grants")
+        if runtime_env or runtime_read or runtime_write or runtime_home:
+            raise PermissionError("inspection-only route cannot declare runtime hooks, homes, or file grants")
         if len(credential_env) != 1:
             raise PermissionError("inspection-only route requires exactly one whitelisted credential variable")
     return NativeRoute(
@@ -127,7 +129,7 @@ def declare(route_id: str, raw: dict) -> NativeRoute:
         credential_env=credential_env,
         runtime_env=runtime_env,
         runtime_read=runtime_read,
-        runtime_write=_as_tuple(raw.get("runtime_write")),
+        runtime_write=runtime_write,
         runtime_home=runtime_home,
         synthetic=bool(raw.get("synthetic", False)),
         launch_authorized=bool(raw.get("launch_authorized", False)),

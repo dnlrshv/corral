@@ -75,17 +75,45 @@ def _post(url: str, token: str, body: dict[str, Any], opener=None) -> dict[str, 
 def _usage(raw: Any) -> dict[str, int]:
     if not isinstance(raw, dict):
         return {}
+    def valid(value: Any) -> bool:
+        return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
     mapping = {"prompt_tokens": "input_tokens", "completion_tokens": "output_tokens",
                "total_tokens": "total_tokens"}
     counters = {target: raw[source] for source, target in mapping.items()
-                if isinstance(raw.get(source), int) and not isinstance(raw[source], bool) and raw[source] >= 0}
+                if valid(raw.get(source))}
     prompt_details = raw.get("prompt_tokens_details")
-    if isinstance(prompt_details, dict) and isinstance(prompt_details.get("cached_tokens"), int):
+    if isinstance(prompt_details, dict) and valid(prompt_details.get("cached_tokens")):
         counters["cache_read_tokens"] = prompt_details["cached_tokens"]
     completion_details = raw.get("completion_tokens_details")
-    if isinstance(completion_details, dict) and isinstance(completion_details.get("reasoning_tokens"), int):
+    if isinstance(completion_details, dict) and valid(completion_details.get("reasoning_tokens")):
         counters["thinking_tokens"] = completion_details["reasoning_tokens"]
     return counters
+
+
+def _response_record(response: dict[str, Any], *, requested_model: str, effort: str | None,
+                     provider: str, account_ref: str, route: str, synthetic: bool) -> dict[str, Any]:
+    choices = response.get("choices")
+    first = choices[0] if isinstance(choices, list) and choices and isinstance(choices[0], dict) else {}
+    observed_model = response.get("model") if isinstance(response.get("model"), str) else None
+    response_id = response.get("id") if isinstance(response.get("id"), str) else None
+    usage = _usage(response.get("usage"))
+    identity = {"provider": provider, "account_ref": account_ref, "route": route,
+                "harness": "inspection-packet-http", "version": "1"}
+    if observed_model:
+        identity["model"] = observed_model
+    return {
+        "schema": ENVELOPE_SCHEMA, "status": "failed", "synthetic": synthetic,
+        "narrative": "", "result": None, "identity": identity,
+        "requested": {"model": requested_model, "effort": effort},
+        "observed": {"response_model": observed_model, "response_id": response_id,
+                     "effort_attested": False, "session_mode": "stateless"},
+        "provider_receipt": {"response_id": response_id, "response_model": observed_model,
+                             "finish_reason": first.get("finish_reason"),
+                             "choice_count": len(choices) if isinstance(choices, list) else None,
+                             "usage": usage},
+        "usage": usage,
+    }
 
 
 def invoke(*, packet_path: Path, result_path: Path, endpoint: str, credential: str,
@@ -112,37 +140,29 @@ def invoke(*, packet_path: Path, result_path: Path, endpoint: str, credential: s
         request_body["reasoning_effort"] = effort
     # There is deliberately no `tools`, `tool_choice`, previous-response or session field.
     response = _post(_endpoint(endpoint), credential, request_body, opener=opener)
-    response_model = response.get("model")
+    result = _response_record(response, requested_model=model, effort=effort, provider=provider,
+                              account_ref=account_ref, route=route, synthetic=synthetic)
+    response_model = result["observed"]["response_model"]
     if response_model != model:
-        raise PermissionError("inspection response model does not match the requested model")
+        return {**result, "error": "inspection response model does not match the requested model"}
     choices = response.get("choices")
     if not isinstance(choices, list) or len(choices) != 1 or not isinstance(choices[0], dict):
-        raise PermissionError("inspection response must contain exactly one choice")
+        return {**result, "error": "inspection response must contain exactly one choice"}
     choice = choices[0]
     message = choice.get("message")
     if not isinstance(message, dict):
-        raise PermissionError("inspection response message is missing")
+        return {**result, "error": "inspection response message is missing"}
     # This rejection happens before content extraction and before any report is persisted.
     if message.get("tool_calls") or message.get("function_call") or choice.get("finish_reason") == "tool_calls":
-        raise PermissionError("inspection response attempted a tool call; no execution is available")
+        return {**result, "error": "inspection response attempted a tool call; no execution is available"}
     report = message.get("content")
     if not isinstance(report, str) or not report.strip():
-        raise PermissionError("inspection response report is empty")
-    counters = _usage(response.get("usage"))
-    response_id = response.get("id") if isinstance(response.get("id"), str) else None
-    result = {
-        "schema": ENVELOPE_SCHEMA,
+        return {**result, "error": "inspection response report is empty"}
+    result = {**result,
         "status": "completed",
-        "synthetic": synthetic,
         "narrative": report.strip(),
         "result": {"report": report.strip(), "packet_digest": packet["digest"],
                    "provenance": packet["provenance"], "capability": packet["capability"]},
-        "identity": {"model": response_model, "provider": provider, "account_ref": account_ref,
-                     "route": route, "harness": "inspection-packet-http", "version": "1"},
-        "requested": {"model": model, "effort": effort},
-        "observed": {"response_model": response_model, "response_id": response_id,
-                     "effort_attested": False, "session_mode": "stateless"},
-        "usage": counters,
     }
     result_path.parent.mkdir(parents=True, exist_ok=True)
     partial = result_path.with_suffix(".partial")
@@ -174,7 +194,7 @@ def main(argv=None) -> int:
                           "error": str(error), "synthetic": args.synthetic}))
         return 1
     print(json.dumps(result))
-    return 0
+    return 0 if result.get("status") == "completed" else 1
 
 
 if __name__ == "__main__":

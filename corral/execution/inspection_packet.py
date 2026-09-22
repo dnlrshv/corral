@@ -10,6 +10,7 @@ import hashlib
 import json
 import re
 import subprocess
+import urllib.parse
 from pathlib import Path
 from typing import Any
 
@@ -20,7 +21,8 @@ from .workspace import safe_path
 
 PACKET_FILE = "inspection-packet.json"
 PACKET_SCHEMA = "corral-inspection-packet-v1"
-_HEX_REV = re.compile(r"^[0-9a-f]{40,64}$")
+_HEX_REV = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+_BASE_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
 _EXECUTION_WORDS = re.compile(
     r"\b(run|execute|invoke|launch)\b.{0,40}\b(test|tests|script|scripts|build|import|pytest|make|npm|package)\b",
     re.IGNORECASE,
@@ -31,48 +33,80 @@ def _sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _provenance(workspace: Path, raw: Any) -> dict[str, Any]:
-    if not isinstance(raw, dict):
-        raise PermissionError("inspection reviewer requires controller-owned provenance")
-    kind = raw.get("kind")
-    if kind not in ("git-checkout", "immutable-snapshot"):
-        raise PermissionError("inspection provenance kind must be git-checkout or immutable-snapshot")
-    required = ("repo", "head", "base")
-    if any(not isinstance(raw.get(key), str) or not raw[key] for key in required):
-        raise PermissionError("inspection provenance requires repo, head, and base")
-    if not _HEX_REV.fullmatch(raw["head"]) or not _HEX_REV.fullmatch(raw["base"]):
-        raise PermissionError("inspection head/base must be full hexadecimal revisions")
-    result = {key: raw[key] for key in required}
-    result["kind"] = kind
-    if raw.get("pr") is not None:
-        if isinstance(raw["pr"], bool) or not isinstance(raw["pr"], int) or raw["pr"] <= 0:
-            raise PermissionError("inspection PR number must be a positive integer")
-        result["pr"] = raw["pr"]
-    if kind == "git-checkout":
-        try:
-            actual = subprocess.check_output(
-                ["git", "rev-parse", "HEAD"], cwd=workspace, text=True, stderr=subprocess.DEVNULL
-            ).strip()
-        except (OSError, subprocess.CalledProcessError) as error:
-            raise PermissionError("declared Git checkout has no readable Git metadata") from error
-        if actual != raw["head"]:
-            raise PermissionError("inspection checkout HEAD does not match declared candidate")
-        status = subprocess.check_output(
-            ["git", "status", "--porcelain=v1", "--untracked-files=all"],
-            cwd=workspace,
-            text=True,
-            stderr=subprocess.DEVNULL,
-        ).splitlines()
-        result["checkout_dirty"] = bool(status)
-        result["checkout_status_digest"] = digest(status)
+def _trusted_workspace(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise PermissionError("inspection reviewer requires controller workspace provenance")
+    expected = value.get("digest")
+    actual = digest({key: item for key, item in value.items() if key != "digest"})
+    if not isinstance(expected, str) or expected != actual:
+        raise PermissionError("controller workspace provenance digest is invalid")
+    if value.get("kind") not in ("checkout", "immutable_snapshot"):
+        raise PermissionError("inspection workspace must be checkout or immutable_snapshot")
+    if not _HEX_REV.fullmatch(str(value.get("head") or "")):
+        raise PermissionError("controller workspace head must be a full Git SHA")
+    if not isinstance(value.get("files"), dict):
+        raise PermissionError("controller workspace file binding is missing")
+    return value
+
+
+def _remote_identity(remote: str) -> str:
+    """Return a non-secret repository identity derived from the checkout's Git remote."""
+    if remote.startswith("git@github.com:"):
+        slug = remote.split(":", 1)[1]
     else:
-        # A snapshot deliberately does not call Git.  Its identity is the declared remote
-        # provenance plus the exact document digests recorded below.
-        result["git_metadata_required"] = False
+        parsed = urllib.parse.urlsplit(remote)
+        slug = parsed.path.lstrip("/") if parsed.hostname == "github.com" else ""
+    if slug.endswith(".git"):
+        slug = slug[:-4]
+    if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", slug):
+        return slug
+    return "remote-sha256:" + hashlib.sha256(remote.encode()).hexdigest()
+
+
+def bind_candidate(spec: dict, workspace: Path | str, workspace_provenance: Any) -> dict[str, Any]:
+    """Derive candidate identity from controller-preflight provenance before inference."""
+    trusted = _trusted_workspace(workspace_provenance)
+    pr = spec.get("inspection_pr")
+    if pr is not None and (isinstance(pr, bool) or not isinstance(pr, int) or pr <= 0):
+        raise PermissionError("inspection PR number must be a positive integer")
+    if trusted["kind"] == "immutable_snapshot":
+        required = ("repo", "base", "export_id", "export_digest")
+        if any(not isinstance(trusted.get(key), str) or not trusted[key] for key in required):
+            raise PermissionError("controller snapshot provenance is incomplete")
+        base = trusted["base"]
+        if not _HEX_REV.fullmatch(base):
+            raise PermissionError("controller snapshot base must be a full Git SHA")
+        result = {"kind": "immutable_snapshot", "repo": trusted["repo"],
+                  "head": trusted["head"], "base": base,
+                  "export_id": trusted["export_id"], "export_digest": trusted["export_digest"],
+                  "workspace_provenance_digest": trusted["digest"],
+                  "git_metadata_required": False}
+    else:
+        base_ref = spec.get("inspection_base_ref")
+        if not isinstance(base_ref, str) or not _BASE_REF.fullmatch(base_ref) or base_ref.startswith("-"):
+            raise PermissionError("checkout inspection requires a safe inspection_base_ref")
+        try:
+            remote = subprocess.check_output(
+                ["git", "remote", "get-url", "origin"], cwd=workspace, text=True,
+                stderr=subprocess.DEVNULL).strip()
+            base = subprocess.check_output(
+                ["git", "rev-parse", "--verify", f"{base_ref}^{{commit}}"], cwd=workspace,
+                text=True, stderr=subprocess.DEVNULL).strip()
+        except (OSError, subprocess.CalledProcessError) as error:
+            raise PermissionError("checkout inspection candidate binding is unavailable") from error
+        if not remote or not _HEX_REV.fullmatch(base):
+            raise PermissionError("checkout inspection candidate binding is invalid")
+        result = {"kind": "checkout", "repo": _remote_identity(remote),
+                  "head": trusted["head"], "base": base, "base_ref": base_ref,
+                  "workspace_provenance_digest": trusted["digest"]}
+    if pr is not None:
+        result["pr"] = pr
+    result["digest"] = digest(result)
     return result
 
 
-def build(spec: dict, context: dict, workspace: Path | str) -> dict[str, Any]:
+def build(spec: dict, context: dict, workspace: Path | str,
+          candidate_binding: dict[str, Any]) -> dict[str, Any]:
     """Read only the controller allowlist and return a digest-bound review packet."""
     root = Path(workspace).resolve()
     if spec.get("role") != "review":
@@ -106,17 +140,25 @@ def build(spec: dict, context: dict, workspace: Path | str) -> dict[str, Any]:
     objective = str(context.get("objective") or "").strip()
     if not objective:
         raise PermissionError("inspection packet requires an explicit objective")
+    if check_outbound_safe(objective):
+        raise PermissionError("credential-shaped inspection objective refused")
     denied = ["candidate-code-execution", "shell", "tests", "imports", "build-hooks", "package-commands"]
-    provenance = _provenance(root, spec.get("inspection_provenance"))
+    trusted = _trusted_workspace(context.get("workspace_provenance"))
+    if candidate_binding.get("workspace_provenance_digest") != trusted["digest"]:
+        raise PermissionError("inspection candidate is not bound to controller workspace provenance")
+    if candidate_binding.get("digest") != digest(
+            {key: item for key, item in candidate_binding.items() if key != "digest"}):
+        raise PermissionError("inspection candidate binding digest is invalid")
+    for document in documents:
+        bound = trusted["files"].get(document["path"])
+        if not isinstance(bound, dict) or bound.get("digest") != document["sha256"]:
+            raise PermissionError("inspection document changed after controller preflight")
     document_bindings = [
         {"path": item["path"], "kind": item["kind"], "sha256": item["sha256"],
          "bytes": item["bytes"]}
         for item in documents
     ]
-    provenance["documents_digest"] = digest(document_bindings)
-    if provenance["kind"] == "immutable-snapshot":
-        provenance["files_export_digest"] = provenance["documents_digest"]
-        provenance["files_export_digest_source"] = "controller-selected-document-bytes"
+    provenance = {**candidate_binding, "documents_digest": digest(document_bindings)}
     packet = {
         "schema": PACKET_SCHEMA,
         "task": str(context.get("task") or ""),

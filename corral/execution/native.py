@@ -108,7 +108,9 @@ def prepare(*, spec: dict, host: dict, profile, task_dir: Path, workspace: str, 
     packet_record = None
     if route.inspection_only:
         context = json.loads(Path(context_path).read_text())
-        packet = inspection_packet.build(spec, context, workspace)
+        candidate_binding = inspection_packet.bind_candidate(
+            spec, workspace, context.get("workspace_provenance"))
+        packet = inspection_packet.build(spec, context, workspace, candidate_binding)
         packet_path = inspection_packet.persist(packet, scratch)
         packet_record = {"path": str(packet_path), "digest": packet["digest"],
                          "documents": [{"path": item["path"], "kind": item["kind"],

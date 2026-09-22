@@ -6,12 +6,14 @@ from pathlib import Path
 
 import pytest
 
-from corral.execution import containment, routes
+from corral.execution import containment, envelopes, routes, workspace_contract
 from corral.execution.agent import AgentConfig, CorralAgent
 from corral.execution.controller import Controller
-from corral.execution.inspection_packet import build, persist
+from corral.execution.inspection_packet import bind_candidate, build, persist
 from corral.execution.inspection_transport import invoke
 from corral.execution.profiles import Profile
+from corral.execution.store import digest
+from corral.execution.workspace import file_digest
 
 
 HEAD = "a" * 40
@@ -34,16 +36,30 @@ def _workspace(tmp_path: Path, *, snapshot: bool = True) -> tuple[Path, dict]:
     spec = {
         "role": "review", "candidate_paths": ["candidate.py", "candidate.diff"],
         "inspection_paths": ["candidate.py"], "inspection_diff_path": "candidate.diff",
-        "inspection_provenance": {"kind": "immutable-snapshot" if snapshot else "git-checkout",
-                                  "repo": "example/repo", "head": HEAD, "base": BASE, "pr": 12},
+        "workspace_kind": "immutable_snapshot" if snapshot else "checkout",
+        "inspection_pr": 12,
     }
+    if snapshot:
+        files = {name: {"digest": file_digest(root / name),
+                        "mode": (root / name).stat().st_mode & 0o777}
+                 for name in spec["candidate_paths"]}
+        spec["snapshot_provenance"] = {"repo": "example/repo", "head": HEAD,
+                                       "base": BASE, "export_id": "export-12",
+                                       "export_digest": digest(files)}
     return root, spec
+
+
+def _built(root: Path, spec: dict, objective: str) -> dict:
+    workspace_provenance = workspace_contract.preflight(spec, root)
+    binding = bind_candidate(spec, root, workspace_provenance)
+    context = {"task": "task", "attempt": "attempt", "generation": 1,
+               "objective": objective, "workspace_provenance": workspace_provenance}
+    return build(spec, context, root, binding)
 
 
 def _packet(tmp_path: Path, objective: str = "Inspect the source") -> Path:
     root, spec = _workspace(tmp_path)
-    value = build(spec, {"task": "task", "attempt": "attempt", "generation": 1,
-                         "objective": objective}, root)
+    value = _built(root, spec, objective)
     return persist(value, tmp_path / "scratch")
 
 
@@ -85,27 +101,79 @@ def test_tool_call_is_rejected_before_report_persistence(tmp_path):
             "choices": [{"finish_reason": "tool_calls", "message": {
                 "content": "", "tool_calls": [{"id": "call-1", "function": {
                     "name": "run_tests", "arguments": "{}"}}]} }],
-            "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": -2,
+                      "prompt_tokens_details": {"cached_tokens": True},
+                      "completion_tokens_details": {"reasoning_tokens": -1}},
         }
         return _Response(json.dumps(payload).encode())
 
-    with pytest.raises(PermissionError, match="attempted a tool call"):
-        invoke(packet_path=packet, result_path=result_path,
-               endpoint="https://provider.invalid/v1", credential="fixture-secret",
-               model="review-model", effort="medium", provider="fixture-provider",
-               account_ref="fixture-account", route="inspection-route", opener=opener)
+    result = invoke(packet_path=packet, result_path=result_path,
+                    endpoint="https://provider.invalid/v1", credential="fixture-secret",
+                    model="review-model", effort="medium", provider="fixture-provider",
+                    account_ref="fixture-account", route="inspection-route", opener=opener)
+    assert result["status"] == "failed"
+    assert "attempted a tool call" in result["error"]
+    assert result["observed"]["response_id"] == "response-2"
+    assert result["usage"] == {"input_tokens": 1, "output_tokens": 1}
     assert not result_path.exists()
     value = json.loads(packet.read_text())
     assert value["capability"]["execution_request_detected"] is True
     assert value["capability"]["tools_supplied"] == []
 
 
+def test_model_misroute_retains_failed_usage_and_observed_identity(tmp_path):
+    packet = _packet(tmp_path)
+    result_path = tmp_path / "must-not-exist.json"
+
+    def opener(_request):
+        return _Response(json.dumps({
+            "id": "response-misroute", "model": "unexpected-model",
+            "choices": [{"finish_reason": "stop", "message": {"content": "report"}}],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7},
+        }).encode())
+
+    result = invoke(packet_path=packet, result_path=result_path,
+                    endpoint="https://provider.invalid/v1", credential="fixture-secret",
+                    model="review-model", effort="medium", provider="fixture-provider",
+                    account_ref="fixture-account", route="inspection-route", opener=opener)
+    assert result["status"] == "failed" and not result_path.exists()
+    assert result["identity"]["model"] == "unexpected-model"
+    assert result["observed"]["response_id"] == "response-misroute"
+    parsed = envelopes.parse("corral-inspection-report-v1", stdout_text=json.dumps(result),
+                             stderr_text="", exit_code=1, invocation="attempt",
+                             synthetic_expected=False)
+    assert parsed.identity["model"] == "unexpected-model"
+    assert parsed.usage_events[0]["counters"] == {
+        "input_tokens": 5, "output_tokens": 2, "total_tokens": 7}
+    assert parsed.detail["provider_receipt"]["response_id"] == "response-misroute"
+
+
 def test_packet_refuses_credential_shaped_candidate_content(tmp_path):
     root, spec = _workspace(tmp_path)
     (root / "candidate.py").write_text('api_key = "sk-proj-secretvalue123"\n')
+    files = {name: {"digest": file_digest(root / name),
+                    "mode": (root / name).stat().st_mode & 0o777}
+             for name in spec["candidate_paths"]}
+    spec["snapshot_provenance"]["export_digest"] = digest(files)
     with pytest.raises(PermissionError, match="credential-shaped"):
+        _built(root, spec, "Inspect the source")
+
+
+def test_packet_refuses_credential_shaped_objective(tmp_path):
+    root, spec = _workspace(tmp_path)
+    with pytest.raises(PermissionError, match="credential-shaped inspection objective"):
+        _built(root, spec, "Review this with api_key=sk-proj-secretvalue123")
+
+
+def test_packet_refuses_file_change_after_controller_preflight(tmp_path):
+    root, spec = _workspace(tmp_path)
+    workspace_provenance = workspace_contract.preflight(spec, root)
+    binding = bind_candidate(spec, root, workspace_provenance)
+    (root / "candidate.py").write_text("VALUE = 8\n")
+    with pytest.raises(PermissionError, match="changed after controller preflight"):
         build(spec, {"task": "task", "attempt": "attempt", "generation": 1,
-                     "objective": "Inspect the source"}, root)
+                     "objective": "Inspect the source",
+                     "workspace_provenance": workspace_provenance}, root, binding)
 
 
 def test_snapshot_uses_controller_document_digest_without_git(tmp_path, monkeypatch):
@@ -115,12 +183,11 @@ def test_snapshot_uses_controller_document_digest_without_git(tmp_path, monkeypa
         raise AssertionError("snapshot preparation must not call Git")
 
     monkeypatch.setattr("corral.execution.inspection_packet.subprocess.check_output", refuse_git)
-    packet = build(spec, {"task": "task", "attempt": "attempt", "generation": 1,
-                          "objective": "Inspect the source"}, root)
+    packet = _built(root, spec, "Inspect the source")
     provenance = packet["provenance"]
     assert provenance["git_metadata_required"] is False
-    assert provenance["files_export_digest"] == provenance["documents_digest"]
-    assert len(provenance["files_export_digest"]) == 64
+    assert provenance["export_digest"] == spec["snapshot_provenance"]["export_digest"]
+    assert len(provenance["documents_digest"]) == 64
 
 
 def test_agent_submit_builds_bound_inspection_spec_without_pilot_json(tmp_path):
@@ -137,15 +204,18 @@ def test_agent_submit_builds_bound_inspection_spec_without_pilot_json(tmp_path):
     task = agent.submit(
         tmp_path, "Inspect the supplied change", role="review", profile_id=None,
         inspection_paths=["candidate.py"], inspection_diff_path="candidate.diff",
-        inspection_provenance={"kind": "immutable-snapshot", "repo": "example/repo",
-                               "head": HEAD, "base": BASE, "pr": 12},
+        workspace_kind="immutable_snapshot",
+        snapshot_provenance={"repo": "example/repo", "head": HEAD, "base": BASE,
+                             "export_id": "export-12", "export_digest": "c" * 64},
+        inspection_pr=12,
     )
     assert task == "inspection-task"
     spec = captured["spec"]
     assert spec["host"] == "mini2"
     assert spec["tools"] == ["inspect-packet", "report"]
     assert spec["candidate_paths"] == ["candidate.py", "candidate.diff"]
-    assert spec["inspection_provenance"]["head"] == HEAD
+    assert spec["snapshot_provenance"]["head"] == HEAD
+    assert spec["inspection_pr"] == 12
 
 
 def test_inspection_route_rejects_broad_tools_and_runtime_hooks(tmp_path):
@@ -210,6 +280,8 @@ def test_controller_adapter_denies_candidate_execution_and_workspace_access(tmp_
     subprocess.run(["git", "init", "-q"], cwd=workspace, check=True)
     subprocess.run(["git", "-c", "user.name=Fixture", "-c", "user.email=f@example.invalid",
                     "commit", "--allow-empty", "-qm", "base"], cwd=workspace, check=True)
+    subprocess.run(["git", "remote", "add", "origin", "https://github.com/example/repo.git"],
+                   cwd=workspace, check=True)
     head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=workspace, text=True).strip()
     marker = workspace / "candidate-executed"
     candidate = workspace / "candidate.py"
@@ -242,8 +314,7 @@ def test_controller_adapter_denies_candidate_execution_and_workspace_access(tmp_
             "candidate_paths": ["candidate.py", "candidate.diff"], "verifier_paths": [],
             "verify": ["/usr/bin/true"], "tools": ["inspect-packet", "report"],
             "inspection_paths": ["candidate.py"], "inspection_diff_path": "candidate.diff",
-            "inspection_provenance": {"kind": "git-checkout", "repo": "example/repo",
-                                      "head": head, "base": head, "pr": 12}}
+            "inspection_base_ref": head, "inspection_pr": 12}
     task = controller.submit("owner", "inspection-fixture", spec)
     run = controller.run("owner", task, execution_host="fixture")
     assert run["result"]["accepted"] is True

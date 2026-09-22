@@ -89,9 +89,12 @@ class CorralAgent:
         result_file: str = "result.json",
         usage_file: str = "usage.json",
         tools: list[str] | None = None,
+        workspace_kind: str = "checkout",
+        snapshot_provenance: dict[str, Any] | None = None,
         inspection_paths: list[str] | None = None,
         inspection_diff_path: str | None = None,
-        inspection_provenance: dict[str, Any] | None = None,
+        inspection_base_ref: str | None = None,
+        inspection_pr: int | None = None,
     ) -> str:
         """Submit a task without manually authoring JSON files."""
         repo_path = str(Path(repo).resolve())
@@ -109,6 +112,7 @@ class CorralAgent:
             "dependencies": dependencies or [],
             "result_file": result_file,
             "usage_file": usage_file,
+            "workspace_kind": workspace_kind,
         }
         if profile_id and self.config.profiles and profile_id in self.config.profiles:
             profile = self.config.profiles[profile_id]
@@ -143,8 +147,12 @@ class CorralAgent:
             spec["inspection_paths"] = inspection_paths
         if inspection_diff_path is not None:
             spec["inspection_diff_path"] = inspection_diff_path
-        if inspection_provenance is not None:
-            spec["inspection_provenance"] = inspection_provenance
+        if snapshot_provenance is not None:
+            spec["snapshot_provenance"] = snapshot_provenance
+        if inspection_base_ref is not None:
+            spec["inspection_base_ref"] = inspection_base_ref
+        if inspection_pr is not None:
+            spec["inspection_pr"] = inspection_pr
         if tools is not None:
             spec["tools"] = tools
         elif inspection_paths is not None:
@@ -283,10 +291,14 @@ def main() -> int:
     run_parser.add_argument("--role", default="implementation")
     run_parser.add_argument("--inspection-paths", nargs="*")
     run_parser.add_argument("--inspection-diff")
-    run_parser.add_argument("--inspection-kind", choices=("git-checkout", "immutable-snapshot"))
-    run_parser.add_argument("--inspection-repo")
-    run_parser.add_argument("--head")
-    run_parser.add_argument("--base")
+    run_parser.add_argument("--workspace-kind", choices=("checkout", "immutable_snapshot"),
+                            default="checkout")
+    run_parser.add_argument("--snapshot-repo")
+    run_parser.add_argument("--snapshot-head")
+    run_parser.add_argument("--snapshot-base")
+    run_parser.add_argument("--snapshot-export-id")
+    run_parser.add_argument("--snapshot-export-digest")
+    run_parser.add_argument("--inspection-base-ref")
     run_parser.add_argument("--pr", type=int)
 
     # status
@@ -326,23 +338,26 @@ def main() -> int:
     agent = CorralAgent(args.config)
 
     if args.command == "run":
-        provenance_values = (args.inspection_kind, args.inspection_repo, args.head, args.base)
-        if any(provenance_values) and not all(provenance_values):
-            parser.error("inspection provenance requires --inspection-kind, --inspection-repo, --head, and --base")
-        inspection_provenance = None
-        if all(provenance_values):
-            inspection_provenance = {
-                "kind": args.inspection_kind, "repo": args.inspection_repo,
-                "head": args.head, "base": args.base,
+        snapshot_values = (args.snapshot_repo, args.snapshot_head, args.snapshot_base,
+                           args.snapshot_export_id, args.snapshot_export_digest)
+        if any(snapshot_values) and not all(snapshot_values):
+            parser.error("snapshot provenance requires repo, head, base, export id, and export digest")
+        snapshot_provenance = None
+        if all(snapshot_values):
+            snapshot_provenance = {
+                "repo": args.snapshot_repo, "head": args.snapshot_head,
+                "base": args.snapshot_base, "export_id": args.snapshot_export_id,
+                "export_digest": args.snapshot_export_digest,
             }
-            if args.pr is not None:
-                inspection_provenance["pr"] = args.pr
         result = agent.run(args.repo, args.objective, host=args.host, model=args.model,
                            effort=args.effort, candidate_paths=args.candidates,
                            profile_id=args.profile, role=args.role,
                            inspection_paths=args.inspection_paths,
                            inspection_diff_path=args.inspection_diff,
-                           inspection_provenance=inspection_provenance)
+                           workspace_kind=args.workspace_kind,
+                           snapshot_provenance=snapshot_provenance,
+                           inspection_base_ref=args.inspection_base_ref,
+                           inspection_pr=args.pr)
         print(json.dumps(result, indent=2))
     elif args.command == "status":
         print(json.dumps(agent.status(args.task_id), indent=2))

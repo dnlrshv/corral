@@ -25,7 +25,7 @@ class PRCoordinator:
 
     def __init__(self, *, store, pr: str, owner_epoch: int, publisher: str,
                  campaign_authorization: str, publication_policy_snapshot: dict[str, Any],
-                 publisher_account_ref: str = "unconfigured"):
+                 publisher_account_ref: str):
         repo, _number = parse_pr_identity(pr)
         if (isinstance(owner_epoch, bool) or not isinstance(owner_epoch, int) or owner_epoch <= 0
                 or not publisher or not campaign_authorization or not publisher_account_ref):

@@ -29,7 +29,7 @@ def setup_review(tmp_path, *, verdict="PASS"):
     selection = {"profile": {"id": "inspection-medium", "provider": "fixture",
                              "account_ref": "fixture", "route": "inspection-route",
                              "model": "review-model", "effort": "medium",
-                             "harness": "inspection-packet-http"}}
+                             "harness": "corral-inspection-packet"}}
     store.put_once("request", task, {"role": "review",
                    "trusted_export_id": export["export_id"], "selection": selection})
     store.put_once("state", task, {"status": "completed", "attempt": attempt,
@@ -69,7 +69,8 @@ def setup_review(tmp_path, *, verdict="PASS"):
                 "enforcement_digest": compute_policy_digest(enforcement)}
     coordinator = PRCoordinator(store=store, pr="fixture/repo#7", owner_epoch=epoch,
                                 publisher="publisher", campaign_authorization="campaign",
-                                publication_policy_snapshot=snapshot)
+                                publication_policy_snapshot=snapshot,
+                                publisher_account_ref="publisher-account")
     return store, coordinator, task
 
 

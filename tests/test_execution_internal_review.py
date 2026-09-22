@@ -24,7 +24,7 @@ def _records(tmp_path):
     profile = {"id": "inspection-medium", "provider": "fixture",
                "account_ref": "fixture-account", "route": "inspection-route",
                "model": "review-model", "effort": "medium",
-               "harness": "inspection-packet-http"}
+               "harness": "corral-inspection-packet"}
     store.put_once("request", task, {
         "role": "review", "trusted_export_id": export["export_id"],
         "selection": {"profile": profile},
@@ -94,6 +94,15 @@ def test_refuses_unknown_identity_or_executable_profile(tmp_path):
     store, task, _export = _records(tmp_path)
     result = continuation.current_result(store, task)
     result["observed"] = "unknown"
+    store.replace("result", task, result)
+    with pytest.raises(PermissionError, match="identity or profile"):
+        record(store, task)
+
+
+def test_refuses_unregistered_configured_to_observed_harness_mapping(tmp_path):
+    store, task, _export = _records(tmp_path)
+    result = continuation.current_result(store, task)
+    result["selection"]["profile"]["harness"] = "arbitrary-wrapper"
     store.replace("result", task, result)
     with pytest.raises(PermissionError, match="identity or profile"):
         record(store, task)

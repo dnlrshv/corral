@@ -12,6 +12,11 @@ from . import continuation
 from .store import digest
 
 SCHEMA = "corral-internal-review-v1"
+_HARNESS_OBSERVATIONS = {
+    "corral-inspection-packet": frozenset({"inspection-packet-http"}),
+    # Controller-only fixture proves the same split without claiming a live provider.
+    "packet-fixture": frozenset({"packet-fixture"}),
+}
 _SHA = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 def _trusted_export(store, export_id: Any) -> dict[str, Any]:
@@ -137,7 +142,8 @@ def record(store, task_id: str) -> dict[str, Any]:
                        for key in ("model", "harness"))
             or not isinstance(profile, dict) or not profile.get("id")
             or observed.get("model") != profile.get("model")
-            or observed.get("harness") != profile.get("harness")
+            or observed.get("harness") not in _HARNESS_OBSERVATIONS.get(
+                profile.get("harness"), frozenset())
             or not all(isinstance(profile.get(key), str) and profile[key]
                        for key in ("provider", "account_ref", "route", "harness"))):
         raise PermissionError("internal review observed identity or profile is incomplete")
@@ -151,7 +157,7 @@ def record(store, task_id: str) -> dict[str, Any]:
         "profile_id": profile["id"], "verdict": verdict,
         "identity": {
             "configured": {key: profile.get(key) for key in
-                           ("provider", "account_ref", "route", "model", "effort")},
+                           ("provider", "account_ref", "route", "model", "effort", "harness")},
             "observed": {key: observed.get(key) for key in ("model", "harness")},
             "coverage": {"provider": "controller-configured-not-provider-attested",
                          "account_ref": "controller-configured-not-provider-attested",

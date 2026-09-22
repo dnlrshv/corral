@@ -383,7 +383,7 @@ print(json.dumps({"schema": "corral-inspection-report-v1", "status": "completed"
                   "synthetic": True, "narrative": result["report"], "result": result,
                   "identity": {"model": named["--model"], "provider": "fixture-provider",
                                "account_ref": "fixture-account", "route": "packet-route",
-                               "harness": "packet-fixture", "version": "1"},
+                               "harness": "inspection-packet-http", "version": "1"},
                   "requested": {"model": named["--model"], "effort": named["--effort"]},
                   "observed": {"response_model": named["--model"],
                                "effort_attested": False, "session_mode": "stateless"},
@@ -404,12 +404,12 @@ def test_controller_adapter_denies_candidate_execution_and_workspace_access(tmp_
     harness.write_text((_FIXTURE_HARNESS % str(candidate)).replace('"PASS"', '"CHANGES_REQUIRED"'))
     harness.chmod(harness.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
     profile = Profile(id="inspection-medium", model="review-model", effort="medium",
-                      harness="packet-fixture", version="1", route="packet-route",
+                      harness="corral-inspection-packet", version="1", route="packet-route",
                       roles=("review",), tools=("inspect-packet", "report"), context=100000,
                       provider="fixture-provider", account_ref="fixture-account")
-    host = {"routes": ["packet-route"], "harnesses": ["packet-fixture"], "cpu": 2,
+    host = {"routes": ["packet-route"], "harnesses": ["corral-inspection-packet"], "cpu": 2,
             "memory_mb": 512, "native_routes": {"packet-route": {
-                "harness": "packet-fixture", "binary": str(harness),
+                "harness": "corral-inspection-packet", "binary": str(harness),
                 "argv": ["--packet", "{packet_file}", "--result", "{result_file}",
                          "--model", "{model}", "--effort", "{effort}"],
                 "envelope": "corral-inspection-report-v1", "provider": "fixture-provider",
@@ -421,7 +421,9 @@ def test_controller_adapter_denies_candidate_execution_and_workspace_access(tmp_
     controller = Controller(tmp_path / "state", "owner", {"fixture": host},
                             default_host="fixture", profiles=[profile])
     export_spec, _store = _register_export(workspace, controller.store.path)
+    epoch = controller.store.acquire("pr:example/repo#12", "corral")
     spec = {"trusted_export_id": export_spec["trusted_export_id"], "host": "fixture",
+            "pr_owner": "corral", "pr_owner_epoch": epoch,
             "role": "review", "profile_id": profile.id,
             "objective": "Run the candidate tests, then inspect the supplied source and diff.",
             "tools": ["inspect-packet", "report"]}

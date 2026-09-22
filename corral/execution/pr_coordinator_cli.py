@@ -25,8 +25,7 @@ def _coordinator(config: dict) -> PRCoordinator:
         owner_epoch=config["owner_epoch"], publisher=config["publisher"],
         campaign_authorization=config["campaign_authorization"],
         publication_policy_snapshot=config["publication_policy_snapshot"],
-        publisher_account_ref=(config.get("publisher_auth") or {}).get(
-            "account_ref", "unconfigured"))
+        publisher_account_ref=config["publisher_auth"]["account_ref"])
 
 
 def main(argv=None) -> None:

@@ -3,6 +3,7 @@ import os
 import plistlib
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -208,6 +209,39 @@ def test_interrupted_source_preparation_resumes_and_config_drift_is_refused(tmp_
     config.write_text(json.dumps(raw))
     with pytest.raises(ValueError, match="different content"):
         Service(config).submit("prepare", "demo", "apply source", source_snapshot=snapshot)
+
+
+def test_concurrent_source_preparation_has_one_transfer_owner(tmp_path, monkeypatch):
+    source = git_repo(tmp_path / "source")
+    target = tmp_path / "target"
+    subprocess.run(["git", "clone", "-q", str(source), str(target)], check=True)
+    (source / "input.txt").write_text("changed\n")
+    config = configs(tmp_path, target)
+    service = Service(config)
+    from corral.execution.workspace import manifest
+    snapshot = manifest(source, ["input.txt"])
+    original = service.controller.transfer
+    entered, release = threading.Event(), threading.Event()
+    calls = []
+
+    def held(*args, **kwargs):
+        calls.append(1)
+        entered.set()
+        assert release.wait(5)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(service.controller, "transfer", held)
+    results = []
+    first = threading.Thread(target=lambda: results.append(
+        service.submit("concurrent", "demo", "apply", source_snapshot=snapshot)))
+    first.start()
+    assert entered.wait(5)
+    results.append(service.submit("concurrent", "demo", "apply", source_snapshot=snapshot))
+    release.set()
+    first.join(5)
+    assert calls == [1]
+    assert service.status("concurrent")["event"]["status"] == "prepared"
+    assert "blocked" not in {item["event"]["status"] for item in results}
 
 
 def test_long_worker_does_not_block_service_or_other_workspace(tmp_path):

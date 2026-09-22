@@ -154,6 +154,9 @@ class Service:
             transfer_id = "service-source:" + event_id
             receipt = self.store.get("transfer_receipt", task_id + ":" + transfer_id)
             if receipt is None:
+                from .service_prepare import claim
+                if not claim(self.store, event_id, task_id, transfer_id):
+                    return self.status(event_id)
                 paths = list(snapshot.get("files", {}))
                 expected = self.controller.snapshot(self.token, task_id, paths)
                 if snapshot.get("base") != expected.get("base"):

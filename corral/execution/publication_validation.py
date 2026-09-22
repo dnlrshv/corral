@@ -82,6 +82,13 @@ def validate_payload(
     return compute_canonical_wire_hash(payload["head"], payload["body"], comments)
 
 
+def require_approval_provenance(authorized_by: Any) -> str:
+    """Approval provenance must name a non-blank operator or campaign authorization."""
+    if not isinstance(authorized_by, str) or not authorized_by.strip():
+        raise PermissionError("explicit approval provenance required")
+    return authorized_by
+
+
 def verify_approval(
     transport: Any, pr: str, intent: str, payload: dict[str, Any]
 ) -> tuple[int, dict[str, Any]]:
@@ -93,12 +100,9 @@ def verify_approval(
     if not ownership or ownership[0] != "corral" or ownership[2] != "active":
         raise PermissionError("ownership drift: corral does not hold active ownership")
     approval = transport.store.get("advisory_approval", intent)
-    if (
-        not approval
-        or approval.get("authorized") is not True
-        or not approval.get("authorized_by")
-    ):
+    if not approval or approval.get("authorized") is not True:
         raise PermissionError("missing explicit candidate-bound approval")
+    require_approval_provenance(approval.get("authorized_by"))
     bindings = {
         k: payload[k] for k in ("repo", "pr", "head", "base", "policy", "publisher")
     }

@@ -2,6 +2,7 @@
 import hashlib
 import json
 from pathlib import Path
+import re
 import sqlite3
 import time
 import uuid
@@ -296,21 +297,51 @@ def record_advisory_approval(
     base: str,
     intent: str,
     authorized_by: str,
-    policy: str = "v1",
+    policy: str,
     epoch: int | None = None,
-    canonical_wire_hash: str | None = None,
+    canonical_wire_hash: str,
     policy_snapshot: dict | None = None,
     publisher: str | None = None,
 ) -> dict:
-    """Register explicit candidate-bound approval for an advisory publication intent."""
-    if not pr or "#" not in pr:
-        raise ValueError("Explicit repository PR identity required, format: <repo>#<number>")
-    if not head or len(head) != 40:
-        raise ValueError("Valid 40-character commit head SHA required")
-    if not base or len(base) != 40:
-        raise ValueError("Valid 40-character commit base SHA required")
-    if not intent:
-        raise ValueError("Stable publication intent ID required")
+    """Register explicit candidate-bound approval for an advisory publication intent.
+
+    The approval slot is write-once, so this refuses every approval that
+    ``publication_validation.verify_approval`` would refuse: the intent must be the
+    canonical hash of the stored payload, and every binding, the canonical wire hash
+    and any policy snapshot must match that payload. A bound snapshot is persisted
+    with the approval as the evidence of the approved policy.
+    """
+    from .policy import compute_policy_digest
+    from .publication_validation import require_approval_provenance, validate_payload
+
+    if not isinstance(intent, str) or not re.fullmatch("[0-9a-f]{64}", intent):
+        raise ValueError("intent must be a canonical SHA256")
+    if not isinstance(canonical_wire_hash, str) or not re.fullmatch(
+        "[0-9a-f]{64}", canonical_wire_hash
+    ):
+        raise ValueError("canonical wire hash required")
+    require_approval_provenance(authorized_by)
+    payload = store.get("advisory_payload", intent)
+    if payload is None:
+        raise PermissionError("approval requires the stored advisory payload for this intent")
+    wire_hash, _wire = validate_payload(pr, intent, payload)
+    if publisher is None:
+        publisher = payload["publisher"]
+    bindings = {"repo": repo, "pr": pr, "head": head, "base": base,
+                "policy": policy, "publisher": publisher}
+    if any(payload[key] != value for key, value in bindings.items()):
+        raise PermissionError("approval bindings differ from the stored advisory payload")
+    if canonical_wire_hash != wire_hash:
+        raise PermissionError("approval canonical wire hash does not match the stored payload")
+    if policy_snapshot is not None:
+        enforcement = (policy_snapshot.get("enforcement_contents")
+                       if isinstance(policy_snapshot, dict) else None)
+        if (not isinstance(enforcement, dict)
+                or policy_snapshot.get("repo") != repo
+                or policy_snapshot.get("base_sha") != base
+                or policy_snapshot.get("enforcement_digest") != policy
+                or compute_policy_digest(enforcement) != policy):
+            raise PermissionError("policy snapshot does not bind the approved policy digest")
 
     if epoch is None:
         ownership = store.ownership("pr:" + pr) if hasattr(store, "ownership") else None
@@ -318,10 +349,11 @@ def record_advisory_approval(
             epoch = ownership[1] if ownership[0] == "corral" else ownership[1] + 1
         else:
             epoch = 1
+    if isinstance(epoch, bool) or not isinstance(epoch, int) or epoch <= 0:
+        raise ValueError("approval epoch must be a positive integer")
 
-    stored_payload = store.get("advisory_payload", intent) or {}
     approval = {
-        "publisher": publisher or stored_payload.get("publisher"),
+        "publisher": publisher,
         "repo": repo,
         "pr": pr,
         "head": head,
@@ -333,6 +365,8 @@ def record_advisory_approval(
         "authorized": True,
         "authorized_by": authorized_by,
     }
+    if policy_snapshot is not None:
+        approval["policy_snapshot"] = policy_snapshot
     store.put_once("advisory_approval", intent, approval)
     return approval
 

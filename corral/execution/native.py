@@ -40,7 +40,8 @@ def _scratch_root(state_dir: Path) -> Path:
 def build_boundary(*, workspace: str, state_dir: Path, artifacts: Path, task_dir: Path,
                    source_root: Path, verifier_roots: tuple[str, ...] = (),
                    host_protected: tuple[str, ...] = (), route_read: tuple[str, ...] = (),
-                   task_id: str, packet_only: bool = False) -> tuple[containment.Boundary, Path, list[str]]:
+                   route_write: tuple[str, ...] = (), task_id: str,
+                   packet_only: bool = False) -> tuple[containment.Boundary, Path, list[str]]:
     """Deny controller state, artifacts, source, verifier bundles and account stores.
 
     Disposable sentinels are created inside already-denied trusted state so the probe can
@@ -80,6 +81,7 @@ def build_boundary(*, workspace: str, state_dir: Path, artifacts: Path, task_dir
     boundary = containment.Boundary(workspace=str(worker_workspace),
                                     scratch=str(scratch.resolve()), tmpdir=str(scratch.resolve()),
                                     deny=tuple(sorted(denied)), allow=tuple(sorted(granted)),
+                                    write_allow=tuple(sorted({str(Path(item).expanduser().resolve()) for item in route_write if item})),
                                     sentinels=sentinels)
     return boundary, scratch, auth_read_granted
 
@@ -100,7 +102,8 @@ def prepare(*, spec: dict, host: dict, profile, task_dir: Path, workspace: str, 
         workspace=workspace, state_dir=Path(state_dir), artifacts=artifacts, task_dir=task_dir,
         source_root=source_root, verifier_roots=verifier_roots,
         host_protected=tuple(host.get("protected_paths") or ()),
-        route_read=route.runtime_read, task_id=task_id, packet_only=route.inspection_only)
+        route_read=route.runtime_read, route_write=route.runtime_write,
+        task_id=task_id, packet_only=route.inspection_only)
     overlaps = containment.refuse_overlaps(boundary, scratch_root=str(_scratch_root(Path(state_dir))))
     if overlaps:
         raise PermissionError("worker boundary configuration overlaps trusted state: " + "; ".join(overlaps))

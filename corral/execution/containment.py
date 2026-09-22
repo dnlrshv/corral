@@ -144,6 +144,7 @@ class Boundary:
     deny: tuple[str, ...]
     allow: tuple[str, ...] = ()
     deny_write: tuple[str, ...] = ()
+    write_allow: tuple[str, ...] = ()
     sentinels: tuple[str, ...] = ()
     network: bool = True
     label: str = "seatbelt-worker-boundary"
@@ -151,11 +152,12 @@ class Boundary:
     def as_dict(self) -> dict:
         return {"workspace": self.workspace, "scratch": self.scratch, "tmpdir": self.tmpdir,
                 "deny": list(self.deny), "allow": list(self.allow),
-                "deny_write": list(self.deny_write), "sentinels": list(self.sentinels),
+                "deny_write": list(self.deny_write), "write_allow": list(self.write_allow),
+                "sentinels": list(self.sentinels),
                 "network": self.network, "label": self.label}
 
     def writable_roots(self) -> tuple[str, ...]:
-        return tuple(dict.fromkeys((self.workspace, self.scratch, self.tmpdir)))
+        return tuple(dict.fromkeys((self.workspace, self.scratch, self.tmpdir, *self.write_allow)))
 
 
 def sensitive_account_stores(home: Path | None = None) -> list[str]:
@@ -190,6 +192,7 @@ def build_profile(boundary: Boundary) -> str:
     deny = [str(_real(item)) for item in boundary.deny]
     allow = [str(_real(item)) for item in boundary.allow]
     deny_write = [str(_real(item)) for item in boundary.deny_write]
+    write_allow = [str(_real(item)) for item in boundary.write_allow]
     rules = [
         "(version 1)",
         "(deny default)",
@@ -223,7 +226,7 @@ def build_profile(boundary: Boundary) -> str:
         rules.append(f"(allow file-read* (subpath {_quote(allowed)}))")
         rules.append(f"(allow file-read* (literal {_quote(allowed)}))")
     rules += ["(deny file-write*)", f"(allow file-write* (subpath {_quote('/dev')}))"]
-    for root in (workspace, scratch, tmpdir):
+    for root in (workspace, scratch, tmpdir, *write_allow):
         # The worker's own roots are re-opened for read *and* write after the denials above,
         # because scratch legitimately lives inside denied controller state. refuse_overlaps
         # proves this can only ever re-open the declared per-task scratch, never a sibling.
@@ -292,8 +295,12 @@ def demonstrate(boundary: Boundary) -> dict:
     workspace = Path(boundary.workspace)
     scratch = Path(boundary.scratch)
     writable = [Path(item) for item in boundary.writable_roots()]
-    for item in writable + [workspace, scratch]:
+    for item in (workspace, scratch):
         item.mkdir(parents=True, exist_ok=True)
+    missing_writable = [str(item) for item in writable if not item.is_dir()]
+    if missing_writable:
+        receipt["blocker"] = "declared writable runtime path is absent: " + ", ".join(missing_writable)
+        return receipt
     sentinels = receipt["sentinels"]
     missing = [item for item in sentinels if not Path(item).is_file()]
     if missing:
@@ -359,12 +366,17 @@ def refuse_overlaps(boundary: Boundary, *, scratch_root: str | None = None) -> l
     problems: list[str] = []
     deny = {_real(item) for item in tuple(boundary.deny) + tuple(boundary.deny_write)}
     scratch_parent = _real(scratch_root) if scratch_root else None
+    runtime_write = {_real(item) for item in boundary.write_allow}
     for raw in boundary.writable_roots():
         root = _real(raw)
+        is_runtime_write = root in runtime_write
         if str(root) in ("/", str(Path.home())):
             problems.append(f"writable root is a whole-filesystem path: {root}")
+        if is_runtime_write and not any(_inside(root, _real(grant)) for grant in boundary.allow):
+            problems.append(f"runtime writable root lacks a declared read grant: {root}")
         for denied in deny:
-            if _inside(root, denied) and not (scratch_parent and _inside(root, scratch_parent)):
+            permitted_runtime = is_runtime_write and any(_inside(root, _real(grant)) for grant in boundary.allow)
+            if _inside(root, denied) and not (scratch_parent and _inside(root, scratch_parent)) and not permitted_runtime:
                 problems.append(f"writable root reopens a denied subtree: {root} under {denied}")
             if _inside(denied, root):
                 problems.append(f"denied path is reachable for write from a writable root: {denied} under {root}")

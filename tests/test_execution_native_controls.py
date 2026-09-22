@@ -234,6 +234,28 @@ def test_boundary_overlap_with_the_workspace_fails_closed_without_launching(tmp_
     assert controller.store.records("state")[task]["status"] == "refused-before-launch"
 
 
+def test_route_runtime_log_write_is_probed_and_must_stay_inside_a_read_grant(tmp_path):
+    env = ns.native_env(tmp_path)
+    log_root = env["fake_home"] / "log"
+    log_root.mkdir()
+    controller = _route_env(tmp_path, env, runtime_read=[str(env["fake_home"])],
+                            runtime_write=[str(log_root)])
+    task = controller.submit("owner", "runtime-log-grant", ns.native_spec(env, ops=[]))
+    controller.run("owner", task, execution_host=ns.FAKE_HOST)
+    receipt = json.loads((controller.artifacts / task / "boundary.json").read_text())
+    assert str(log_root) in receipt["boundary"]["write_allow"]
+
+
+def test_runtime_log_write_without_route_read_grant_fails_closed(tmp_path):
+    env = ns.native_env(tmp_path)
+    log_root = env["fake_home"] / "log"
+    log_root.mkdir()
+    controller = _route_env(tmp_path, env, runtime_read=[], runtime_write=[str(log_root)])
+    task = controller.submit("owner", "refuse-runtime-log", ns.native_spec(env, ops=[]))
+    with pytest.raises(PermissionError, match="overlaps trusted state"):
+        controller.run("owner", task, execution_host=ns.FAKE_HOST)
+
+
 def test_read_grant_that_reopens_more_than_one_denied_root_fails_closed(tmp_path):
     env = ns.native_env(tmp_path, runtime_read=[str(tmp_path / "fake-harness-home" / "auth")])
     controller = env["controller"]

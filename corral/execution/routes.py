@@ -50,6 +50,7 @@ class NativeRoute:
     credential_env: tuple[str, ...] = ()
     runtime_env: tuple[str, ...] = ()
     runtime_read: tuple[str, ...] = ()
+    runtime_write: tuple[str, ...] = ()
     runtime_home: str | None = None
     synthetic: bool = False
     launch_authorized: bool = False
@@ -61,7 +62,7 @@ class NativeRoute:
         value = {name: getattr(self, name) for name in self.__dataclass_fields__}
         value["argv"] = list(self.argv)
         for name in ("supported_models", "supported_efforts", "credential_env", "runtime_env",
-                 "runtime_read"):
+                 "runtime_read", "runtime_write"):
             value[name] = list(value[name])
         return value
 
@@ -126,6 +127,7 @@ def declare(route_id: str, raw: dict) -> NativeRoute:
         credential_env=credential_env,
         runtime_env=runtime_env,
         runtime_read=runtime_read,
+        runtime_write=_as_tuple(raw.get("runtime_write")),
         runtime_home=runtime_home,
         synthetic=bool(raw.get("synthetic", False)),
         launch_authorized=bool(raw.get("launch_authorized", False)),
@@ -234,6 +236,7 @@ def plan(route: NativeRoute, profile, *, host_routes: tuple[str, ...],
         "credential_env_names": list(route.credential_env),
         "runtime_home": route.runtime_home,
         "runtime_read": list(route.runtime_read),
+        "runtime_write": list(route.runtime_write),
         "notes": route.notes,
         "inspection_only": route.inspection_only,
     }

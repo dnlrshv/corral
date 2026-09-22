@@ -218,6 +218,11 @@ def _github_workflow_script_reference(value: str, source_name: str | None,
     return bool(_WORKFLOW_LOOKUP_CHAIN.fullmatch(value.strip()))
 
 
+_PYTHON_BLOCK_OPENER = re.compile(
+    r"[ \t]*(?:(?:async[ \t]+)?(?:def|class|if|elif|else|for|while|with|try|except|finally"
+    r"|match|case)\b|.*->)")
+
+
 def _in_comment(text: str, position: int) -> bool:
     """Whether ``position`` follows a ``#`` on its line (a full-line or trailing comment)."""
     line_start = text.rfind("\n", 0, position) + 1
@@ -295,10 +300,11 @@ def check_source_text_safe(text: str, *, source_name: str | None = None) -> list
             continue
         if python_source and not quoted and value in type_names:
             continue
-        # A Python ``:`` that ends its line after an unquoted name opens a block
-        # (``def load() -> Snapshot:``); the docstring that follows is not its value.
+        # A ``:`` that ends a compound-statement line opens a block (``if not token:``,
+        # ``def load() -> Snapshot:``); the next line is not its value.
         if (python_source and match.group("sep") == ":" and "\n" in match.group("sep_space")
-                and match.group("key")[:1] not in "\"'"):
+                and _PYTHON_BLOCK_OPENER.match(
+                    text, text.rfind("\n", 0, match.start()) + 1, match.start())):
             continue
         offenders.append(assignment.pattern)
     return offenders

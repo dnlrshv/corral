@@ -310,6 +310,9 @@ class Service:
                 # dispatch is simply in flight; state from an earlier generation is not its own.
                 if launcher == "alive":
                     continue
+                # Only a launcher proven dead can no longer adopt the reservation. An
+                # unobservable one (no recorded identity, or no birth token) is reported
+                # uncertain but keeps its capacity; the event converges once a claim appears.
                 if launcher == "dead":
                     self.store.release_reservation(task_id, event_id)
                 if cancelled and launcher == "dead":

@@ -7,8 +7,8 @@ import time
 import uuid
 from pathlib import Path
 
-from . import (completion, containment, continuation, inspection_report, native, routes, verifier,
-               workspace_contract)
+from . import (completion, containment, continuation, inspection_packet, inspection_report, native, routes,
+               verifier, workspace_contract)
 from .adapter import source_root
 from .atomic_io import write_json
 from .process import Process, boundary_for
@@ -457,13 +457,23 @@ class Controller:
 
             if group_alive:
                 raise RuntimeError("parent exited with live descendants; ownership uncertain")
+            inspection_validation = None
             if inspection_only:
-                receipt = inspection_report.validate(
-                    adapter_result, (native_evidence or {}).get("inspection_packet"),
-                    task_id=task_id, attempt=attempt, generation=generation)
-                receipt.update({"verifier_executed": False, "candidate_execution": "never-requested",
-                                "policy_ok": receipt["accepted"], "exit_code": None,
-                                "unchanged": None})
+                packet_record = (native_evidence or {}).get("inspection_packet")
+                # Re-hash the immutable controller-selected bytes after the model call.
+                # This is data-only verification; the candidate is never imported or run.
+                inspection_packet.recheck_documents(packet_record, workspace)
+                inspection_validation = inspection_report.validate(
+                    adapter_result, packet_record, task_id=task_id, attempt=attempt, generation=generation,
+                    trusted_export_id=spec.get("trusted_export_id"))
+                # The validation receipt has a closed canonical schema. Keep runtime
+                # observations on the verifier receipt copy rather than mutating it.
+                self.store.put_once(
+                    "inspection_validation", f"{task_id}:{attempt}:g{generation}", inspection_validation)
+                receipt = {**inspection_validation, "verifier_executed": False,
+                           "candidate_execution": "never-requested",
+                           "policy_ok": inspection_validation["accepted"], "exit_code": None,
+                           "unchanged": None}
                 record = verifier.Receipt(payload=receipt)
             else:
                 record = verifier.execute(policy, workspace, candidate_paths=spec["candidate_paths"],
@@ -525,6 +535,7 @@ class Controller:
                       "selection": spec["selection"], "observed": observed or "unknown",
                       "generation": generation,
                       "native": native_evidence,
+                      "inspection_validation": inspection_validation,
                       "adapter_errors": (adapter_result or {}).get("errors") or [],
                       "adapter_warnings": (adapter_result or {}).get("warnings") or [],
                       "amendment_pending": amendment_pending,

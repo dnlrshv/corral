@@ -58,3 +58,15 @@ def test_rejects_unversioned_prose_only_verdict():
     receipt = validate(result, packet, task_id="task-1", attempt="attempt-1", generation=1)
     assert receipt["accepted"] is False
     assert "inspection verdict must be PASS or CHANGES_REQUIRED" in receipt["errors"]
+
+
+def test_rejects_trusted_export_not_selected_by_controller():
+    result, packet = _records()
+    packet["provenance"]["trusted_export_id"] = "e" * 64
+    packet["provenance"]["digest"] = digest({key: value for key, value in packet["provenance"].items()
+                                             if key not in ("digest", "documents_digest")})
+    result["structured"]["provenance"] = packet["provenance"]
+    receipt = validate(result, packet, task_id="task-1", attempt="attempt-1", generation=1,
+                       trusted_export_id="f" * 64)
+    assert receipt["accepted"] is False
+    assert "inspection trusted export does not match the controller request" in receipt["errors"]

@@ -1,3 +1,4 @@
+import hashlib
 import io
 import json
 import stat
@@ -437,6 +438,11 @@ def test_controller_adapter_denies_candidate_execution_and_workspace_access(tmp_
     assert run["result"]["structured"]["verdict"] == "CHANGES_REQUIRED"
     assert run["result"]["receipt"]["accepted"] is True
     assert run["result"]["receipt"]["verifier_executed"] is False
+    validation = run["result"]["inspection_validation"]
+    assert validation["accepted"] is True
+    assert validation["verdict"] == "CHANGES_REQUIRED"
+    key = f"{task}:{run['state']['attempt']}:g1"
+    assert controller.store.get("inspection_validation", key) == validation
     structured = run["result"]["structured"]
     assert structured["workspace_read"] in ("EPERM", "EACCES")
     assert structured["capability"]["execution_request_detected"] is True
@@ -446,3 +452,18 @@ def test_controller_adapter_denies_candidate_execution_and_workspace_access(tmp_
     assert run["result"]["observed"].get("effort") is None
     assert run["result"]["usage"]["measured_fields"] == {
         "input_tokens": 9, "output_tokens": 4, "total_tokens": 13}
+
+
+def test_post_inference_recheck_refuses_mutated_packet_document(tmp_path):
+    from corral.execution.inspection_packet import recheck_documents
+
+    workspace = tmp_path / "candidate"
+    workspace.mkdir()
+    source = workspace / "candidate.py"
+    source.write_text("answer = 1\n")
+    record = {"documents": [{"path": "candidate.py", "sha256": hashlib.sha256(
+        source.read_bytes()).hexdigest(), "bytes": source.stat().st_size}]}
+    recheck_documents(record, workspace)
+    source.write_text("answer = 2\n")
+    with pytest.raises(PermissionError, match="changed after inference"):
+        recheck_documents(record, workspace)

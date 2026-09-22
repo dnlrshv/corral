@@ -14,7 +14,8 @@ VERDICTS = frozenset({"PASS", "CHANGES_REQUIRED"})
 
 
 def validate(adapter_result: dict[str, Any] | None, packet_record: dict[str, Any] | None, *,
-             task_id: str, attempt: str, generation: int) -> dict[str, Any]:
+             task_id: str, attempt: str, generation: int,
+             trusted_export_id: str | None = None) -> dict[str, Any]:
     """Validate report content against the controller-created packet record.
 
     This validates data only.  It does not execute or import candidate content and is
@@ -62,9 +63,9 @@ def validate(adapter_result: dict[str, Any] | None, packet_record: dict[str, Any
             errors.append(f"inspection {key} is not bound to the controller invocation")
     if adapter.get("task") != task_id or adapter.get("attempt") != attempt:
         errors.append("inspection adapter result is not bound to the controller invocation")
-    trusted_export_id = provenance.get("trusted_export_id") if isinstance(provenance, dict) else None
-    if trusted_export_id is not None and packet.get("provenance", {}).get("trusted_export_id") != trusted_export_id:
-        errors.append("inspection trusted export is not bound to the controller packet")
+    packet_export_id = provenance.get("trusted_export_id") if isinstance(provenance, dict) else None
+    if packet_export_id != trusted_export_id:
+        errors.append("inspection trusted export does not match the controller request")
 
     capability = packet.get("capability")
     if not isinstance(capability, dict) or structured.get("capability") != capability:

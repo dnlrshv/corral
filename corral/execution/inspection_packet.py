@@ -188,6 +188,36 @@ def build(spec: dict, context: dict, workspace: Path | str,
     return packet
 
 
+def recheck_documents(packet_record: dict[str, Any] | None, workspace: Path | str) -> None:
+    """Re-hash controller-selected packet documents after inference.
+
+    The inspection harness receives only copies in its scratch directory.  This check
+    confirms the candidate bytes in the authoritative workspace did not change while
+    inference was in flight, without executing or importing them.
+    """
+    record = packet_record if isinstance(packet_record, dict) else {}
+    documents = record.get("documents")
+    if not isinstance(documents, list) or not documents:
+        raise PermissionError("inspection packet document bindings are unavailable")
+    root = Path(workspace).resolve()
+    seen: set[str] = set()
+    for item in documents:
+        if not isinstance(item, dict):
+            raise PermissionError("inspection packet document binding is invalid")
+        name, expected, byte_count = item.get("path"), item.get("sha256"), item.get("bytes")
+        if (not isinstance(name, str) or name in seen
+                or not isinstance(expected, str) or not re.fullmatch(r"[0-9a-f]{64}", expected)
+                or isinstance(byte_count, bool) or not isinstance(byte_count, int) or byte_count < 0):
+            raise PermissionError("inspection packet document binding is invalid")
+        seen.add(name)
+        path = safe_path(root, name)
+        if not path.is_file():
+            raise PermissionError(f"inspection document disappeared after inference: {name}")
+        data = path.read_bytes()
+        if len(data) != byte_count or _sha(data) != expected:
+            raise PermissionError(f"inspection document changed after inference: {name}")
+
+
 def persist(packet: dict[str, Any], scratch: Path | str) -> Path:
     """Atomically persist the packet in the one-task scratch directory."""
     directory = Path(scratch)

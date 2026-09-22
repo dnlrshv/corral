@@ -215,8 +215,13 @@ class PRCoordinator:
             row = db.execute(
                 "SELECT status FROM publication_intents WHERE intent=?", (intent,)
             ).fetchone()
-        if row and row[0] in {"pending", "ambiguous"}:
+        if row and row[0] in {"pending", "ambiguous", "absent"}:
+            # Read back before any resend: a late review is recorded as delivered, and
+            # only an attempt proven absent is sent again.
             receipt = transport.reconcile(self.pr, intent, payload)
+            if receipt.get("status") == "absent":
+                receipt = transport.advisory(
+                    self.pr, current["review_receipt"], intent, payload)
         else:
             receipt = transport.advisory(
                 self.pr, current["review_receipt"], intent, payload)

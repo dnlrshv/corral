@@ -13,8 +13,9 @@ from typing import Any
 from . import continuation
 from .controller import Controller
 from .scheduler import ready
+from .store import canonical
 
-TERMINAL = {"completed", "failed", "refused-before-launch", "uncertain"}
+TERMINAL = {"completed", "failed", "refused-before-launch", "uncertain", "cancelled"}
 
 
 class Service:
@@ -170,6 +171,50 @@ class Service:
                               {"objective": objective})
         return self.status(event_id)
 
+    def pause(self, event_id: str, amendment_id: str, paused: bool) -> dict[str, Any]:
+        event = self.store.get("service_event", event_id)
+        if not event or not event.get("task_id"):
+            raise KeyError(event_id)
+        self.controller.steer(self.token, event["task_id"], amendment_id,
+                              {"pause_dispatch": paused})
+        return self.status(event_id)
+
+    def cancel(self, event_id: str) -> dict[str, Any]:
+        event = self.store.get("service_event", event_id)
+        if not event or not event.get("task_id"):
+            raise KeyError(event_id)
+        self.controller.cancel(self.token, event["task_id"])
+        status = "cancelled" if event.get("status") in {"admitted", "task-created", "prepared"} \
+            else event.get("status")
+        self.store.replace("service_event", event_id, {**event, "status": status,
+                           "cancellation_requested": True})
+        return self.status(event_id)
+
+    def continue_event(self, event_id: str, continuation_id: str,
+                       objective: str) -> dict[str, Any]:
+        event = self.store.get("service_event", event_id)
+        if not event or not event.get("task_id"):
+            raise KeyError(event_id)
+        self.controller.continue_task(self.token, event["task_id"], continuation_id,
+                                      {"objective": objective})
+        self.store.replace("service_event", event_id, {**event, "status": "prepared"})
+        return self.status(event_id)
+
+    def _claim(self, event_id: str, now: float, runtime: dict[str, Any]) -> dict | None:
+        with self.store.transaction() as db:
+            row = db.execute("SELECT value FROM records WHERE kind='service_event' AND key=?",
+                             (event_id,)).fetchone()
+            if not row:
+                return None
+            event = json.loads(row[0])
+            if event.get("status") != "prepared":
+                return None
+            claimed = {**event, "status": "dispatching", "dispatch_started": now,
+                       "service_runtime": runtime}
+            db.execute("UPDATE records SET value=? WHERE kind='service_event' AND key=?",
+                       (canonical(claimed), event_id))
+            return claimed
+
     def _materialize_schedules(self, now: float) -> list[str]:
         created = []
         for schedule in self.schedules:
@@ -206,6 +251,8 @@ class Service:
                 if (state.get("status") == "completed" and result.get("accepted") and
                         continuation.pending_generation(self.store, event["task_id"])):
                     status = "prepared"
+                elif self.store.get("cancel", event["task_id"]):
+                    status = "cancelled"
                 elif state.get("status") == "completed":
                     status = "completed" if result.get("accepted") else "failed"
                 else:
@@ -217,9 +264,10 @@ class Service:
                 self.store.replace("service_event", event_id, {**event, "status": status,
                                    "reconciled": True, "service_runtime": runtime,
                                    "worker_identity": worker})
-            elif state.get("status") in ("running", "dispatching"):
-                continue
             elif alive(event.get("launcher_identity") or {}):
+                continue
+            elif state.get("status") in ("running", "dispatching") and alive(
+                    state.get("worker_identity") or {}):
                 continue
             else:
                 self.store.replace("service_event", event_id, {**event, "status": "uncertain",
@@ -243,7 +291,8 @@ class Service:
                                if value.get("status") == "dispatching"}
             pending = [{"id": key, "route": value["route"], "mode": value["mode"],
                         "submitted": value["submitted"], "due": 0,
-                        "cpu": value.get("cpu", 1), "memory_mb": value.get("memory_mb", 0)}
+                        "cpu": value.get("resolved_spec", {}).get("cpu", 1),
+                        "memory_mb": value.get("resolved_spec", {}).get("memory_mb", 0)}
                        for key, value in events.items()
                        if value.get("host") == host and value.get("status") == "prepared"
                        and value.get("resolved_spec", {}).get("workspace") not in busy_workspaces]
@@ -254,19 +303,19 @@ class Service:
             for event_id in ready(pending, set(), running, capacity, now):
                 if len(dispatched) >= self.max_dispatch:
                     break
-                event = self.store.get("service_event", event_id)
+                event = self._claim(event_id, now, runtime)
+                if event is None:
+                    continue
                 try:
                     if host != self.execution_host and not host_cfg.get("executor"):
                         raise PermissionError(
                             "nonlocal host requires an authenticated remote executor route")
-                    dispatch_event = {**event, "status": "dispatching", "dispatch_started": now,
-                                      "service_runtime": runtime}
-                    self.store.replace("service_event", event_id, dispatch_event)
                     from .service_dispatch import launch
                     launcher = launch(self.controller_path, self.store.path.parent,
                                       event["task_id"], host)
                     self.store.replace("service_event", event_id,
-                                       {**dispatch_event, "launcher_identity": launcher})
+                                       {**event, "launcher_identity": launcher})
+                    busy_workspaces.add(event.get("resolved_spec", {}).get("workspace"))
                 except Exception as exc:
                     self.store.replace("service_event", event_id,
                                        {**event, "status": "uncertain", "error": str(exc)})

@@ -85,6 +85,7 @@ def test_agent_cli_transfers_dirty_input_runs_once_and_returns_without_overwrite
     args = ("--config", config, "submit", "--repository", "demo", "--objective",
             "copy the selected input", "--event-id", "event-1", "--source-root", source,
             "--input", "input.txt", "--run")
+    args += ("--poll-interval", "0.05")
     first = cli("corral.execution.agent_cli", *args)
     second = cli("corral.execution.agent_cli", *args)
     assert first["event"]["status"] == second["event"]["status"] == "completed"

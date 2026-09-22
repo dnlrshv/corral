@@ -28,12 +28,28 @@ def _parser() -> argparse.ArgumentParser:
     submit.add_argument("--role")
     submit.add_argument("--profile")
     submit.add_argument("--run", action="store_true")
+    submit.add_argument("--poll-interval", type=float, default=2.0)
     status = sub.add_parser("status")
     status.add_argument("--event-id", required=True)
     amend = sub.add_parser("amend")
     amend.add_argument("--event-id", required=True)
     amend.add_argument("--amendment-id", required=True)
     amend.add_argument("--objective", required=True)
+    pause = sub.add_parser("pause")
+    pause.add_argument("--event-id", required=True)
+    pause.add_argument("--amendment-id", required=True)
+    pause.add_argument("--resume", action="store_true")
+    cancel = sub.add_parser("cancel")
+    cancel.add_argument("--event-id", required=True)
+    reconcile = sub.add_parser("reconcile")
+    reconcile.add_argument("--event-id", required=True)
+    continued = sub.add_parser("continue")
+    continued.add_argument("--event-id", required=True)
+    continued.add_argument("--continuation-id", required=True)
+    continued.add_argument("--objective", required=True)
+    wave = sub.add_parser("wave")
+    wave.add_argument("--wave-id", required=True)
+    wave.add_argument("--spec", required=True, type=Path)
     sub.add_parser("tick")
     returned = sub.add_parser("return")
     returned.add_argument("--event-id", required=True)
@@ -60,15 +76,31 @@ def main(argv: list[str] | None = None) -> int:
                 result = client.call("status", event_id=event_id)
                 status_value = result["event"]["status"]
                 if status_value in ("completed", "failed", "blocked", "uncertain",
-                                    "refused-before-launch"):
+                                    "refused-before-launch", "cancelled"):
                     break
                 client.call("tick")
-                time.sleep(0.05)
+                if args.poll_interval <= 0:
+                    raise ValueError("poll interval must be positive")
+                time.sleep(args.poll_interval)
     elif args.command == "status":
         result = client.call("status", event_id=args.event_id)
     elif args.command == "amend":
         result = client.call("amend", event_id=args.event_id,
                              amendment_id=args.amendment_id, objective=args.objective)
+    elif args.command == "pause":
+        result = client.call("pause", event_id=args.event_id,
+                             amendment_id=args.amendment_id, paused=not args.resume)
+    elif args.command == "cancel":
+        result = client.call("cancel", event_id=args.event_id)
+    elif args.command == "reconcile":
+        result = client.call("reconcile", event_id=args.event_id)
+    elif args.command == "continue":
+        result = client.call("continue", event_id=args.event_id,
+                             continuation_id=args.continuation_id, objective=args.objective)
+    elif args.command == "wave":
+        spec = json.loads(args.spec.read_text())
+        result = client.call("wave", wave_id=args.wave_id, tasks=spec["tasks"],
+                             handoffs=spec.get("handoffs"))
     elif args.command == "tick":
         result = client.call("tick")
     else:

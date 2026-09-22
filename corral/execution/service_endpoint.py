@@ -25,6 +25,25 @@ def main(argv: list[str] | None = None) -> int:
     elif action == "amend":
         result = service.amend(request["event_id"], request["amendment_id"],
                                request["objective"])
+    elif action == "pause":
+        result = service.pause(request["event_id"], request["amendment_id"],
+                               request.get("paused", True))
+    elif action == "cancel":
+        result = service.cancel(request["event_id"])
+    elif action == "continue":
+        result = service.continue_event(request["event_id"], request["continuation_id"],
+                                        request["objective"])
+    elif action == "reconcile":
+        service.tick(request.get("now"))
+        result = service.status(request["event_id"])
+    elif action == "wave":
+        from .client import Client
+        result = Client({"python": __import__("sys").executable,
+                         "controller_config": str(service.controller_path),
+                         "source": str(Path(__file__).parents[2]),
+                         "transport": "local"}).call(
+                             "run-wave", wave_id=request["wave_id"],
+                             tasks=request["tasks"], handoffs=request.get("handoffs"))
     elif action == "fetch":
         event = service.store.get("service_event", request["event_id"])
         if not event or not event.get("task_id"):

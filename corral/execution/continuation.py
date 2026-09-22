@@ -23,14 +23,14 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from . import verifier
+from . import prelaunch_refusal, routes, verifier, workspace_contract
 from .store import canonical, digest
 from .workspace import safe_path
 
 #: The only keys a continuation may bind for its own generation.
 BINDING_KEYS = ("verify", "verifier_paths", "external_verifier", "candidate_paths",
                 "result_file", "usage_file")
-TERMINAL_STATUSES = ("completed", "reconciled")
+TERMINAL_STATUSES = ("completed", "reconciled", "refused-before-launch")
 KIND = "continuation"
 RESULT_KIND = "result"
 GENERATION_RESULT_KIND = "generation_result"
@@ -176,6 +176,22 @@ def _validate_policy(controller, task_id: str, binding: dict) -> dict:
     spec = {**effective_spec(controller, task_id), **binding}
     workspace = spec["workspace"]
     host = controller.hosts.get(spec["host"]) or {}
+    selected = (spec.get("selection") or {}).get("profile") or {}
+    profile = next((item for item in controller.profiles
+                    if item.id == selected.get("id")), None)
+    route = routes.declared_routes(host).get(profile.route) if profile else None
+    if route and route.inspection_only:
+        if binding:
+            raise PermissionError(
+                "inspection continuation inherits its controller-bound packet policy; only "
+                "the objective may be amended")
+        provenance = workspace_contract.preflight(spec, workspace, store=controller.store)
+        core = {"kind": "controller-inspection-report", "script": None,
+                "verifier_root": None, "verifier_paths": [],
+                "trusted_export_id": spec.get("trusted_export_id"),
+                "profile_id": profile.id, "route": route.id,
+                "provenance_digest": provenance["digest"]}
+        return {**core, "digest": digest(core)}
     candidates = list(spec.get("candidate_paths") or ())
     declared = list(spec.get("verifier_paths") or ())
     if set(candidates) & set(declared):
@@ -238,6 +254,16 @@ def checkpoint_text(checkpoint: dict) -> str:
     """The compact checkpoint a fresh native session is given about the same aggregate task."""
     if not checkpoint:
         return ""
+    if checkpoint.get("schema") == "corral-prelaunch-refusal-checkpoint-v1":
+        return "\n".join([
+            f"Continuation of the SAME aggregate task identity: generation "
+            f"{checkpoint['generation'] + 1} follows generation {checkpoint['generation']}, "
+            "which was refused before any worker or provider process launched.",
+            "The refused attempt, claim, controller invocation record and released ownership "
+            "remain immutable. It produced no candidate result, model output or usage.",
+            "This is a fresh session after an operator-corrected preflight condition; do not "
+            "describe the refused generation as completed, accepted, resumed or retried.",
+            f"Prelaunch evidence digest: {checkpoint['digest']}"])
     prior = {key: checkpoint.get(key) for key in ("attempt", "verifier", "candidate", "usage")}
     return "\n".join([
         f"Continuation of the SAME aggregate task identity: generation "
@@ -273,6 +299,15 @@ def _schedule_atomically(store, task_id: str, continuation_id: str, record: dict
             if json.loads(row[0]) != record:
                 raise ValueError("conflicting continuation identity")
             return False
+        prior = record.get("prior") or {}
+        if prior.get("schema") == "corral-prelaunch-refusal-checkpoint-v1":
+            resource = "workspace:" + str(Path(
+                json.loads(db.execute(
+                    "SELECT value FROM records WHERE kind='request' AND key=?", (task_id,)
+                ).fetchone()[0])["workspace"]).resolve())
+            if prelaunch_refusal.prove_db(
+                    db, task_id, int(prior["generation"]), resource) != prior:
+                raise PermissionError("prelaunch refusal evidence changed before continuation")
         claims = {claimed for (claimed,) in db.execute("SELECT key FROM records WHERE kind='claim'")}
         taken = set()
         for (raw,) in db.execute("SELECT value FROM records WHERE kind=?", (KIND,)):
@@ -356,7 +391,9 @@ def schedule(controller, token, task_id: str, continuation_id: str, amendment: d
     prior = current_generation(controller.store, task_id)
     recorded = results(controller.store, task_id).get(prior)
     if recorded is None:
-        raise PermissionError(f"terminal generation {prior} has no recorded result to checkpoint")
+        checkpoint = prelaunch_refusal.prove(controller, task_id, prior, request)
+    else:
+        checkpoint = _checkpoint(task_id, prior, state, recorded)
 
     host = controller.hosts.get(request["host"]) or {}
     if host.get("executor"):
@@ -364,7 +401,6 @@ def schedule(controller, token, task_id: str, continuation_id: str, amendment: d
 
         host_cfg = controller.hosts[request["host"]]
         binding_info = binding_for(controller, task_id, host_cfg, 0)
-        checkpoint = _checkpoint(task_id, prior, state, recorded)
         record = {"task": task_id, "continuation_id": continuation_id, "generation": prior + 1,
                   "objective_digest": digest(objective), "binding": binding,
                   "binding_digest": digest(binding), "verifier_policy": {}, "prior": checkpoint,
@@ -392,7 +428,6 @@ def schedule(controller, token, task_id: str, continuation_id: str, amendment: d
                 **controller.status(token, task_id)}
 
     policy = _validate_policy(controller, task_id, binding)
-    checkpoint = _checkpoint(task_id, prior, state, recorded)
     record = {"task": task_id, "continuation_id": continuation_id, "generation": prior + 1,
               "objective_digest": digest(objective), "binding": binding,
               "binding_digest": digest(binding), "verifier_policy": policy, "prior": checkpoint}

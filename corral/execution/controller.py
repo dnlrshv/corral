@@ -7,7 +7,8 @@ import time
 import uuid
 from pathlib import Path
 
-from . import completion, containment, continuation, native, routes, verifier, workspace_contract
+from . import (completion, containment, continuation, inspection_report, native, routes, verifier,
+               workspace_contract)
 from .adapter import source_root
 from .atomic_io import write_json
 from .process import Process, boundary_for
@@ -376,23 +377,30 @@ class Controller:
         # active: nothing ran, so the workspace is released and the refusal recorded.
         launched = False
         try:
-            policy = verifier.policy(spec, workspace, host=host, worker_writable=(workspace,))
-            verifier_paths = list(policy.verifier_paths)
-            pre_verifier_manifest = verifier.bound_bundle(policy, workspace) or None
-            # Persisted so reconciliation can prove integrity after a controller restart.
-            state["verifier_bundle"] = pre_verifier_manifest
-
             selection = spec.get("selection") or {}
             declared_profile = selection.get("profile") or {}
             harness = declared_profile.get("harness")
             native_run = bool(harness) and harness != "synthetic"
-            run_env = {"CORRAL_CONTEXT_PATH": str(context_path), "CORRAL_USAGE_PATH": str(usage_path)}
-            run_cwd, seatbelt, label, native_evidence = workspace, None, None, None
-            verifier_seatbelt = verifier_evidence = None
+            profile = None
+            inspection_only = False
             if native_run:
                 profile = next((item for item in self.profiles if item.id == declared_profile.get("id")), None)
                 if profile is None:
                     raise PermissionError("native selection is not a controller-registered profile")
+                route = routes.declared_routes(host).get(profile.route)
+                inspection_only = bool(route and route.inspection_only)
+            policy = None
+            verifier_paths, pre_verifier_manifest = [], None
+            if not inspection_only:
+                policy = verifier.policy(spec, workspace, host=host, worker_writable=(workspace,))
+                verifier_paths = list(policy.verifier_paths)
+                pre_verifier_manifest = verifier.bound_bundle(policy, workspace) or None
+                # Persisted so reconciliation can prove integrity after a controller restart.
+                state["verifier_bundle"] = pre_verifier_manifest
+            run_env = {"CORRAL_CONTEXT_PATH": str(context_path), "CORRAL_USAGE_PATH": str(usage_path)}
+            run_cwd, seatbelt, label, native_evidence = workspace, None, None, None
+            verifier_seatbelt = verifier_evidence = verifier_env = None
+            if native_run:
                 # Inspection-only preparation copies the controller-bound objective and
                 # invocation identity into an immutable packet.  Persist that trusted
                 # context before the route is prepared; the worker still cannot access
@@ -402,10 +410,11 @@ class Controller:
                                           workspace=workspace, state_dir=self.store.path.parent,
                                           artifacts=self.artifacts, source_root=source_root(),
                                           task_id=continuation.scratch_id(task_id, generation),
-                                          verifier_roots=verifier_roots,
-                                          usage_path=usage_path, context_path=context_path,
+                                          verifier_roots=verifier_roots, usage_path=usage_path,
+                                          context_path=context_path,
                                           credential_values=self.provider_secrets, attempt=attempt)
-                verifier_seatbelt, verifier_evidence = prepared.verifier_profile, prepared.verifier_evidence
+                verifier_seatbelt, verifier_evidence, verifier_env = (
+                    prepared.verifier_profile, prepared.verifier_evidence, prepared.verifier_env)
                 command, run_cwd, native_evidence = prepared.command, prepared.run_cwd, prepared.evidence
                 run_env.update(prepared.env)
                 # The adapter is trusted controller-side code: it runs outside the worker boundary
@@ -448,13 +457,23 @@ class Controller:
 
             if group_alive:
                 raise RuntimeError("parent exited with live descendants; ownership uncertain")
-            record = verifier.execute(policy, workspace, candidate_paths=spec["candidate_paths"],
-                                      task=task_id, attempt=attempt,
-                                      pre_verifier_manifest=pre_verifier_manifest,
-                                      workspace_provenance=workspace_provenance,
-                                      seatbelt_profile=verifier_seatbelt,
-                                      containment_evidence=verifier_evidence)
-            receipt = record.payload
+            if inspection_only:
+                receipt = inspection_report.validate(
+                    adapter_result, (native_evidence or {}).get("inspection_packet"),
+                    task_id=task_id, attempt=attempt, generation=generation)
+                receipt.update({"verifier_executed": False, "candidate_execution": "never-requested",
+                                "policy_ok": receipt["accepted"], "exit_code": None,
+                                "unchanged": None})
+                record = verifier.Receipt(payload=receipt)
+            else:
+                record = verifier.execute(policy, workspace, candidate_paths=spec["candidate_paths"],
+                                          task=task_id, attempt=attempt,
+                                          pre_verifier_manifest=pre_verifier_manifest,
+                                          workspace_provenance=workspace_provenance,
+                                          seatbelt_profile=verifier_seatbelt,
+                                          containment_evidence=verifier_evidence,
+                                          containment_env=verifier_env)
+                receipt = record.payload
             receipt["native"] = native_evidence
             if native_evidence:
                 # Passed through verbatim: the receipt must carry the probe's honest scope
@@ -473,17 +492,18 @@ class Controller:
                 key for key in ("model", "effort", "route", "provider", "account_ref")
                 if native_run and observed and observed.get(key) is not None
                 and str(observed[key]) != str(requested_identity.get(key)))
-            accepted = (code == 0 and receipt["exit_code"] == 0 and receipt["unchanged"]
-                        and receipt["verifier_intact"] is not False and receipt["policy_ok"]
-                        and not identity_mismatch
-                        and not self.store.get("cancel", task_id))
+            accepted = (code == 0 and receipt.get("accepted") and not identity_mismatch
+                        and not self.store.get("cancel", task_id)) if inspection_only else (
+                code == 0 and receipt["exit_code"] == 0 and receipt["unchanged"]
+                and receipt["verifier_intact"] is not False and receipt["policy_ok"]
+                and not identity_mismatch and not self.store.get("cancel", task_id))
             if native_run:
                 accepted = bool(accepted and adapter_result
                                 and adapter_result.get("status") == "completed")
             current_obj = self.context(task_id).get("objective")
             amendment_pending = bool(current_obj != dispatch_objective)
 
-            if accepted:
+            if accepted and not inspection_only:
                 cand_manifest = manifest(workspace, spec.get("candidate_paths", []), workspace_provenance)
                 if cand_manifest["digest"] != receipt.get("candidate_post"):
                     # Worker mutated files after verification!

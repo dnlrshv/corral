@@ -13,8 +13,8 @@ _DENIED = {
 VERDICTS = frozenset({"PASS", "CHANGES_REQUIRED"})
 
 
-def validate(adapter_result: dict[str, Any] | None,
-             packet_record: dict[str, Any] | None) -> dict[str, Any]:
+def validate(adapter_result: dict[str, Any] | None, packet_record: dict[str, Any] | None, *,
+             task_id: str, attempt: str, generation: int) -> dict[str, Any]:
     """Validate report content against the controller-created packet record.
 
     This validates data only.  It does not execute or import candidate content and is
@@ -56,6 +56,16 @@ def validate(adapter_result: dict[str, Any] | None,
                 or provenance.get("documents_digest") != digest(documents)):
             errors.append("inspection document binding digest is invalid")
 
+    expected = {"task": task_id, "attempt": attempt, "generation": generation}
+    for key, value in expected.items():
+        if packet.get(key) != value:
+            errors.append(f"inspection {key} is not bound to the controller invocation")
+    if adapter.get("task") != task_id or adapter.get("attempt") != attempt:
+        errors.append("inspection adapter result is not bound to the controller invocation")
+    trusted_export_id = provenance.get("trusted_export_id") if isinstance(provenance, dict) else None
+    if trusted_export_id is not None and packet.get("provenance", {}).get("trusted_export_id") != trusted_export_id:
+        errors.append("inspection trusted export is not bound to the controller packet")
+
     capability = packet.get("capability")
     if not isinstance(capability, dict) or structured.get("capability") != capability:
         errors.append("inspection capability receipt does not match the controller packet")
@@ -72,6 +82,10 @@ def validate(adapter_result: dict[str, Any] | None,
         "accepted": not errors,
         "packet_digest": packet_digest,
         "candidate": provenance,
+        "task": task_id,
+        "attempt": attempt,
+        "generation": generation,
+        "trusted_export_id": trusted_export_id,
         "verdict": verdict,
         "report": report.strip(),
         "report_digest": digest({"report": report.strip()}),

@@ -79,7 +79,7 @@ def test_external_verifier_bound_to_a_controller_root_judges_the_candidate(env):
     assert receipt["verifier_bundle"]["check_candidate.py"]
     assert receipt["policy"]["deps_binding"].startswith("declared-paths+deception-scan")
     # Isolated import is asserted for controller-owned verifiers.
-    assert receipt["import_isolation"] == "PYTHONSAFEPATH; no cwd import; PYTHONPATH scrubbed"
+    assert receipt["import_isolation"] == "PYTHONSAFEPATH; controller verifier root only; no cwd import"
     # Candidate digests are retained on both sides of verification.
     assert receipt["candidate_pre"] == receipt["candidate_post"] and receipt["unchanged"] is True
     assert receipt["verifier_intact"] is True

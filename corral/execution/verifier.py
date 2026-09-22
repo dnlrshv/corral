@@ -199,7 +199,8 @@ class Receipt:
 
 def execute(policy: Policy, workspace: str | Path, *, candidate_paths: list[str], task: str,
             attempt: str, pre_verifier_manifest: dict | None, workspace_provenance: dict | None = None,
-            seatbelt_profile: str | None = None, containment_evidence: dict | None = None) -> Receipt:
+            seatbelt_profile: str | None = None, containment_evidence: dict | None = None,
+            containment_env: dict[str, str] | None = None) -> Receipt:
     """Run the bound verifier outside the worker boundary and retain pre/post digests."""
     root = Path(workspace).resolve()
     candidate_pre = manifest(root, candidate_paths, workspace_provenance)
@@ -214,7 +215,7 @@ def execute(policy: Policy, workspace: str | Path, *, candidate_paths: list[str]
             "base": candidate_pre["base"], "environment": platform.platform(),
             "observed_os_host": platform.node(), "verifier_intact": verifier_intact,
             "policy": policy.as_dict(), "verifier_bundle": bundle,
-            "import_isolation": "PYTHONSAFEPATH; no cwd import; PYTHONPATH scrubbed",
+            "import_isolation": "PYTHONSAFEPATH; controller verifier root only; no cwd import",
             "authority": "controller-configured-verifier", "exit_code": None, "policy_ok": True,
             "deception_scan": {"offenders": [], "declared": list(policy.verifier_paths)}}
     if containment_evidence is not None:
@@ -233,14 +234,25 @@ def execute(policy: Policy, workspace: str | Path, *, candidate_paths: list[str]
     if policy.kind == "external":
         # Controller-owned verifiers never import from the worker-writable cwd.
         env["PYTHONSAFEPATH"] = "1"
+        # The whole external root is pre/post digested, so a verifier may use a controller
+        # owned dependency bundle without inheriting ambient user or candidate imports.
+        env["PYTHONPATH"] = str(Path(policy.verifier_root).resolve())
     else:
         # Inline/bound verifiers legitimately import candidate modules from the workspace;
         # the hijack vectors are closed by the deception scan and the env scrub instead.
         base["import_isolation"] = "cwd-importable; deception-scanned; PYTHONPATH scrubbed"
-    for name in ("TMPDIR", "HOME"):
-        if os.environ.get(name):
-            env[name] = os.environ[name]
-    env.pop("PYTHONPATH", None)
+    if containment_env is not None:
+        for name in ("TMPDIR", "HOME"):
+            value = containment_env.get(name)
+            if not isinstance(value, str) or not Path(value).is_dir():
+                raise PermissionError("verifier containment environment is invalid")
+            env[name] = value
+    else:
+        for name in ("TMPDIR", "HOME"):
+            if os.environ.get(name):
+                env[name] = os.environ[name]
+    if policy.kind != "external":
+        env.pop("PYTHONPATH", None)
     command = containment.wrapped(seatbelt_profile, list(policy.argv)) if seatbelt_profile else list(policy.argv)
     completed = subprocess.run(command, cwd=str(root), capture_output=True, env=env)
     candidate_post = manifest(root, candidate_paths, workspace_provenance)

@@ -1,7 +1,9 @@
 """Real native verifier boundary: candidate tests keep workspace access, not publisher state."""
 from __future__ import annotations
 
+import shutil
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -22,16 +24,30 @@ def test_native_verifier_runs_candidate_check_but_cannot_read_publisher_sentinel
     env["host"]["protected_paths"].append(str(publisher))
     env["host"]["verifier_probe_sentinels"] = [str(sentinel)]
     verifier = env["verifiers"] / "verify_candidate.py"
+    import pygments
+    shutil.copytree(Path(pygments.__file__).resolve().parent, env["verifiers"] / "pygments")
+    tests = env["workspace"] / "tests"
+    tests.mkdir()
+    (tests / "test_candidate.py").write_text(
+        "import os, tempfile\nfrom pathlib import Path\n"
+        "def test_candidate_and_tempdir():\n"
+        "    namespace = {}\n"
+        "    exec(compile(Path('math_ops.py').read_text(), 'math_ops.py', 'exec'), namespace)\n"
+        "    assert namespace['add'](2, 3) == 5\n"
+        "    fd, path = tempfile.mkstemp()\n"
+        "    os.close(fd)\n"
+        "    assert Path(path).parent == Path(os.environ['TMPDIR'])\n"
+        "    Path(path).unlink()\n")
     verifier.write_text(
-        "import errno, sys\n"
+        "import errno, os, subprocess, sys\n"
         "from pathlib import Path\n"
         f"publisher = Path({str(sentinel)!r})\n"
         "try:\n    publisher.read_bytes()\nexcept OSError as error:\n"
         "    assert error.errno in (errno.EPERM, errno.EACCES), error\n"
         "else:\n    raise AssertionError('publisher credential was readable')\n"
-        "namespace = {}\nsource = Path(sys.argv[1]).read_text()\n"
-        "exec(compile(source, sys.argv[1], 'exec'), namespace)\n"
-        "assert namespace['add'](2, 3) == 5\n")
+        "assert os.environ['HOME'] == os.environ['TMPDIR']\n"
+        "completed = subprocess.run([sys.executable, '-m', 'pytest', '-q', 'tests/test_candidate.py'])\n"
+        "assert completed.returncode == 0\n")
     candidate = "def add(a, b):\n    return a + b\n"
     structured = '{"answer": 5, "changed": ["math_ops.py"]}'
     task = env["controller"].submit(

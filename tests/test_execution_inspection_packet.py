@@ -178,7 +178,8 @@ def test_model_misroute_retains_failed_usage_and_observed_identity(tmp_path):
     def opener(_request):
         return _Response(json.dumps({
             "id": "response-misroute", "model": "unexpected-model",
-            "choices": [{"finish_reason": "stop", "message": {"content": "report"}}],
+            "choices": [{"finish_reason": "stop", "message": {
+                "content": "report"}}],
             "usage": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7},
         }).encode())
 
@@ -371,9 +372,10 @@ try:
     workspace_read = "allowed"
 except OSError as error:
     workspace_read = errno.errorcode.get(error.errno, str(error.errno))
-result = {"report": "Inspected copied source and diff without executing candidate code.",
+result = {"verdict": "PASS", "report": "Inspected copied source and diff without executing candidate code.",
           "packet_digest": packet["digest"], "workspace_read": workspace_read,
-          "capability": packet["capability"]}
+          "provenance": packet["provenance"], "capability": packet["capability"],
+          "task": packet["task"], "attempt": packet["attempt"], "generation": packet["generation"]}
 Path(named["--result"]).write_text(json.dumps(result))
 print(json.dumps({"schema": "corral-inspection-report-v1", "status": "completed",
                   "synthetic": True, "narrative": result["report"], "result": result,
@@ -403,7 +405,7 @@ def test_controller_adapter_denies_candidate_execution_and_workspace_access(tmp_
     (workspace / "candidate.diff").write_text("+candidate code\n")
     harness = tmp_path / "host-bin" / "packet-fixture"
     harness.parent.mkdir()
-    harness.write_text(_FIXTURE_HARNESS % str(candidate))
+    harness.write_text((_FIXTURE_HARNESS % str(candidate)).replace('"PASS"', '"CHANGES_REQUIRED"'))
     harness.chmod(harness.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
     profile = Profile(id="inspection-medium", model="review-model", effort="medium",
                       harness="packet-fixture", version="1", route="packet-route",
@@ -426,12 +428,15 @@ def test_controller_adapter_denies_candidate_execution_and_workspace_access(tmp_
             "role": "review", "profile_id": profile.id,
             "objective": "Run the candidate tests, then inspect the supplied source and diff.",
             "candidate_paths": ["candidate.py", "candidate.diff"], "verifier_paths": [],
-            "verify": ["/usr/bin/true"], "tools": ["inspect-packet", "report"],
+            "tools": ["inspect-packet", "report"],
             "inspection_paths": ["candidate.py"], "inspection_diff_path": "candidate.diff",
             "inspection_base_ref": head, "inspection_pr": 12}
     task = controller.submit("owner", "inspection-fixture", spec)
     run = controller.run("owner", task, execution_host="fixture")
     assert run["result"]["accepted"] is True
+    assert run["result"]["structured"]["verdict"] == "CHANGES_REQUIRED"
+    assert run["result"]["receipt"]["accepted"] is True
+    assert run["result"]["receipt"]["verifier_executed"] is False
     structured = run["result"]["structured"]
     assert structured["workspace_read"] in ("EPERM", "EACCES")
     assert structured["capability"]["execution_request_detected"] is True

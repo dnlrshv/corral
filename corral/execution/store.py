@@ -5,17 +5,19 @@ import os
 from pathlib import Path
 import re
 import sqlite3
+import subprocess
 import time
 import uuid
 from contextlib import contextmanager
 
 
 
-def lease_holder_alive(pid) -> bool:
+def lease_holder_alive(pid, acquired_at: float | None = None) -> bool:
     """Whether a lease's local holder process still exists.
 
-    PID reuse can make a dead holder look alive, which fails closed; a pid that can
-    name no process holds nothing.
+    A pid that names no process holds nothing, and neither does a process that
+    started after the lease was acquired: its pid was reused. An unobservable start
+    time fails closed.
     """
     if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
         return False
@@ -24,8 +26,25 @@ def lease_holder_alive(pid) -> bool:
     except ProcessLookupError:
         return False
     except OSError:
+        pass  # The process exists but belongs to another user.
+    if acquired_at is None:
         return True
-    return True
+    elapsed = _process_elapsed_seconds(pid)
+    # ``ps`` reports whole seconds; allow that rounding before calling the pid reused.
+    return elapsed is None or elapsed + 2 >= time.time() - acquired_at
+
+
+def _process_elapsed_seconds(pid: int) -> int | None:
+    try:
+        raw = subprocess.run(["ps", "-o", "etime=", "-p", str(pid)], capture_output=True,
+                             text=True, timeout=10, check=True).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+    match = re.fullmatch(r"(?:(?:(\d+)-)?(\d+):)?(\d+):(\d+)", raw)
+    if not match:
+        return None
+    days, hours, minutes, seconds = (int(part or 0) for part in match.groups())
+    return ((days * 24 + hours) * 60 + minutes) * 60 + seconds
 
 
 def canonical(value):
@@ -380,8 +399,10 @@ class Store:
             ).fetchone()
             if pending:
                 raise PermissionError(f"cannot recover lease for '{resource}': unresolved intent '{pending[0]}' exists")
-            lease = db.execute("SELECT holder_pid, status FROM leases WHERE resource=?", (resource,)).fetchone()
-            if lease and lease[1] in ("in_flight", "active") and lease_holder_alive(lease[0]):
+            lease = db.execute(
+                "SELECT holder_pid, status, acquired_at FROM leases WHERE resource=?", (resource,)
+            ).fetchone()
+            if lease and lease[1] in ("in_flight", "active") and lease_holder_alive(lease[0], lease[2]):
                 raise PermissionError(f"cannot recover lease for '{resource}': holder process {lease[0]} is alive")
             db.execute("DELETE FROM leases WHERE resource=?", (resource,))
             return True

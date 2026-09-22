@@ -136,10 +136,11 @@ def record_absence(
         ).fetchone():
             raise PermissionError("a delivery receipt forbids an absence outcome")
         lease = db.execute(
-            "SELECT attempt_id,status,holder_pid FROM leases WHERE resource=?", (resource,)
+            "SELECT attempt_id,status,holder_pid,acquired_at FROM leases WHERE resource=?",
+            (resource,),
         ).fetchone()
         if (lease and lease[0] == attempt_id and lease[1] in ("in_flight", "active")
-                and lease_holder_alive(lease[2])):
+                and lease_holder_alive(lease[2], lease[3])):
             raise PermissionError("publication attempt holder is still alive")
         db.execute(
             "UPDATE publication_intents SET status='absent',updated_at=? WHERE intent=?",

@@ -447,7 +447,7 @@ class GitHubAdvisoryTransport:
                 (intent,),
             ).fetchone()
             lease = db.execute(
-                "SELECT attempt_id,status,holder_pid FROM leases WHERE resource=?",
+                "SELECT attempt_id,status,holder_pid,acquired_at FROM leases WHERE resource=?",
                 (resource,),
             ).fetchone()
         attempt = {"status": status, "attempt_id": attempt_id, "updated_at": updated_at}
@@ -458,7 +458,8 @@ class GitHubAdvisoryTransport:
         if status == "pending" and not attempt_id:
             return "attempt-identity-missing"
         if (status == "pending" and lease and lease[0] == attempt_id
-                and lease[1] in ("in_flight", "active") and lease_holder_alive(lease[2])):
+                and lease[1] in ("in_flight", "active")
+                and lease_holder_alive(lease[2], lease[3])):
             return "attempt-in-flight"
         if time.time() - updated_at < self.absence_quiet_seconds:
             return "quiet-period"

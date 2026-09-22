@@ -187,3 +187,18 @@ def test_migrated_ambiguous_intent_without_attempt_identity_can_settle(tmp_path)
     assert store.recover_lease_operator(RESOURCE, authorized_by="operator") is True
     transport.advisory(PR, "candidate", intent, payload)
     assert len(http.posts) == 1
+
+
+def test_reused_holder_pid_does_not_keep_a_crashed_attempt_in_flight(tmp_path):
+    store, http, transport, intent, payload = environment(tmp_path)
+    transport.absence_quiet_seconds = 0
+    assert store.acquire_lease(RESOURCE, "corral", HEAD, os.getpid(), "crashed")[0]
+    store.record_intent_pending(intent, RESOURCE, "corral", 1, HEAD, payload["base"], payload,
+                                attempt_id="crashed")
+    # The lease predates this live process by far: its pid was reused after the crash.
+    with store.transaction() as db:
+        db.execute("UPDATE leases SET acquired_at=acquired_at-? WHERE resource=?",
+                   (10 ** 8, RESOURCE))
+    assert transport.reconcile(PR, intent, payload)["status"] == "absent"
+    transport.advisory(PR, "candidate", intent, payload)
+    assert len(http.posts) == 1

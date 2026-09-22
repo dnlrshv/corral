@@ -154,6 +154,7 @@ def test_cli_loads_private_route_secret_and_forwards_only_allowlisted_value(tmp_
     """A detached CLI worker gets the configured route secret, never broad process env."""
     import os
     import subprocess
+    from corral.execution import containment
     from corral.execution.store import Store
 
     workspace = tmp_path / "workspace"
@@ -215,9 +216,23 @@ def test_cli_loads_private_route_secret_and_forwards_only_allowlisted_value(tmp_
                                                        "tools": ["read", "edit", "shell", "test"]}}),
                             text=True, capture_output=True, check=True, env=env)
     task = json.loads(submit.stdout)["task"]
-    subprocess.run([sys.executable, "-m", "corral.execution.cli", "--config", str(config_path),
-                    "--execute", task], text=True, capture_output=True, check=True, env=env)
-    result = Store(tmp_path / "state" / "controller.sqlite").get("result", task)
+    executed = subprocess.run(
+        [sys.executable, "-m", "corral.execution.cli", "--config", str(config_path),
+         "--execute", task], text=True, capture_output=True, check=False, env=env)
+    store = Store(tmp_path / "state" / "controller.sqlite")
+    if containment.sandbox_exec() is None:
+        # The native boundary is intentionally unsupported on this platform.
+        # Check the real CLI's refusal instead of expecting an uncontained run.
+        assert executed.returncode != 0
+        assert "worker containment could not be demonstrated" in executed.stderr
+        state = store.get("state", task)
+        assert state["status"] == "refused-before-launch"
+        assert state.get("pid") is None
+        assert store.get("result", task) is None
+        assert (workspace / "result.py").read_text() == "value = 'before'\n"
+        return
+    assert executed.returncode == 0, executed.stderr
+    result = store.get("result", task)
     assert result["accepted"] is True
     assert result["native"]["credential_env_present"] == ["ROUTE_SECRET"]
     assert result["structured"] is not None

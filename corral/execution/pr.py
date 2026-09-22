@@ -8,6 +8,7 @@ from .advisory import (
     validate_candidate_and_pr,
 )
 from .profiles import resolve
+from .publication_validation import verify_approval
 from .store import canonical, digest
 
 
@@ -221,9 +222,10 @@ class PRLifecycle:
         )
 
         if getattr(self.github, "transport_name", "synthetic_comment") != "synthetic_comment":
-            approval = self.store.get("advisory_approval", intent)
-            if not approval or not approval.get("authorized"):
-                raise PermissionError("unauthorized advisory intent")
+            # A real transport publishes only an intent whose stored approval binds this
+            # exact payload, owner epoch, publisher and live policy; check it before any
+            # intent is recorded so a refused approval leaves nothing unresolved.
+            verify_approval(self.github, pr, intent, full_payload)
 
         self.store.owned_operation(
             "pr:" + pr, owner, epoch, "advisory_intent", intent,
@@ -350,8 +352,10 @@ class PRLifecycle:
                         "SELECT 1 FROM records WHERE kind='repair_complete' AND key=?", (key,)).fetchone():
                     return {"state": "uncertain", "new_owner": None, "reason": "repair writer unresolved"}
             for key, raw in db.execute("SELECT key,value FROM records WHERE kind='advisory_intent'").fetchall():
+                # A delivered receipt or an authenticated proof of absence settles the intent.
                 if json.loads(raw)["pr"] == pr and not db.execute(
-                        "SELECT 1 FROM records WHERE kind='advisory_receipt' AND key=?", (key,)).fetchone():
+                        "SELECT 1 FROM records WHERE kind='advisory_receipt' AND key=?", (key,)).fetchone() and not db.execute(
+                        "SELECT 1 FROM publication_intents WHERE intent=? AND status='absent'", (key,)).fetchone():
                     return {"state": "uncertain", "new_owner": None, "reason": "advisory publication intent unresolved"}
             # Check common cohort leases and intents
             lease_row = db.execute("SELECT status FROM leases WHERE resource=?", ("pr:" + pr,)).fetchone()

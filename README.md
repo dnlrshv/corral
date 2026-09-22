@@ -192,6 +192,9 @@ settlement.
 
 GitHub advisory publication is a separate trusted transport with candidate-bound
 authorization, ownership fencing, authenticated receipt readback and duplicate
-prevention. Repository policy sources and runner declarations are explicit
+prevention. A POST with an unknown outcome stays unresolved until readback
+finds the review, or proves it absent after a quiet period and repeated
+consistent readbacks of the unchanged candidate; only then is the same intent
+sent again. Repository policy sources and runner declarations are explicit
 `policy_inputs`; the core has no repository-specific filename or host defaults
 for policy capture. Advisory comments confer no merge authority.

@@ -126,6 +126,17 @@ def redact_text(text: str, *, marker: str = "[REDACTED]") -> str:
     return text
 
 
+def redact_nested_text(value: Any, *, marker: str = "[REDACTED]") -> Any:
+    """Redact every string inside diagnostic lists/dicts, keeping keys and structure."""
+    if isinstance(value, str):
+        return redact_text(value, marker=marker)
+    if isinstance(value, list):
+        return [redact_nested_text(item, marker=marker) for item in value]
+    if isinstance(value, dict):
+        return {key: redact_nested_text(item, marker=marker) for key, item in value.items()}
+    return value
+
+
 def check_outbound_safe(text: str) -> list[str]:
     """Check text against outbound credential patterns, exempting numeric token counters."""
     offenders = []

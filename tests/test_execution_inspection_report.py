@@ -15,7 +15,7 @@ def _records():
     packet = {"digest": "c" * 64, "provenance": provenance, "capability": capability,
               "documents": documents}
     result = {"schema": "corral-adapter-result-v1", "status": "completed",
-              "structured": {"report": "One grounded finding.",
+              "structured": {"verdict": "PASS", "report": "One grounded finding.",
                              "packet_digest": packet["digest"],
                              "provenance": provenance, "capability": capability}}
     return result, packet
@@ -47,3 +47,12 @@ def test_rejects_empty_or_failed_adapter_result():
     assert receipt["accepted"] is False
     assert "adapter did not report completion" in receipt["errors"]
     assert "inspection report is empty" in receipt["errors"]
+
+
+def test_rejects_unversioned_prose_only_verdict():
+    result, packet = _records()
+    result["structured"].pop("verdict")
+    result["structured"]["report"] = "PASS: looks good"
+    receipt = validate(result, packet)
+    assert receipt["accepted"] is False
+    assert "inspection verdict must be PASS or CHANGES_REQUIRED" in receipt["errors"]

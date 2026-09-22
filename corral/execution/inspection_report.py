@@ -10,6 +10,7 @@ _DENIED = {
     "candidate-code-execution", "shell", "tests", "imports", "build-hooks",
     "package-commands",
 }
+VERDICTS = frozenset({"PASS", "CHANGES_REQUIRED"})
 
 
 def validate(adapter_result: dict[str, Any] | None,
@@ -35,6 +36,9 @@ def validate(adapter_result: dict[str, Any] | None,
     if not isinstance(report, str) or not report.strip():
         errors.append("inspection report is empty")
         report = ""
+    verdict = structured.get("verdict")
+    if verdict not in VERDICTS:
+        errors.append("inspection verdict must be PASS or CHANGES_REQUIRED")
     packet_digest = packet.get("digest")
     if not isinstance(packet_digest, str) or structured.get("packet_digest") != packet_digest:
         errors.append("inspection result is not bound to the controller packet")
@@ -68,6 +72,7 @@ def validate(adapter_result: dict[str, Any] | None,
         "accepted": not errors,
         "packet_digest": packet_digest,
         "candidate": provenance,
+        "verdict": verdict,
         "report": report.strip(),
         "report_digest": digest({"report": report.strip()}),
         "errors": errors,

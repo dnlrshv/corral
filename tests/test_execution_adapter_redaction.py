@@ -20,7 +20,8 @@ FAKE = "NotARealSecretValue"
 
 def test_nested_diagnostics_keep_structure_and_counters():
     detail = {"exit_code": 1, "stderr_tail": f"auth failed: api_key={FAKE}",
-              "turn_usages": [{"input_tokens": 12}], "notes": [f"Bearer {FAKE}", None]}
+              "turn_usages": [{"input_tokens": 12}], "notes": (f"Bearer {FAKE}", None),
+              f"password={FAKE}": "echoed as a key"}
     redacted = redact_nested_text(detail)
     assert FAKE not in json.dumps(redacted)
     assert redacted["exit_code"] == 1 and redacted["turn_usages"] == [{"input_tokens": 12}]

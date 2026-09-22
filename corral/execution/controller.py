@@ -18,11 +18,13 @@ from .workspace import apply_manifest, manifest, safe_path
 
 
 class Controller:
-    def __init__(self, state, token, hosts, *, default_host, profiles=()):
+    def __init__(self, state, token, hosts, *, default_host, profiles=(), secret_env=None):
         self.store = Store(Path(state) / "controller.sqlite")
         self.artifacts = Path(state) / "artifacts"
         self.artifacts.mkdir(parents=True, exist_ok=True)
         self.token, self.hosts, self.default_host = token, hosts, default_host
+        from .secret_env import load
+        self.provider_secrets = load(secret_env)
         registered = {p.id: (p if isinstance(p, Profile) else Profile(**p)) for p in STANDARD_NATIVE_PROFILES}
         for p in profiles:
             prof = p if isinstance(p, Profile) else Profile(**p)
@@ -400,7 +402,8 @@ class Controller:
                                           artifacts=self.artifacts, source_root=source_root(),
                                           task_id=continuation.scratch_id(task_id, generation),
                                           verifier_roots=verifier_roots,
-                                          usage_path=usage_path, context_path=context_path)
+                                          usage_path=usage_path, context_path=context_path,
+                                          credential_values=self.provider_secrets)
                 command, run_cwd, native_evidence = prepared.command, prepared.run_cwd, prepared.evidence
                 run_env.update(prepared.env)
                 # The adapter is trusted controller-side code: it runs outside the worker boundary

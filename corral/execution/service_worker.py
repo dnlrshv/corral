@@ -16,7 +16,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     raw = json.loads(args.config.read_text())
     controller = Controller(raw["state"], raw["token"], raw["hosts"],
-                            default_host=raw["default_host"], profiles=raw.get("profiles", []))
+                            default_host=raw["default_host"], profiles=raw.get("profiles", []),
+                            secret_env=raw.get("secret_env"))
     result = controller.run(raw["token"], args.task, execution_host=args.host)
     print(json.dumps({"task": args.task, "state": result.get("state")}, sort_keys=True))
     return 0

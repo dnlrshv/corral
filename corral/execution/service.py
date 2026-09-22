@@ -30,7 +30,8 @@ class Service:
         raw = json.loads(controller_path.read_text())
         self.controller = Controller(raw["state"], raw["token"], raw["hosts"],
                                      default_host=raw["default_host"],
-                                     profiles=raw.get("profiles", []))
+                                     profiles=raw.get("profiles", []),
+                                     secret_env=raw.get("secret_env"))
         self.token = raw["token"]
         self.execution_host = raw.get("execution_host", raw["default_host"])
         self.repositories = self.config.get("repositories", {})

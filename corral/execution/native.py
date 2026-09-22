@@ -10,7 +10,6 @@ preparation fails closed otherwise.
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -105,7 +104,8 @@ def build_boundary(*, workspace: str, state_dir: Path, artifacts: Path, task_dir
 
 def prepare(*, spec: dict, host: dict, profile, task_dir: Path, workspace: str, state_dir: Path,
             artifacts: Path, source_root: Path, task_id: str, verifier_roots: tuple[str, ...],
-            usage_path: Path, context_path: Path) -> Prepared:
+            usage_path: Path, context_path: Path,
+            credential_values: dict[str, str] | None = None) -> Prepared:
     """Resolve the trusted route, demonstrate containment and build the adapter command."""
     declared = routes.declared_routes(host)
     route = declared.get(profile.route)
@@ -154,11 +154,9 @@ def prepare(*, spec: dict, host: dict, profile, task_dir: Path, workspace: str, 
     (task_dir / "launch-plan.json").write_text(json.dumps(plan_dict, indent=2, sort_keys=True))
     command = build_adapter_command(task_dir=task_dir, workspace=workspace, source=source_root)
     env = {"CORRAL_CONTEXT_PATH": str(context_path), "CORRAL_USAGE_PATH": str(usage_path)}
-    for name in plan.credential_env:
-        value = os.environ.get(name)
-        if value:
-            # Value is forwarded in-process only; the name is the only part ever recorded.
-            env[name] = value
+    from .secret_env import select
+    # Values are forwarded in-process only; only names are recorded in evidence.
+    env.update(select(plan.credential_env, credential_values))
     evidence = {**plan.evidence, "binary": plan.binary,
                 "adapter_command": command, "adapter_cwd": str(task_dir),
                 "containment": {"passed": bool(demonstration.get("passed")),

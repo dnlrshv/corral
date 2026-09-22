@@ -2,8 +2,19 @@ import json
 import stat
 from pathlib import Path
 
+import pytest
+
+from corral.execution import containment
+
 from . import native_support as ns
 
+requires_sandbox = pytest.mark.skipif(
+    containment.sandbox_exec() is None,
+    reason="native worker containment requires macOS sandbox-exec",
+)
+
+
+@requires_sandbox
 def test_telemetry_highlevel_qwen_codex(tmp_path):
     env = ns.native_env(tmp_path, envelope="codex-jsonl-v1")
     controller = env["controller"]
@@ -49,6 +60,7 @@ sys.stdout.flush()
     run2 = controller.run("owner", task, execution_host=ns.FAKE_HOST)
     assert run2["result"] == run["result"]
 
+@requires_sandbox
 def test_telemetry_highlevel_gemini_agy(tmp_path):
     env = ns.native_env(tmp_path, envelope="agy-json-v1")
     controller = env["controller"]
@@ -95,6 +107,7 @@ print(json.dumps(envelope))
     assert usage["measured_fields"]["output_tokens"] == 200
     assert usage["measured_fields"]["thinking_tokens"] == 50
 
+@requires_sandbox
 def test_telemetry_highlevel_failed_attempt_and_repair(tmp_path):
     env = ns.native_env(tmp_path, envelope="agy-json-v1")
     controller = env["controller"]
@@ -170,6 +183,7 @@ else:
     run3 = controller.run("owner", task, execution_host=ns.FAKE_HOST)
     assert run3["result"] == run2["result"]
 
+@requires_sandbox
 def test_telemetry_outage_buffering(tmp_path):
     env = ns.native_env(tmp_path, envelope="agy-json-v1")
     controller = env["controller"]
@@ -226,7 +240,6 @@ def test_resume_reject_through_controller_public_api(tmp_path):
     spec["resume"] = True
 
     # Should be rejected at submit or launch
-    import pytest
     with pytest.raises(PermissionError) as exc:
         controller.submit("owner", "telemetry-resume", spec)
     assert "native session resume is unsupported" in str(exc.value)

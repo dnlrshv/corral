@@ -18,8 +18,9 @@ from corral.execution.usage import Spool, summarize
 def setup(tmp_path):
     repo = tmp_path / "repo"
     subprocess.run(["git", "init", "-q", str(repo)], check=True)
-    subprocess.run(["git", "-c", "user.name=Fixture", "-c", "user.email=f@example.invalid",
-                    "commit", "--allow-empty", "-qm", "fixture"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "Fixture"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "f@example.invalid"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "--allow-empty", "-qm", "fixture"], cwd=repo, check=True)
     controller = Controller(tmp_path / "state", "owner", {"fixture": {"routes": ["fixture"],
         "harnesses": ["synthetic"], "cpu": 4, "memory_mb": 1024,
         "reconciliation_delivery_reader": "controller-records-only"}}, default_host="fixture", profiles=fixture_profiles())

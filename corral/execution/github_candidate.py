@@ -85,18 +85,20 @@ class GitObjects:
             raise RuntimeError("trusted Git object operation failed")
         return result.stdout
 
-    def fetch_pr(self, number: int, expected_head: str, base: str, base_ref: str) -> None:
+    def fetch_pr(self, number: int, expected_head: str, base: str, base_ref: str) -> str:
         head_target = f"refs/corral/pr-{number}/head"
         base_target = f"refs/corral/pr-{number}/base"
         self.run("fetch", "--no-tags", "--force", "--", self.remote_url,
                  f"+refs/pull/{number}/head:{head_target}",
                  f"+refs/heads/{base_ref}:{base_target}")
         fetched_head = self.run("rev-parse", head_target).decode().strip()
-        fetched_base = self.run("rev-parse", base_target).decode().strip()
-        if fetched_head != expected_head or fetched_base != base:
-            raise PermissionError("authenticated GitHub identity differs from fetched Git objects")
+        current_base = self.run("rev-parse", base_target).decode().strip()
+        if fetched_head != expected_head:
+            raise PermissionError("authenticated GitHub head differs from fetched Git objects")
         for oid in (expected_head, base):
             self.run("cat-file", "-e", oid + "^{commit}")
+        self.run("merge-base", "--is-ancestor", base, current_base)
+        return current_base
 
     def _blob(self, revision: str, name: str) -> tuple[str, str, bytes]:
         raw = self.run("ls-tree", "-z", revision, "--", name)
@@ -182,7 +184,8 @@ def prepare(state: Path, repository: str, number: int, policy_id: str,
                              "development_file_remote") is True,
                          credential_helper=repository_config.get("github", {}).get(
                              "git_credential_helper"))
-    objects.fetch_pr(number, candidate["head"], candidate["base"], candidate["base_ref"])
+    base_ref_tip = objects.fetch_pr(
+        number, candidate["head"], candidate["base"], candidate["base_ref"])
     policy_digest, related = _policy_binding(
         objects, policy_id, policy, candidate["base"], candidate["base_ref"])
     changed = objects.changed_paths(candidate["base"], candidate["head"])
@@ -192,6 +195,7 @@ def prepare(state: Path, repository: str, number: int, policy_id: str,
         raise PermissionError("candidate collides with the reserved review metadata path")
     binding = {key: candidate[key] for key in (
         "repository", "pr_number", "head", "base", "auth_mode")}
+    binding["base_ref_tip"] = base_ref_tip
     binding.update(policy_id=policy_id, policy_digest=policy_digest)
     directory_id = digest(binding)
     root = state.resolve() / "candidate-snapshots" / directory_id

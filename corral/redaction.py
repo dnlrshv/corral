@@ -154,6 +154,36 @@ def _markdown_credential_token_prose(match: re.Match[str], text: str, source_nam
             and bool(re.match(r"\s+[A-Za-z]", suffix)))
 
 
+def _github_workflow_expression(value: str, key: str, source_name: str | None) -> bool:
+    """Allow only non-literal GitHub Actions references in workflow source.
+
+    Workflow documents routinely bind credential-named inputs to GitHub
+    expression syntax. The expression is a reference that GitHub resolves at
+    runtime, not a credential value included in the inspected document.
+    """
+    if not (source_name and source_name.startswith(".github/workflows/")):
+        return False
+    if not source_name.lower().endswith((".yml", ".yaml")):
+        return False
+    if re.fullmatch(r"\$\{\{\s*[A-Za-z_][A-Za-z0-9_.\-\s]*\s*\}\}", value):
+        return True
+    return key.lower() == "token" and value.lower() in {"read", "write", "none", "inherit"}
+
+
+def _github_workflow_script_reference(value: str, source_name: str | None,
+                                      separator: str) -> bool:
+    """Recognize a non-literal Python lookup embedded in a workflow ``run`` block."""
+    if separator != "=" or not (source_name and source_name.startswith(".github/workflows/")):
+        return False
+    if not source_name.lower().endswith((".yml", ".yaml")):
+        return False
+    # A run-block expression may name credential fields but has no credential value:
+    # ``token = auth.get('tokens', {}).get('access_token', '')``.  Keep operators,
+    # shell expansion and literal assignments outside this narrow source form.
+    return (bool(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.'\",(){}\[\], \t]*", value))
+            and "." in value and "(" in value and value.endswith(")"))
+
+
 def check_source_text_safe(text: str, *, source_name: str | None = None) -> list[str]:
     """Find credentials while allowing expressions only in recognized source files.
 
@@ -190,6 +220,10 @@ def check_source_text_safe(text: str, *, source_name: str | None = None) -> list
             continue
         if _markdown_credential_token_prose(match, text, source_name):
             continue
+        if _github_workflow_expression(line_value, key, source_name):
+            continue
+        if _github_workflow_script_reference(line_value, source_name, match.group("sep")):
+            continue
         quoted = raw.startswith(("\"", "'")) and raw.endswith(("\"", "'"))
         # Unquoted calls, attributes and container lookups are source expressions. A quoted
         # value is data and remains subject to the credential-assignment boundary.
@@ -198,6 +232,16 @@ def check_source_text_safe(text: str, *, source_name: str | None = None) -> list
         # A plain identifier on the right side of Python-style assignment is a reference.
         # YAML/JSON colon assignments remain data, as do literals containing digits/dashes.
         if (python_source and not quoted and match.group("sep") == "="
+                and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", raw)):
+            continue
+        # Fencing tokens are integer concurrency epochs, not bearer credentials.
+        # Keep this source-only exception literal and typed: a quoted value remains
+        # a credential-shaped data assignment and is rejected below.
+        if python_source and key.lower() == "fencing_token" and _NUMERIC_VALUE.match(value):
+            continue
+        # In Python source, a colon followed by an unquoted identifier is a type
+        # annotation or mapping reference. Quoted/literal mapping values stay blocked.
+        if (python_source and not quoted and match.group("sep") == ":"
                 and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", raw)):
             continue
         if python_source and not quoted and value in type_names:

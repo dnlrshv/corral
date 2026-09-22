@@ -6,6 +6,7 @@ from typing import Any
 from .advisory import compute_advisory_intent
 from .github_support import compute_canonical_wire_hash, parse_pr_identity
 from .policy import fetch_policy_snapshot
+from .policy_inputs import normalize as normalize_policy_inputs
 
 
 def validate_payload(
@@ -110,8 +111,9 @@ def verify_approval(
         payload["repo"], parse_pr_identity(pr)[1], payload["head"], payload["base"]
     )
     base_ref = (pull.get("base") or {}).get("ref")
-    if base_ref != "main":
-        raise ValueError("real advisory publication requires base ref main")
+    configured_ref = normalize_policy_inputs(transport.policy_inputs)["base_ref"]
+    if not configured_ref or base_ref != configured_ref:
+        raise PermissionError("remote base branch differs from trusted repository policy")
     snapshot = fetch_policy_snapshot(
         payload["repo"],
         payload["base"],

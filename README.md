@@ -134,7 +134,7 @@ Near-term roadmap: stabilize configuration and registry schemas, expand portable
 
 Apache-2.0. See [`LICENSE`](LICENSE).
 
-### Optional managed execution (offline development)
+### Optional managed execution
 
 `python -m corral.execution.demo /tmp/corral-example` runs one synthetic worker
 through explicit profile resolution, durable observation, and an exact-candidate
@@ -166,8 +166,22 @@ re-derived or overwritten.
 
 The execution package defaults to observation, with soft thresholds recorded
 without budget admission caps. Model/effort, harness, billing identities and
-observations remain separate; unknown telemetry stays unknown. The current
-launcher enables synthetic profiles only. Native provider bindings, OS identity
-separation, detached-descendant containment, installed bot cutover and live
-publication require separate validation. A same-user process is not an OS
-security boundary, and fixture verdicts do not establish native isolation.
+observations remain separate; unknown telemetry stays unknown. Native provider
+routes require explicit controller-owned executable, model, effort, account and
+capability declarations. A same-user process is not an OS security boundary.
+Validate installed routes and effective permissions before admitting real work;
+fixture verdicts do not establish native isolation.
+
+Checkout workspaces require readable Git metadata before inference. An immutable
+snapshot instead declares its source revisions and export digest; the controller
+checks its candidate bytes without inventing Git history. Cancelled attempts
+whose finalization was interrupted can be reconciled through the authenticated
+client. Reconciliation collects process, artifact and delivery observations,
+retains the original failure and usage, and releases only the matching ownership
+epoch. An unresolved external effect prevents settlement.
+
+GitHub advisory publication is a separate trusted transport with candidate-bound
+authorization, ownership fencing, authenticated receipt readback and duplicate
+prevention. Repository policy sources and runner declarations are explicit
+`policy_inputs`; the core has no repository-specific filename or host defaults
+for policy capture. Advisory comments confer no merge authority.

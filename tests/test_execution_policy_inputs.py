@@ -50,3 +50,17 @@ def test_publisher_rechecks_explicit_policy_inputs(tmp_path):
     with pytest.raises(PermissionError, match="live policy digest changed"):
         transport.advisory(payload["pr"], payload["head"], intent, payload)
     assert http.posts == []
+
+
+def test_configured_non_main_branch_publishes(tmp_path):
+    _, http, transport, intent, payload = environment(tmp_path, base_ref="release/stable")
+    transport.advisory(payload["pr"], payload["head"], intent, payload)
+    assert len(http.posts) == 1
+
+
+def test_same_sha_different_branch_is_refused(tmp_path):
+    _, http, transport, intent, payload = environment(tmp_path, base_ref="release/stable")
+    http.pull["base"]["ref"] = "other"
+    with pytest.raises(PermissionError, match="trusted repository policy"):
+        transport.advisory(payload["pr"], payload["head"], intent, payload)
+    assert http.posts == []

@@ -9,6 +9,7 @@ from pathlib import Path
 
 from . import completion, containment, continuation, native, routes, verifier, workspace_contract
 from .adapter import source_root
+from .atomic_io import write_json
 from .process import Process, boundary_for
 from .profiles import Profile, STANDARD_NATIVE_PROFILES, resolve
 from .store import Store, canonical, digest
@@ -353,7 +354,7 @@ class Controller:
                 payload["prompt_extras"] = "\n\n".join(
                     part for part in (spec.get("prompt_extras"),
                                       continuation.checkpoint_text(checkpoint)) if part)
-            context_path.write_text(json.dumps(payload))
+            write_json(context_path, payload)
             usage_file = usage_path
             if usage_file.is_file():
                 try:

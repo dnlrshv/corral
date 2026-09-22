@@ -138,7 +138,7 @@ def check_outbound_safe(text: str) -> list[str]:
 
 def safe_config_diagnostic(data: Any) -> Any:
     """Return a deep copy of config/diagnostic data with credentials redacted.
-    
+
     Preserves non-secret configuration structure (e.g. hosts, paths, profiles,
     and supported numeric token counters) while redacting tokens, keys, passwords,
     and secret strings. Output is valid JSON-serializable structure.

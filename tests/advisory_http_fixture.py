@@ -18,6 +18,7 @@ REQUIRED_SOURCE_PATHS = (
     "scripts/review.py", "scripts/publish_review.py",
 )
 POLICY_INPUTS = {"required_sources": list(REQUIRED_SOURCE_PATHS),
+                 "base_ref": "main",
                  "selected_workflow": REQUIRED_SOURCE_PATHS[0],
                  "runner": {"runs_on": ["self-hosted", "example-executor"]}}
 
@@ -93,11 +94,14 @@ class HTTP:
         return deepcopy(values[(page - 1) * 100 : page * 100])
 
 
-def environment(tmp_path, *, body="advisory", comments=None):
+def environment(tmp_path, *, body="advisory", comments=None, base_ref="main"):
     http = HTTP()
+    http.pull["base"]["ref"] = base_ref
+    inputs = {**POLICY_INPUTS, "base_ref": base_ref}
     store = Store(tmp_path / "authority.sqlite")
     store.acquire("pr:" + PR, "corral")
-    policy = fetch_policy_snapshot(REPO, BASE, http_client=http, policy_inputs=POLICY_INPUTS)["enforcement_digest"]
+    policy = fetch_policy_snapshot(REPO, BASE, base_ref=base_ref, http_client=http,
+                                   policy_inputs=inputs)["enforcement_digest"]
     intent, payload = compute_advisory_intent(
         REPO,
         PR,
@@ -123,6 +127,6 @@ def environment(tmp_path, *, body="advisory", comments=None):
     )
     transport = GitHubAdvisoryTransport(
         http_client=http, store=store, bridge_actor=ACTOR,
-        authorized_bridge_actors=frozenset({ACTOR}), policy_inputs=POLICY_INPUTS
+        authorized_bridge_actors=frozenset({ACTOR}), policy_inputs=inputs
     )
     return store, http, transport, intent, payload

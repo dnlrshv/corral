@@ -129,6 +129,8 @@ def fetch_policy_snapshot(
 ) -> dict[str, Any]:
     """Fetch live authenticated GitHub repository policy snapshot (GET only)."""
     inputs = normalize_policy_inputs(policy_inputs)
+    if inputs["base_ref"] is not None and inputs["base_ref"] != base_ref:
+        raise PermissionError("requested base branch differs from configured policy")
     if http_client is not None:
         return _fetch_via_http_client(repo, base_sha, base_ref, http_client, inputs)
 
@@ -222,7 +224,7 @@ def _assemble_snapshot(
     rulesets.sort(key=lambda item: int(item.get("id") or 0))
 
     # 2. Classic Protection (only genuine 404 is absence)
-    s_prot, prot = get_fn(f"/repos/{repo}/branches/{base_ref}/protection")
+    s_prot, prot = get_fn(f"/repos/{repo}/branches/{urllib.parse.quote(base_ref, safe='')}/protection")
     if s_prot == 200 and isinstance(prot, dict):
         validate_protection(prot)
         classic_protection = _strip_dynamic_protection_metadata(prot)
@@ -272,6 +274,7 @@ def _assemble_snapshot(
 
     enforcement_contents = {
         "base_sha": base_sha,
+        "base_ref": base_ref,
         "classic_protection": classic_protection,
         "repo": repo,
         "required_sources": required_sources,

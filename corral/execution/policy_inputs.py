@@ -8,7 +8,7 @@ from pathlib import Path, PurePosixPath
 def normalize(value: dict | None) -> dict:
     if value is None:
         value = {}
-    if not isinstance(value, dict) or set(value) - {"required_sources", "selected_workflow", "runner"}:
+    if not isinstance(value, dict) or set(value) - {"required_sources", "selected_workflow", "runner", "base_ref"}:
         raise ValueError("invalid repository policy inputs")
     paths = value.get("required_sources", [])
     if not isinstance(paths, (list, tuple)) or any(
@@ -23,9 +23,14 @@ def normalize(value: dict | None) -> dict:
     runner = value.get("runner", {})
     if not isinstance(runner, dict):
         raise TypeError("runner policy must be a dictionary")
+    base_ref = value.get("base_ref")
+    if base_ref is not None and (not isinstance(base_ref, str) or not base_ref
+                                 or any(char.isspace() for char in base_ref)
+                                 or any(char in base_ref for char in "?#\\")):
+        raise ValueError("invalid configured base branch")
     # This records configured policy, not an observation of the installed runner.
     return {"required_sources": sorted(set(paths)), "selected_workflow": selected,
-            "runner": json.loads(json.dumps(runner, allow_nan=False))}
+            "runner": json.loads(json.dumps(runner, allow_nan=False)), "base_ref": base_ref}
 
 
 def load(path: str | Path | None) -> dict:

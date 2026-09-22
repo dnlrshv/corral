@@ -56,7 +56,7 @@ def stage1(tmp_path):
     """An accepted stage 1 attempt plus the stage 2 script authored in the same host root."""
     env = cs.deterministic_env(tmp_path)
     task, run = cs.run_stage1(env)
-    assert run["result"]["accepted"] is True and run["result"]["generation"] == 1
+    assert run["result"]["accepted"] is True and run["result"]["generation"] == 1, run
     cs.dispatch_stage2(env)
     return env, task, run
 

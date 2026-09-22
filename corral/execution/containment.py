@@ -159,6 +159,9 @@ class Boundary:
     deny_write: tuple[str, ...] = ()
     write_allow: tuple[str, ...] = ()
     write_file_allow: tuple[str, ...] = ()
+    trusted_read_allow: tuple[str, ...] = ()
+    trusted_metadata_allow: tuple[str, ...] = ()
+    trusted_read_roots: tuple[str, ...] = ()
     sentinels: tuple[str, ...] = ()
     network: bool = True
     label: str = "seatbelt-worker-boundary"
@@ -168,6 +171,9 @@ class Boundary:
                 "deny": list(self.deny), "allow": list(self.allow),
                 "deny_write": list(self.deny_write), "write_allow": list(self.write_allow),
                 "write_file_allow": list(self.write_file_allow),
+                "trusted_read_allow": list(self.trusted_read_allow),
+                "trusted_metadata_allow": list(self.trusted_metadata_allow),
+                "trusted_read_roots": list(self.trusted_read_roots),
                 "sentinels": list(self.sentinels),
                 "network": self.network, "label": self.label}
 
@@ -209,6 +215,9 @@ def build_profile(boundary: Boundary) -> str:
     deny_write = [str(_real(item)) for item in boundary.deny_write]
     write_allow = [str(_real(item)) for item in boundary.write_allow]
     write_file_allow = [str(_real(item)) for item in boundary.write_file_allow]
+    trusted_read_allow = [str(_real(item)) for item in boundary.trusted_read_allow]
+    trusted_metadata_allow = [str(_real(item)) for item in boundary.trusted_metadata_allow]
+    trusted_read_roots = [str(_real(item)) for item in boundary.trusted_read_roots]
     rules = [
         "(version 1)",
         "(deny default)",
@@ -241,6 +250,14 @@ def build_profile(boundary: Boundary) -> str:
         # Write stays denied by the global `(deny file-write*)` emitted below.
         rules.append(f"(allow file-read* (subpath {_quote(allowed)}))")
         rules.append(f"(allow file-read* (literal {_quote(allowed)}))")
+    for file in trusted_read_allow:
+        rules.append(f"(allow file-read* (literal {_quote(file)}))")
+    for directory in trusted_metadata_allow:
+        rules.append(f"(allow file-read* (literal {_quote(directory)}))")
+        rules.append(f"(allow file-read-metadata (literal {_quote(directory)}))")
+        rules.append(f"(allow file-read-metadata (subpath {_quote(directory)}))")
+    for root in trusted_read_roots:
+        rules.append(f"(allow file-read* (subpath {_quote(root)}))")
     rules += ["(deny file-write*)", f"(allow file-write* (subpath {_quote('/dev')}))"]
     for root in (workspace, scratch, tmpdir, *write_allow):
         # The worker's own roots are re-opened for read *and* write after the denials above,
@@ -373,7 +390,6 @@ def demonstrate(boundary: Boundary) -> dict:
         receipt["blocker"] = "containment probe did not cover required targets: " + ", ".join(missing_checks)
     receipt["passed"] = receipt["blocker"] is None and bool(checks)
     return receipt
-
 
 def require(boundary: Boundary) -> dict:
     """Fail closed unless the boundary is demonstrated by a real sandboxed probe."""

@@ -95,6 +95,9 @@ def _boundary(task_dir: Path) -> tuple[containment.Boundary, dict]:
                                         deny_write=tuple(declared.get("deny_write") or ()),
                                         write_allow=tuple(declared.get("write_allow") or ()),
                                         write_file_allow=tuple(declared.get("write_file_allow") or ()),
+                                        trusted_read_allow=tuple(declared.get("trusted_read_allow") or ()),
+                                        trusted_metadata_allow=tuple(declared.get("trusted_metadata_allow") or ()),
+                                        trusted_read_roots=tuple(declared.get("trusted_read_roots") or ()),
                                         sentinels=tuple(declared.get("sentinels") or ()),
                                         network=bool(declared.get("network", True)))
     except KeyError as error:

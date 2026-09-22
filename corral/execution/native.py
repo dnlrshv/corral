@@ -42,6 +42,39 @@ def _runtime_file_is_sensitive(path: Path) -> bool:
                for marker in _RUNTIME_WRITE_SECRET_MARKERS)
 
 
+def _inspection_self_code(source_root: Path) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+    """Return the exact installed modules needed by the packet-only transport.
+
+    This is controller-owned code, not a host route grant: the inspection worker keeps the
+    candidate and the rest of the Corral source tree denied.  ``-I -m`` still needs these
+    package files to import the stateless transport from an installed wheel.
+    """
+    from corral import __file__ as corral_init
+    from corral.execution import __file__ as execution_init
+
+    from . import inspection_packet, inspection_transport, store, workspace
+    from corral import redaction
+
+    root = source_root.resolve()
+    modules = (corral_init, execution_init, inspection_transport.__file__,
+               inspection_packet.__file__, store.__file__, workspace.__file__, redaction.__file__)
+    files = {Path(item).resolve() for item in modules if item}
+    invalid = [str(item) for item in files
+               if not item.is_file() or item.is_symlink() or not item.is_relative_to(root)]
+    if invalid:
+        raise PermissionError("inspection transport self-code is not a regular installed module: "
+                              + ", ".join(sorted(invalid)))
+    directories = {root, root / "corral", root / "corral" / "execution"}
+    invalid_dirs = [str(item) for item in directories
+                    if not item.is_dir() or item.is_symlink() or not item.is_relative_to(root)]
+    if invalid_dirs:
+        raise PermissionError("inspection transport package directories are invalid: "
+                              + ", ".join(sorted(invalid_dirs)))
+    return (tuple(sorted(str(item) for item in files)),
+            tuple(sorted(str(item) for item in directories)),
+            (str((root / "corral").resolve()),))
+
+
 def build_boundary(*, workspace: str, state_dir: Path, artifacts: Path, task_dir: Path,
                    source_root: Path, verifier_roots: tuple[str, ...] = (),
                    host_protected: tuple[str, ...] = (), route_read: tuple[str, ...] = (),
@@ -93,11 +126,16 @@ def build_boundary(*, workspace: str, state_dir: Path, artifacts: Path, task_dir
                                    "sibling task scratch"),
     )
     worker_workspace = scratch if packet_only else Path(workspace).resolve()
+    trusted_read_allow, trusted_metadata_allow, trusted_read_roots = (
+        _inspection_self_code(Path(source_root)) if packet_only else ((), (), ()))
     boundary = containment.Boundary(workspace=str(worker_workspace),
                                     scratch=str(scratch.resolve()), tmpdir=str(scratch.resolve()),
                                     deny=tuple(sorted(denied)), allow=tuple(sorted(granted)),
                                     write_allow=tuple(sorted({str(Path(item).expanduser().resolve()) for item in route_write if item})),
                                     write_file_allow=tuple(sorted(str(item) for item in writable_files)),
+                                    trusted_read_allow=trusted_read_allow,
+                                    trusted_metadata_allow=trusted_metadata_allow,
+                                    trusted_read_roots=trusted_read_roots,
                                     sentinels=sentinels)
     return boundary, scratch, auth_read_granted
 

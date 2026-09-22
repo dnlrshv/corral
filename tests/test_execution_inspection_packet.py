@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from corral.execution import containment, envelopes, routes, workspace_contract
+from corral.execution import containment, envelopes, native, routes, workspace_contract
 from corral.execution.agent import AgentConfig, CorralAgent
 from corral.execution.controller import Controller
 from corral.execution.inspection_packet import bind_candidate, build, persist
@@ -291,6 +291,38 @@ def test_inspection_route_rejects_broad_tools_and_runtime_hooks(tmp_path):
         routes.declare("bad", {**raw, "argv": ["--result", "{result_file}",
                                                     "--model", "{model}",
                                                     "--effort", "{effort}"]})
+
+
+def test_packet_boundary_allows_only_controller_derived_transport_modules(tmp_path):
+    source = Path(__file__).resolve().parents[1]
+    boundary, _scratch, _grants = native.build_boundary(
+        workspace=str(tmp_path / "candidate"), state_dir=tmp_path / "state",
+        artifacts=tmp_path / "artifacts", task_dir=tmp_path / "task",
+        source_root=source, verifier_roots=(), host_protected=(), task_id="packet-self-code",
+        packet_only=True,
+    )
+    allowed = {Path(item).resolve() for item in boundary.trusted_read_allow}
+    expected = {
+        source / "corral" / "__init__.py", source / "corral" / "execution" / "__init__.py",
+        source / "corral" / "execution" / "inspection_transport.py",
+        source / "corral" / "execution" / "inspection_packet.py",
+        source / "corral" / "execution" / "store.py", source / "corral" / "execution" / "workspace.py",
+        source / "corral" / "redaction.py",
+    }
+    assert allowed == {item.resolve() for item in expected}
+    profile = containment.build_profile(boundary)
+    assert f'(deny file-read* file-write* (subpath "{source}"))' in profile
+    assert f'(allow file-read* (subpath "{source}"))' not in profile
+    for item in allowed:
+        assert f'(allow file-read* (literal "{item}"))' in profile
+    metadata = {Path(item).resolve() for item in boundary.trusted_metadata_allow}
+    assert metadata == {source, source / "corral", source / "corral" / "execution"}
+    for item in metadata:
+        assert f'(allow file-read-metadata (literal "{item}"))' in profile
+        assert f'(allow file-read-metadata (subpath "{item}"))' in profile
+    code_root = (source / "corral").resolve()
+    assert boundary.trusted_read_roots == (str(code_root),)
+    assert f'(allow file-read* (subpath "{code_root}"))' in profile
 
 
 _FIXTURE_HARNESS = r'''#!/usr/bin/env python3

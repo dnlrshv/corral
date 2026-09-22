@@ -154,18 +154,31 @@ def _markdown_credential_token_prose(match: re.Match[str], text: str, source_nam
             and bool(re.match(r"\s+[A-Za-z]", suffix)))
 
 
+_WORKFLOW_SOURCE = re.compile(r"\.github/workflows/[^/]+\.(?i:ya?ml)")
+_WORKFLOW_CONTEXT_REFERENCE = re.compile(
+    r"\$\{\{\s*(?:secrets|inputs|env|vars|github|matrix|steps)\.[A-Za-z0-9_.\-]+\s*\}\}")
+# ``auth.get('tokens', {}).get('access_token', '')``: snake_case keys and empty defaults only.
+_WORKFLOW_LOOKUP_CHAIN = re.compile(
+    r"[A-Za-z_][A-Za-z0-9_]*"
+    r"(?:\.get\(\s*(['\"])[a-z_][a-z0-9_]*\1\s*(?:,\s*(?:''|\"\"|\{\}|\[\]|None|0)\s*)?\))+")
+
+
+def _github_workflow_source(source_name: str | None) -> bool:
+    """Workflow exemptions apply only to top-level GitHub Actions workflow files."""
+    return bool(source_name and _WORKFLOW_SOURCE.fullmatch(source_name))
+
+
 def _github_workflow_expression(value: str, key: str, source_name: str | None) -> bool:
     """Allow only non-literal GitHub Actions references in workflow source.
 
     Workflow documents routinely bind credential-named inputs to GitHub
-    expression syntax. The expression is a reference that GitHub resolves at
-    runtime, not a credential value included in the inspected document.
+    expression syntax. A context reference is resolved by GitHub at runtime and is
+    not a credential value included in the inspected document; any other
+    expression body (for example a bare literal) remains data.
     """
-    if not (source_name and source_name.startswith(".github/workflows/")):
+    if not _github_workflow_source(source_name):
         return False
-    if not source_name.lower().endswith((".yml", ".yaml")):
-        return False
-    if re.fullmatch(r"\$\{\{\s*[A-Za-z_][A-Za-z0-9_.\-\s]*\s*\}\}", value):
+    if _WORKFLOW_CONTEXT_REFERENCE.fullmatch(value):
         return True
     return key.lower() == "token" and value.lower() in {"read", "write", "none", "inherit"}
 
@@ -173,15 +186,17 @@ def _github_workflow_expression(value: str, key: str, source_name: str | None) -
 def _github_workflow_script_reference(value: str, source_name: str | None,
                                       separator: str) -> bool:
     """Recognize a non-literal Python lookup embedded in a workflow ``run`` block."""
-    if separator != "=" or not (source_name and source_name.startswith(".github/workflows/")):
+    if separator != "=" or not _github_workflow_source(source_name):
         return False
-    if not source_name.lower().endswith((".yml", ".yaml")):
-        return False
-    # A run-block expression may name credential fields but has no credential value:
-    # ``token = auth.get('tokens', {}).get('access_token', '')``.  Keep operators,
-    # shell expansion and literal assignments outside this narrow source form.
-    return (bool(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.'\",(){}\[\], \t]*", value))
-            and "." in value and "(" in value and value.endswith(")"))
+    # A run-block lookup may name credential fields but has no credential value:
+    # ``token = auth.get('tokens', {}).get('access_token', '')``.  Any other call,
+    # and any quoted argument that is not a snake_case key or an empty default, is data.
+    return bool(_WORKFLOW_LOOKUP_CHAIN.fullmatch(value.strip()))
+
+
+def _comment_line(text: str, position: int) -> bool:
+    line_start = text.rfind("\n", 0, position) + 1
+    return text[line_start:position].lstrip().startswith("#")
 
 
 def check_source_text_safe(text: str, *, source_name: str | None = None) -> list[str]:
@@ -237,12 +252,19 @@ def check_source_text_safe(text: str, *, source_name: str | None = None) -> list
         # Fencing tokens are integer concurrency epochs, not bearer credentials.
         # Keep this source-only exception literal and typed: a quoted value remains
         # a credential-shaped data assignment and is rejected below.
-        if python_source and key.lower() == "fencing_token" and _NUMERIC_VALUE.match(value):
+        if (python_source and not quoted and key.lower() == "fencing_token"
+                and _NUMERIC_VALUE.match(raw)):
             continue
-        # In Python source, a colon followed by an unquoted identifier is a type
-        # annotation or mapping reference. Quoted/literal mapping values stay blocked.
+        # In Python source, ``key: Name`` is an annotation only for a known or
+        # capitalized type name, and ``"key": name`` in a mapping literal references a
+        # variable. Other identifiers, comment lines and literals stay blocked. A line
+        # scanner cannot see docstrings: ``api_key: Capitalized`` inside one still
+        # passes, which a tokenize-aware pass would have to close.
         if (python_source and not quoted and match.group("sep") == ":"
-                and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", raw)):
+                and not _comment_line(text, match.start())
+                and (raw in type_names or re.fullmatch(r"[A-Z][A-Za-z0-9_]*", raw)
+                     or (match.group("key")[:1] in "\"'"
+                         and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", raw)))):
             continue
         if python_source and not quoted and value in type_names:
             continue

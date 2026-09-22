@@ -173,3 +173,42 @@ def test_stale_owner_epoch_blocks_transition(tmp_path):
         assert "epoch" in str(error)
     else:
         raise AssertionError("stale coordinator epoch accepted")
+
+
+class ReadbackTransport:
+    """Records the order of readback and publication; GitHub is never contacted."""
+
+    def __init__(self, late_review):
+        self.late_review, self.delivered, self.calls = late_review, False, []
+
+    def _receipt(self):
+        self.delivered = True
+        return {"review_id": 5, "bridge_actor": "publisher"}
+
+    def reconcile(self, pr, intent, payload):
+        self.calls.append("reconcile")
+        return self._receipt() if self.late_review else {"status": "absent"}
+
+    def advisory(self, pr, expected, intent, payload):
+        self.calls.append("advisory")
+        return self._receipt()
+
+    def has_advisory(self, intent):
+        return self.delivered
+
+
+@pytest.mark.parametrize("late_review,calls", [(True, ["reconcile"]),
+                                               (False, ["reconcile", "advisory"])])
+def test_absent_advisory_is_read_back_before_it_is_resent(tmp_path, late_review, calls):
+    store, coordinator, task = setup_review(tmp_path)
+    coordinator.accept_review(task)
+    intent = coordinator.prepare_advisory()["advisory_intent"]
+    payload = store.get("advisory_payload", intent)
+    with store.transaction() as db:
+        db.execute("INSERT INTO publication_intents VALUES (?,?,?,?,?,?,'absent',?,NULL,NULL,1,1,'a1')",
+                   (intent, "pr:" + coordinator.pr, "corral", coordinator.owner_epoch,
+                    payload["head"], payload["base"], json.dumps(payload)))
+    transport = ReadbackTransport(late_review)
+    assert coordinator.publish_advisory(transport)["review_id"] == 5
+    assert transport.calls == calls
+    assert store.get("pr_coordination", coordinator.pr)["stage"] == "advisory-delivered"

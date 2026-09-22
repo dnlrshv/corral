@@ -8,9 +8,11 @@ from pathlib import Path
 from .runtime_identity import launched
 
 
-def launch(controller_config: Path, state_dir: Path, task_id: str, host: str) -> dict:
+def launch(controller_config: Path, state_dir: Path, task_id: str, host: str,
+           *, development_mode: bool = False) -> dict:
     log_path = state_dir / "service-dispatch.log"
-    command = [sys.executable, "-m", "corral.execution.service_worker", "--config",
+    command = [sys.executable, *([] if development_mode else ["-I"]),
+               "-m", "corral.execution.service_worker", "--config",
                str(controller_config), "--task", task_id, "--host", host]
     with log_path.open("ab") as log:
         process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=log, stderr=log,

@@ -14,15 +14,20 @@ class ServiceClient:
 
     def call(self, action: str, **payload):
         cfg = self.config
-        command = [cfg.get("python", sys.executable), "-m", "corral.execution.service_endpoint",
+        development = cfg.get("development_mode") is True
+        if cfg.get("source") and not development:
+            raise ValueError("source checkout requires explicit development_mode")
+        command = [cfg.get("python", sys.executable), *([] if development else ["-I"]),
+                   "-m", "corral.execution.service_endpoint",
                    "--config", cfg["service_config"]]
         if cfg.get("transport", "local") == "ssh":
-            remote = "cd " + shlex.quote(cfg["source"]) + " && " + shlex.join(command)
+            remote = (("cd " + shlex.quote(cfg["source"]) + " && ") if development else "") \
+                + shlex.join(command)
             command = ["ssh", "-o", "BatchMode=yes", *cfg.get("ssh_options", []),
                        cfg["ssh_host"], remote]
             cwd = None
         else:
-            cwd = cfg.get("source")
+            cwd = cfg.get("source") if development else "/"
         result = subprocess.run(command, input=json.dumps({"action": action, **payload}),
                                 capture_output=True, text=True, cwd=cwd)
         if result.returncode:
@@ -35,5 +40,5 @@ def from_path(path: Path) -> ServiceClient:
     endpoint = raw.get("service_endpoint")
     if endpoint is None:
         endpoint = {"transport": "local", "service_config": str(path.resolve()),
-                    "source": str(Path(__file__).parents[2])}
+                    "source": str(Path(__file__).parents[2]), "development_mode": True}
     return ServiceClient(endpoint)

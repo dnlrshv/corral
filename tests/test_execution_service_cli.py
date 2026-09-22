@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from corral.execution.service import Service
+from corral.execution.service_client import ServiceClient
 from corral.execution.store import Store
 
 
@@ -39,6 +40,7 @@ def configs(tmp_path: Path, workspace: Path, *, schedules=None, worker=None):
     controller_path.write_text(json.dumps(controller))
     service = {
         "controller_config": str(controller_path), "max_dispatch_per_tick": 1,
+        "development_mode": True,
         "repositories": {"demo": {
             "enabled": True, "default_host": "mini2", "allowed_hosts": ["mini2"],
             "workspaces": {"mini2": str(workspace)},
@@ -249,6 +251,7 @@ def test_agent_cli_ssh_endpoint_keeps_manifest_on_dev_side(tmp_path, monkeypatch
     client_config = tmp_path / "agent.json"
     client_config.write_text(json.dumps({"service_endpoint": {
         "transport": "ssh", "ssh_host": "fixture-host", "ssh_options": [],
+        "development_mode": True,
         "python": sys.executable, "source": str(Path(__file__).parents[1]),
         "service_config": str(service_config)}}))
     result = cli("corral.execution.agent_cli", "--config", client_config, "submit",
@@ -333,3 +336,17 @@ def test_launchd_renderer_is_generic_and_plist_valid(tmp_path):
     loaded = plistlib.loads(output.read_bytes())
     assert loaded["ProgramArguments"][-1] == "tick"
     assert loaded["StartInterval"] == 15 and loaded["RunAtLoad"] is True
+
+
+def test_installed_service_client_uses_isolated_python_and_safe_cwd(monkeypatch):
+    observed = {}
+
+    def run(command, **kwargs):
+        observed.update(command=command, kwargs=kwargs)
+        return subprocess.CompletedProcess(command, 0, stdout="{}", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", run)
+    ServiceClient({"python": "/opt/corral/bin/python", "transport": "local",
+                   "service_config": "/etc/corral/service.json"}).call("tick")
+    assert observed["command"][:3] == ["/opt/corral/bin/python", "-I", "-m"]
+    assert observed["kwargs"]["cwd"] == "/"

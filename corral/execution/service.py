@@ -36,6 +36,7 @@ class Service:
         self.repositories = self.config.get("repositories", {})
         self.schedules = self.config.get("schedules", [])
         self.max_dispatch = int(self.config.get("max_dispatch_per_tick", 1))
+        self.development_mode = self.config.get("development_mode") is True
         if self.max_dispatch < 1:
             raise ValueError("max_dispatch_per_tick must be positive")
 
@@ -323,7 +324,8 @@ class Service:
                             "nonlocal host requires an authenticated remote executor route")
                     from .service_dispatch import launch
                     launcher = launch(self.controller_path, self.store.path.parent,
-                                      event["task_id"], host)
+                                      event["task_id"], host,
+                                      development_mode=self.development_mode)
                     self.store.replace("service_event", event_id,
                                        {**event, "launcher_identity": launcher})
                     busy_workspaces.add(event.get("resolved_spec", {}).get("workspace"))

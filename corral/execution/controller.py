@@ -388,6 +388,7 @@ class Controller:
             native_run = bool(harness) and harness != "synthetic"
             run_env = {"CORRAL_CONTEXT_PATH": str(context_path), "CORRAL_USAGE_PATH": str(usage_path)}
             run_cwd, seatbelt, label, native_evidence = workspace, None, None, None
+            verifier_seatbelt = verifier_evidence = None
             if native_run:
                 profile = next((item for item in self.profiles if item.id == declared_profile.get("id")), None)
                 if profile is None:
@@ -403,7 +404,8 @@ class Controller:
                                           task_id=continuation.scratch_id(task_id, generation),
                                           verifier_roots=verifier_roots,
                                           usage_path=usage_path, context_path=context_path,
-                                          credential_values=self.provider_secrets)
+                                          credential_values=self.provider_secrets, attempt=attempt)
+                verifier_seatbelt, verifier_evidence = prepared.verifier_profile, prepared.verifier_evidence
                 command, run_cwd, native_evidence = prepared.command, prepared.run_cwd, prepared.evidence
                 run_env.update(prepared.env)
                 # The adapter is trusted controller-side code: it runs outside the worker boundary
@@ -449,7 +451,9 @@ class Controller:
             record = verifier.execute(policy, workspace, candidate_paths=spec["candidate_paths"],
                                       task=task_id, attempt=attempt,
                                       pre_verifier_manifest=pre_verifier_manifest,
-                                      workspace_provenance=workspace_provenance)
+                                      workspace_provenance=workspace_provenance,
+                                      seatbelt_profile=verifier_seatbelt,
+                                      containment_evidence=verifier_evidence)
             receipt = record.payload
             receipt["native"] = native_evidence
             if native_evidence:

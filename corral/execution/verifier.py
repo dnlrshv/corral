@@ -15,6 +15,7 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import containment
 from .workspace import manifest
 
 DECEPTION_NAMES: frozenset[str] = frozenset({
@@ -197,7 +198,8 @@ class Receipt:
 
 
 def execute(policy: Policy, workspace: str | Path, *, candidate_paths: list[str], task: str,
-            attempt: str, pre_verifier_manifest: dict | None, workspace_provenance: dict | None = None) -> Receipt:
+            attempt: str, pre_verifier_manifest: dict | None, workspace_provenance: dict | None = None,
+            seatbelt_profile: str | None = None, containment_evidence: dict | None = None) -> Receipt:
     """Run the bound verifier outside the worker boundary and retain pre/post digests."""
     root = Path(workspace).resolve()
     candidate_pre = manifest(root, candidate_paths, workspace_provenance)
@@ -215,6 +217,8 @@ def execute(policy: Policy, workspace: str | Path, *, candidate_paths: list[str]
             "import_isolation": "PYTHONSAFEPATH; no cwd import; PYTHONPATH scrubbed",
             "authority": "controller-configured-verifier", "exit_code": None, "policy_ok": True,
             "deception_scan": {"offenders": [], "declared": list(policy.verifier_paths)}}
+    if containment_evidence is not None:
+        base["verifier_containment"] = containment_evidence
     if offenders:
         base.update({"policy_ok": False, "unchanged": True,
                      "refused": "undeclared verifier-hijack files appeared during execution",
@@ -237,7 +241,8 @@ def execute(policy: Policy, workspace: str | Path, *, candidate_paths: list[str]
         if os.environ.get(name):
             env[name] = os.environ[name]
     env.pop("PYTHONPATH", None)
-    completed = subprocess.run(list(policy.argv), cwd=str(root), capture_output=True, env=env)
+    command = containment.wrapped(seatbelt_profile, list(policy.argv)) if seatbelt_profile else list(policy.argv)
+    completed = subprocess.run(command, cwd=str(root), capture_output=True, env=env)
     candidate_post = manifest(root, candidate_paths, workspace_provenance)
     base.update({"exit_code": completed.returncode, "candidate_post": candidate_post["digest"],
                  "unchanged": candidate_pre["digest"] == candidate_post["digest"]})

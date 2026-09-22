@@ -13,7 +13,7 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import containment, inspection_packet, routes
+from . import containment, inspection_packet, routes, verifier_containment
 from .adapter import build_adapter_command
 
 SENTINEL_NAME = ".corral-containment-sentinel"
@@ -29,6 +29,8 @@ class Prepared:
     demonstration: dict
     plan: dict
     evidence: dict = field(default_factory=dict)
+    verifier_profile: str | None = None
+    verifier_evidence: dict | None = None
 
 
 def _scratch_root(state_dir: Path) -> Path:
@@ -142,7 +144,7 @@ def build_boundary(*, workspace: str, state_dir: Path, artifacts: Path, task_dir
 
 def prepare(*, spec: dict, host: dict, profile, task_dir: Path, workspace: str, state_dir: Path,
             artifacts: Path, source_root: Path, task_id: str, verifier_roots: tuple[str, ...],
-            usage_path: Path, context_path: Path,
+            usage_path: Path, context_path: Path, attempt: str,
             credential_values: dict[str, str] | None = None) -> Prepared:
     """Resolve the trusted route, demonstrate containment and build the adapter command."""
     declared = routes.declared_routes(host)
@@ -164,6 +166,11 @@ def prepare(*, spec: dict, host: dict, profile, task_dir: Path, workspace: str, 
     if overlaps:
         raise PermissionError("worker boundary configuration overlaps trusted state: " + "; ".join(overlaps))
     demonstration = containment.require(boundary)
+    verifier_prepared = verifier_containment.prepare(
+        workspace=workspace, state_dir=state_dir, artifacts=artifacts, task_dir=task_dir,
+        task_id=task_id, attempt=attempt,
+        protected_paths=tuple(host.get("protected_paths") or ()),
+        probe_sentinels=tuple(host.get("verifier_probe_sentinels") or ()))
     packet_record = None
     if route.inspection_only:
         context = json.loads(Path(context_path).read_text())
@@ -186,6 +193,9 @@ def prepare(*, spec: dict, host: dict, profile, task_dir: Path, workspace: str, 
                   if route.inspection_only else
                   "read is default-allow with curated credential/controller denials; write is default-deny")},
         indent=2, sort_keys=True))
+    (task_dir / "verifier-boundary.json").write_text(json.dumps(
+        {"boundary": verifier_prepared.boundary.as_dict(),
+         "evidence": verifier_prepared.evidence}, indent=2, sort_keys=True))
     plan_dict = plan.as_dict()
     if packet_record:
         plan_dict["inspection_packet"] = packet_record
@@ -209,4 +219,6 @@ def prepare(*, spec: dict, host: dict, profile, task_dir: Path, workspace: str, 
                 "credential_env_present": sorted(name for name in plan.credential_env if env.get(name)),
                 "credential_env_missing": sorted(name for name in plan.credential_env if not env.get(name))}
     return Prepared(command=command, run_cwd=str(task_dir), env=env, boundary=boundary,
-                    demonstration=demonstration, plan=plan_dict, evidence=evidence)
+                    demonstration=demonstration, plan=plan_dict, evidence=evidence,
+                    verifier_profile=verifier_prepared.profile,
+                    verifier_evidence=verifier_prepared.evidence)

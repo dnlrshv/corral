@@ -55,7 +55,7 @@ def _prepared(tmp_path: Path, *, ops=SUCCESS_OPS, **env_kwargs):
                               source_root=source_root(), task_id=task_id,
                               verifier_roots=tuple(env["host"]["verifier_roots"]),
                               usage_path=task_dir / "native-usage.json",
-                              context_path=context_path)
+                              context_path=context_path, attempt="attempt-1")
     return env, prepared, task_dir
 
 

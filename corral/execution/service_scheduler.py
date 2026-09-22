@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .scheduler import ready
+from .service_specs import request_spec
 
 TICK_RESOURCE = "service-scheduler:tick"
 
@@ -48,12 +49,11 @@ def _host_order(service) -> list[str]:
     return hosts[start:] + hosts[:start]
 
 
-def _busy_workspaces(events: dict[str, dict[str, Any]]) -> set[str]:
+def _busy_workspaces(events: dict[str, dict[str, Any]], specs: dict[str, dict]) -> set[str]:
     return {
-        str(Path(value.get("resolved_spec", {}).get("workspace")).resolve())
-        for value in events.values()
+        str(Path(specs[key]["workspace"]).resolve())
+        for key, value in events.items()
         if value.get("status") in {"dispatching", "uncertain"}
-        and value.get("resolved_spec", {}).get("workspace")
     }
 
 
@@ -68,19 +68,21 @@ def dispatch_ready(service, events: dict[str, dict[str, Any]], now: float,
         made_progress = False
         for host in hosts:
             host_cfg = service.controller.hosts[host]
-            busy = _busy_workspaces(events)
+            specs = {key: request_spec(service.store, event) for key, event in events.items()
+                     if event.get("status") in {"prepared", "dispatching", "uncertain"}}
+            busy = _busy_workspaces(events, specs)
             pending = [
                 {"id": key, "route": value["route"], "mode": value["mode"],
                  "submitted": value["submitted"], "due": 0,
-                 "cpu": value.get("resolved_spec", {}).get("cpu", 1),
-                 "memory_mb": value.get("resolved_spec", {}).get("memory_mb", 0)}
+                 "cpu": specs[key].get("cpu", 1),
+                 "memory_mb": specs[key].get("memory_mb", 0)}
                 for key, value in events.items()
                 if value.get("host") == host and value.get("status") == "prepared"
-                and str(Path(value.get("resolved_spec", {}).get("workspace")).resolve())
+                and str(Path(specs[key]["workspace"]).resolve())
                 not in busy
             ]
             running = [
-                value for value in events.values()
+                specs[key] for key, value in events.items()
                 if value.get("host") == host
                 and value.get("status") in {"dispatching", "uncertain"}
             ]

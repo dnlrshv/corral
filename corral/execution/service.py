@@ -8,6 +8,7 @@ from typing import Any
 
 from . import artifact_return, continuation
 from .controller import Controller
+from .service_specs import request_spec
 from .store import canonical
 
 TERMINAL = {"completed", "failed", "refused-before-launch", "uncertain", "cancelled"}
@@ -231,7 +232,7 @@ class Service:
             host = event.get("host")
             if scheduler_host is not None and host != scheduler_host:
                 raise PermissionError("scheduler host does not match the admitted event")
-            spec = event.get("resolved_spec", {})
+            spec = request_spec(self.store, event, db=db)
             cpu, memory = spec.get("cpu", 1), spec.get("memory_mb", 0)
             if not isinstance(cpu, int) or isinstance(cpu, bool) or cpu <= 0:
                 raise ValueError("invalid service CPU request")
@@ -242,16 +243,15 @@ class Service:
                     "SELECT key,value FROM records WHERE kind='service_event'").fetchall():
                 value = json.loads(raw)
                 if key != event_id and value.get("status") in {"dispatching", "uncertain"}:
-                    active.append(value)
+                    active.append(request_spec(self.store, value, db=db))
             workspace = str(Path(spec.get("workspace")).resolve())
-            if any(str(Path(value.get("resolved_spec", {}).get("workspace")).resolve()) == workspace
-                   for value in active if value.get("resolved_spec", {}).get("workspace")):
+            if any(str(Path(value["workspace"]).resolve()) == workspace for value in active):
                 return None
             host_active = [value for value in active if value.get("host") == host]
             capacity = self.controller.hosts[host]
-            used_cpu = sum(value.get("resolved_spec", {}).get("cpu", 1)
+            used_cpu = sum(value.get("cpu", 1)
                            for value in host_active)
-            used_memory = sum(value.get("resolved_spec", {}).get("memory_mb", 0)
+            used_memory = sum(value.get("memory_mb", 0)
                               for value in host_active)
             if (used_cpu + cpu > capacity["cpu"]
                     or used_memory + memory > capacity["memory_mb"]):
@@ -312,7 +312,7 @@ class Service:
                 )
                 status = None
                 if self.store.get("cancel", event["task_id"]):
-                    workspace = event.get("resolved_spec", {}).get("workspace")
+                    workspace = request_spec(self.store, event)["workspace"]
                     ownership = self.store.ownership("workspace:" + str(Path(workspace).resolve())) \
                         if workspace else None
                     allocation = self.store.get("allocation", event["task_id"])

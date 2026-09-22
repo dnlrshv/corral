@@ -169,3 +169,21 @@ def test_operator_recovers_a_dead_holder_lease_but_never_a_live_one(tmp_path):
         db.execute("UPDATE leases SET holder_pid=? WHERE resource=?", (_dead_pid(), RESOURCE))
     assert store.recover_lease_operator(RESOURCE, authorized_by="operator") is True
     assert store.acquire_lease(RESOURCE, "corral", HEAD, os.getpid(), "next")[0]
+
+
+def test_migrated_ambiguous_intent_without_attempt_identity_can_settle(tmp_path):
+    store, http, transport, intent, payload = environment(tmp_path)
+    transport.absence_quiet_seconds = 0
+    # A row written before attempt identities existed, and the lease it left behind.
+    assert store.acquire_lease(RESOURCE, "corral", HEAD, _dead_pid(), "unbound")[0]
+    store.record_intent_pending(intent, RESOURCE, "corral", 1, HEAD, payload["base"], payload,
+                                attempt_id="unbound")
+    store.record_intent_outcome(intent, RESOURCE, "ambiguous", error="lost before migration")
+    with store.transaction() as db:
+        db.execute("UPDATE publication_intents SET attempt_id='' WHERE intent=?", (intent,))
+    assert transport.reconcile(PR, intent, payload)["status"] == "absent"
+    assert store.acquire_lease(RESOURCE, "corral", HEAD, os.getpid(), "next")[1] == (
+        "ambiguous_lease_blocking")
+    assert store.recover_lease_operator(RESOURCE, authorized_by="operator") is True
+    transport.advisory(PR, "candidate", intent, payload)
+    assert len(http.posts) == 1

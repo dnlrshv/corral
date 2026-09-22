@@ -120,8 +120,8 @@ def record_absence(
     """
     from .store import lease_holder_alive
 
-    if prior_status not in ("pending", "ambiguous") or not attempt_id:
-        raise ValueError("only an unresolved attempt with an identity can be proven absent")
+    if prior_status not in ("pending", "ambiguous") or (prior_status == "pending" and not attempt_id):
+        raise ValueError("only an ambiguous or identified pending attempt can be proven absent")
     with store.transaction() as db:
         row = db.execute(
             "SELECT resource,status,attempt_id,updated_at FROM publication_intents WHERE intent=?",

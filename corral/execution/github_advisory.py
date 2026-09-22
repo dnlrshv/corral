@@ -437,8 +437,9 @@ class GitHubAdvisoryTransport:
         """The attempt that authenticated readback may settle as absent, or why not.
 
         The attempt must no longer be in flight (its outcome was recorded ambiguous,
-        or its lease holder is gone), carry an attempt identity, and be older than the
-        quiet period during which GitHub could still be processing its POST.
+        or the lease holder of its pending attempt is gone) and be older than the
+        quiet period during which GitHub could still be processing its POST. A
+        migrated intent without an attempt identity settles only once ambiguous.
         """
         with self.store.transaction() as db:
             status, attempt_id, updated_at = db.execute(
@@ -454,7 +455,7 @@ class GitHubAdvisoryTransport:
             return attempt
         if status not in ("pending", "ambiguous"):
             return f"intent-{status}"
-        if not attempt_id:
+        if status == "pending" and not attempt_id:
             return "attempt-identity-missing"
         if (status == "pending" and lease and lease[0] == attempt_id
                 and lease[1] in ("in_flight", "active") and lease_holder_alive(lease[2])):

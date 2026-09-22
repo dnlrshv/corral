@@ -24,6 +24,13 @@ def main(argv: list[str] | None = None) -> int:
     submit.add_argument("--diff-path")
     submit.add_argument("--workspace-kind", default="checkout")
     submit.add_argument("--snapshot", type=Path)
+    review = sub.add_parser("review-pr")
+    review.add_argument("--repository", required=True)
+    review.add_argument("--pr", required=True, type=int)
+    review.add_argument("--policy", required=True)
+    review.add_argument("--expected-head")
+    review.add_argument("--expected-base")
+    review.add_argument("--host")
     for name in ("status", "return"):
         item = sub.add_parser(name)
         item.add_argument("--event-id", required=True)
@@ -41,6 +48,10 @@ def main(argv: list[str] | None = None) -> int:
                                 candidate_paths=args.candidate or None, source_snapshot=snapshot,
                                 inspection_paths=args.inspection_path, diff_path=args.diff_path,
                                 workspace_kind=args.workspace_kind)
+    elif args.command == "review-pr":
+        result = service.submit_pr_review(
+            args.repository, args.pr, args.policy, expected_head=args.expected_head,
+            expected_base=args.expected_base, host=args.host)
     elif args.command == "status":
         result = service.status(args.event_id)
     elif args.command == "tick":

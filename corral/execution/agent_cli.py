@@ -33,6 +33,13 @@ def _parser() -> argparse.ArgumentParser:
                         default="checkout")
     submit.add_argument("--run", action="store_true")
     submit.add_argument("--poll-interval", type=float, default=2.0)
+    review = sub.add_parser("review-pr")
+    review.add_argument("--repository", required=True)
+    review.add_argument("--pr", required=True, type=int)
+    review.add_argument("--policy", required=True)
+    review.add_argument("--expected-head")
+    review.add_argument("--expected-base")
+    review.add_argument("--host")
     status = sub.add_parser("status")
     status.add_argument("--event-id", required=True)
     amend = sub.add_parser("amend")
@@ -87,6 +94,11 @@ def main(argv: list[str] | None = None) -> int:
                 if args.poll_interval <= 0:
                     raise ValueError("poll interval must be positive")
                 time.sleep(args.poll_interval)
+    elif args.command == "review-pr":
+        result = client.call("submit-pr-review", repository=args.repository,
+                             pr_number=args.pr, policy_id=args.policy,
+                             expected_head=args.expected_head, expected_base=args.expected_base,
+                             host=args.host)
     elif args.command == "status":
         result = client.call("status", event_id=args.event_id)
     elif args.command == "amend":

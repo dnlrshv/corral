@@ -18,6 +18,8 @@ def main(argv: list[str] | None = None) -> int:
     service = Service(args.config)
     if action == "submit":
         result = service.submit(**request)
+    elif action == "submit-pr-review":
+        result = service.submit_pr_review(**request)
     elif action == "status":
         result = service.status(request["event_id"])
     elif action == "tick":

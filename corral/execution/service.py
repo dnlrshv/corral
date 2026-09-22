@@ -93,6 +93,8 @@ class Service:
         selected_role = role or defaults.get("role", "implementation")
         if selected_role not in allowed_roles:
             raise PermissionError("role is not allowed by repository profile")
+        if selected_role == "review":
+            raise PermissionError("review tasks require controller-owned submit-pr-review")
         selected_profile = profile_id or defaults.get("profile_id")
         outputs = list(candidate_paths if candidate_paths is not None
                        else defaults.get("candidate_paths", []))
@@ -128,6 +130,10 @@ class Service:
         event = {**identity, "submitted": time.time(), "status": "admitted", "task_id": None}
         self.store.put_once("service_event", event_id, event)
         return self._ensure_task(event_id, spec=spec)
+
+    def submit_pr_review(self, repository: str, pr_number: int, policy_id: str, **kwargs):
+        from .service_pr import submit_pr_review
+        return submit_pr_review(self, repository, pr_number, policy_id, **kwargs)
 
     def _ensure_task(self, event_id: str, spec: dict | None = None) -> dict[str, Any]:
         event = self.store.get("service_event", event_id)

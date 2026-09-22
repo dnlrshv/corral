@@ -56,8 +56,7 @@ def _remote_identity(remote: str) -> str:
     else:
         parsed = urllib.parse.urlsplit(remote)
         slug = parsed.path.lstrip("/") if parsed.hostname == "github.com" else ""
-    if slug.endswith(".git"):
-        slug = slug[:-4]
+    slug = slug.removesuffix(".git")
     if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", slug):
         return slug
     return "remote-sha256:" + hashlib.sha256(remote.encode()).hexdigest()
@@ -139,7 +138,7 @@ def build(spec: dict, context: dict, workspace: Path | str,
             text = data.decode("utf-8")
         except UnicodeDecodeError as error:
             raise PermissionError(f"inspection input must be UTF-8 text: {name}") from error
-        if check_source_text_safe(text):
+        if check_source_text_safe(text, source_name=name):
             raise PermissionError(f"credential-shaped inspection input refused: {name}")
         documents.append({"path": name, "kind": "diff" if name == diff_path else "source",
                           "sha256": _sha(data), "bytes": len(data), "content": text})

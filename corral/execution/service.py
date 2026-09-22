@@ -1,15 +1,12 @@
 """Durable Corral service: event admission, schedules, fair dispatch and recovery."""
 from __future__ import annotations
 
-import base64
-import hashlib
 import json
-import os
 import time
 from pathlib import Path
 from typing import Any
 
-from . import continuation
+from . import artifact_return, continuation
 from .controller import Controller
 from .store import canonical
 
@@ -166,7 +163,7 @@ class Service:
                 try:
                     receipt = self.controller.transfer(
                         self.token, task_id, transfer_id, snapshot, expected)
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001 - persist blocked admission before surfacing error
                     updated = {**updated, "status": "blocked", "error": str(exc)}
                     self.store.replace("service_event", event_id, updated)
                     return self.status(event_id)
@@ -347,10 +344,9 @@ class Service:
                     self.store.replace("service_event", event_id, updated)
                     reconciled.append(event_id)
                     continue
-            elif alive(event.get("launcher_identity") or {}):
-                continue
-            elif state.get("status") in ("running", "dispatching") and alive(
-                    state.get("worker_identity") or {}):
+            elif (alive(event.get("launcher_identity") or {})
+                  or (state.get("status") in ("running", "dispatching")
+                      and alive(state.get("worker_identity") or {}))):
                 continue
             else:
                 self.store.replace("service_event", event_id, {**event, "status": "uncertain",
@@ -387,17 +383,4 @@ class Service:
         if not event or not event.get("task_id"):
             raise KeyError(event_id)
         fetched = self.controller.fetch_artifact(self.token, event["task_id"], relative_path)
-        data = base64.b64decode(fetched["data"], validate=True)
-        if hashlib.sha256(data).hexdigest() != fetched["digest"]:
-            raise ValueError("artifact digest mismatch")
-        target = Path(destination)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL,
-                         fetched.get("mode") or 0o644)
-            with os.fdopen(fd, "wb") as stream:
-                stream.write(data)
-        except FileExistsError:
-            if target.read_bytes() != data:
-                raise PermissionError("destination exists with newer or different content")
-        return target
+        return artifact_return.write(fetched, destination)

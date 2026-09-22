@@ -2,13 +2,11 @@
 from __future__ import annotations
 
 import argparse
-import base64
-import hashlib
 import json
-import os
 import time
 from pathlib import Path
 
+from . import artifact_return
 from .service_client import from_path
 from .workspace import manifest
 
@@ -122,18 +120,7 @@ def main(argv: list[str] | None = None) -> int:
         result = client.call("tick")
     else:
         fetched = client.call("fetch", event_id=args.event_id, relative_path=args.path)
-        data = base64.b64decode(fetched["data"], validate=True)
-        if hashlib.sha256(data).hexdigest() != fetched["digest"]:
-            raise ValueError("artifact digest mismatch")
-        args.destination.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            fd = os.open(args.destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL,
-                         fetched.get("mode") or 0o644)
-            with os.fdopen(fd, "wb") as stream:
-                stream.write(data)
-        except FileExistsError:
-            if args.destination.read_bytes() != data:
-                raise PermissionError("destination exists with newer or different content")
+        artifact_return.write(fetched, args.destination)
         result = {"path": str(args.destination)}
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0

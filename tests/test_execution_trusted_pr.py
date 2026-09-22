@@ -216,19 +216,37 @@ def test_linked_replacement_preserves_cancelled_task_and_exact_binding(tmp_path,
     old_workspace = tmp_path / "old-workspace"
     old_workspace.mkdir()
     service.store.replace("request", old_task, {"workspace": str(old_workspace)})
-    service.store.replace("state", old_task, {"status": "reconciled"})
+    attempt = "old-attempt"
+    state = {"status": "cancelled", "reconciliation": "cancelled-reconciled",
+             "attempt": attempt, "generation": 1}
     service.store.replace("cancel", old_task, {"requested": True})
-    service.store.replace("result", old_task, {
-        "accepted": False, "structured": {"provenance": {
-            "repo": "fixture/repo", "pr": 7, "head": head, "base": base}}})
     old_epoch = service.store.acquire("workspace:" + str(old_workspace.resolve()), old_task)
+    state["epoch"] = old_epoch
+    service.store.replace("state", old_task, state)
     service.store.transition_owner(
         "workspace:" + str(old_workspace.resolve()), old_task, old_epoch, "released")
+    observation = {"schema": "corral-reconciliation-observation-v1",
+                   "process": {"identity": {"pid": 1}, "status": "absent"},
+                   "artifact": {"status": "preserved"},
+                   "delivery": {"repo": "fixture/repo", "pr": 7, "head": head,
+                                "base": base, "task": old_task, "attempt": attempt,
+                                "generation": 1, "authenticated": True, "searched": True,
+                                "status": "absent"}}
+    observation["digest"] = digest(observation)
+    old_result = {"accepted": False, "terminal_status": "cancelled", "generation": 1,
+                  "attempt": attempt, "receipt": {
+                      "authority": "controller-cancellation-reconciliation",
+                      "observation": observation}}
+    service.store.replace("result", old_task, old_result)
+    service.store.replace("allocation", old_task, {"active": False})
+    service.store.replace("reconciliation", old_task + ":g1", {
+        "event": "cancelled-reconciled", "task": old_task, "generation": 1,
+        "attempt": attempt, "observation": observation, "result_digest": digest(old_result)})
 
     admitted = service.submit_pr_review(
         "demo", 7, "advisory", replacement_of_task=old_task)
     replacement = service.store.get("review_replacement", old_task)
     assert replacement["new_task"] == admitted["event"]["task_id"]
     assert replacement["candidate_binding"]["head"] == head
-    assert service.store.get("state", old_task) == {"status": "reconciled"}
+    assert service.store.get("state", old_task) == state
     assert service.store.get("cancel", old_task) == {"requested": True}

@@ -30,25 +30,43 @@ def _old_binding(service, task_id: str) -> dict[str, Any]:
     request = service.store.get("request", task_id)
     state = service.store.get("state", task_id)
     result = service.store.get("result", task_id) or {}
-    if not request or not state or state.get("status") != "reconciled" \
-            or service.store.get("cancel", task_id) is None or result.get("accepted") is not False:
+    if (not request or not state or state.get("status") != "cancelled"
+            or state.get("reconciliation") != "cancelled-reconciled"
+            or service.store.get("cancel", task_id) is None
+            or result.get("accepted") is not False
+            or result.get("terminal_status") != "cancelled"):
         raise PermissionError("replacement task must be historically cancelled and reconciled")
+    generation = state.get("generation", result.get("generation"))
+    attempt = state.get("attempt")
+    if (not isinstance(generation, int) or generation <= 0 or not isinstance(attempt, str)
+            or result.get("generation") != generation or result.get("attempt") != attempt):
+        raise PermissionError("replacement task generation or attempt binding is incomplete")
+    receipt = result.get("receipt") or {}
+    observation = receipt.get("observation") or {}
+    delivery = observation.get("delivery") or {}
+    if (receipt.get("authority") != "controller-cancellation-reconciliation"
+            or observation.get("digest") != digest(
+                {key: value for key, value in observation.items() if key != "digest"})
+            or delivery.get("authenticated") is not True
+            or delivery.get("searched") is not True or delivery.get("status") != "absent"
+            or delivery.get("task") != task_id or delivery.get("attempt") != attempt
+            or delivery.get("generation") != generation):
+        raise PermissionError("replacement task lacks authenticated absent-delivery reconciliation")
+    audit = service.store.get("reconciliation", f"{task_id}:g{generation}")
+    if (not isinstance(audit, dict) or audit.get("event") != "cancelled-reconciled"
+            or audit.get("task") != task_id or audit.get("attempt") != attempt
+            or audit.get("generation") != generation or audit.get("observation") != observation
+            or audit.get("result_digest") != digest(result)):
+        raise PermissionError("replacement task reconciliation audit binding is invalid")
+    allocation = service.store.get("allocation", task_id)
+    if allocation and allocation.get("active") is not False:
+        raise PermissionError("replacement task allocation remains active")
     workspace = request.get("workspace")
-    if workspace:
-        ownership = service.store.ownership("workspace:" + str(Path(workspace).resolve()))
-        if ownership and ownership[2] != "released":
-            raise PermissionError("replacement task workspace ownership is not released")
-    export_id = request.get("trusted_export_id")
-    candidate = service.store.get("trusted_export", export_id) if export_id else None
-    if not candidate:
-        validation = result.get("inspection_validation") or {}
-        candidate = validation.get("candidate")
-    if not candidate:
-        structured = result.get("structured") or {}
-        candidate = structured.get("provenance") if isinstance(structured, dict) else None
-    if not isinstance(candidate, dict):
-        raise PermissionError("replacement task has no preserved candidate binding")
-    return candidate
+    ownership = (service.store.ownership("workspace:" + str(Path(workspace).resolve()))
+                 if workspace else None)
+    if ownership != (task_id, state.get("epoch"), "released"):
+        raise PermissionError("replacement task workspace ownership is not released by its owner")
+    return delivery
 
 
 def _assert_replacement(binding: dict[str, Any], receipt: dict[str, Any]) -> None:

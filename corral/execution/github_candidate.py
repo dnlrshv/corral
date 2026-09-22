@@ -8,6 +8,7 @@ import shutil
 import shlex
 import subprocess
 import tempfile
+import time
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -143,6 +144,27 @@ def _freeze(root: Path) -> None:
         path.chmod(0o555 if path.is_dir() else 0o444)
 
 
+def _remove_tree(root: Path) -> None:
+    for path in root.rglob("*"):
+        path.chmod(0o755 if path.is_dir() else 0o644)
+    root.chmod(0o755)
+    shutil.rmtree(root)
+
+
+def _observed_files(root: Path) -> dict[str, dict[str, Any]]:
+    return {str(path.relative_to(root)): {
+        "digest": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "mode": path.stat().st_mode & 0o777}
+        for path in sorted(root.rglob("*")) if path.is_file()}
+
+
+def _write_receipt(path: Path, value: dict[str, Any]) -> None:
+    temporary = path.with_name(path.name + f".{os.getpid()}.tmp")
+    temporary.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
+    temporary.chmod(0o400)
+    os.replace(temporary, path)
+
+
 def _policy_binding(objects: GitObjects, policy_id: str, policy: dict[str, Any],
                     base: str, base_ref: str) -> tuple[str, list[str]]:
     inputs = normalize_policy_inputs(policy.get("inputs"))
@@ -166,7 +188,7 @@ def _policy_binding(objects: GitObjects, policy_id: str, policy: dict[str, Any],
 
 def prepare(state: Path, repository: str, number: int, policy_id: str,
             repository_config: dict[str, Any], *, expected_head: str | None = None,
-            expected_base: str | None = None) -> dict[str, Any]:
+            expected_base: str | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
     """Create or reuse a controller-derived immutable export and provenance receipt."""
     policy = repository_config.get("review_policies", {}).get(policy_id)
     if not isinstance(policy, dict):
@@ -195,16 +217,19 @@ def prepare(state: Path, repository: str, number: int, policy_id: str,
         raise PermissionError("candidate collides with the reserved review metadata path")
     binding = {key: candidate[key] for key in (
         "repository", "pr_number", "head", "base", "auth_mode")}
-    binding["base_ref_tip"] = base_ref_tip
     binding.update(policy_id=policy_id, policy_digest=policy_digest)
     directory_id = digest(binding)
     root = state.resolve() / "candidate-snapshots" / directory_id
     receipts = state.resolve() / "trusted-export-receipts"
     receipt_path = receipts / (directory_id + ".json")
+    observation = {"repository": repository, "pr_number": number,
+                   "head": candidate["head"], "base": candidate["base"],
+                   "base_ref": candidate["base_ref"], "base_ref_tip": base_ref_tip,
+                   "auth_mode": candidate["auth_mode"], "observed_at": time.time()}
     if receipt_path.is_file() and root.is_dir():
-        return json.loads(receipt_path.read_text())
-    if root.exists() or receipt_path.exists():
-        raise RuntimeError("incomplete immutable export requires operator reconciliation")
+        return json.loads(receipt_path.read_text()), observation
+    if receipt_path.exists() and not root.is_dir():
+        raise RuntimeError("trusted export receipt exists without its immutable workspace")
     root.parent.mkdir(parents=True, exist_ok=True)
     receipts.mkdir(parents=True, exist_ok=True)
     temporary = Path(tempfile.mkdtemp(prefix=directory_id + ".", dir=root.parent))
@@ -223,19 +248,16 @@ def prepare(state: Path, repository: str, number: int, policy_id: str,
                   "diff_sha256": diff_sha, "export_digest": selected_digest}
         receipt = {"export_id": digest(record), **record}
         _freeze(temporary)
-        try:
+        if root.exists():
+            if _observed_files(root) != selected:
+                raise RuntimeError("incomplete immutable export bytes require reconciliation")
+            _remove_tree(temporary)
+        else:
             temporary.rename(root)
             root.chmod(0o555)
-        except FileExistsError:
-            temporary.chmod(0o755)
-            shutil.rmtree(temporary)
-        receipt_path.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
-        receipt_path.chmod(0o400)
-        return receipt
+        _write_receipt(receipt_path, receipt)
+        return receipt, observation
     except BaseException:
         if temporary.exists():
-            for path in temporary.rglob("*"):
-                path.chmod(0o755 if path.is_dir() else 0o644)
-            temporary.chmod(0o755)
-            shutil.rmtree(temporary)
+            _remove_tree(temporary)
         raise

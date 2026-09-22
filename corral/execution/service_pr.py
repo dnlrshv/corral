@@ -5,6 +5,7 @@ import time
 from typing import Any
 
 from .github_candidate import prepare
+from .store import digest
 
 
 def _host(service, repo: dict[str, Any], requested: str | None) -> str:
@@ -27,9 +28,11 @@ def submit_pr_review(service, repository: str, pr_number: int, policy_id: str, *
     github_repository = repo.get("github_repository")
     if not isinstance(github_repository, str) or "/" not in github_repository:
         raise ValueError("repository profile requires github_repository")
-    receipt = prepare(service.store.path.parent, github_repository, pr_number, policy_id, repo,
-                      expected_head=expected_head, expected_base=expected_base)
+    receipt, observation = prepare(
+        service.store.path.parent, github_repository, pr_number, policy_id, repo,
+        expected_head=expected_head, expected_base=expected_base)
     service.store.put_once("trusted_export", receipt["export_id"], receipt)
+    service.store.put_once("candidate_observation", digest(observation), observation)
     policy = repo["review_policies"][policy_id]
     profile_id = policy.get("profile_id", "corral-inspection-report-v1")
     objective = policy.get("objective", "Inspect the bound candidate and produce an advisory report.")

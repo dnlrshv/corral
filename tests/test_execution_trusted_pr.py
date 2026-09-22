@@ -94,12 +94,13 @@ def test_controller_owned_pr_export_is_immutable_registered_shape(tmp_path, monk
         tmp_path, advanced_base=True)
     monkeypatch.setenv("CORRAL_PR_FIXTURE", str(fixture))
     config = repository_config(tmp_path, remote, fake_gh)
-    receipt = prepare(tmp_path / "state", "fixture/repo", 7, "advisory", config,
-                      expected_head=head, expected_base=base)
+    receipt, observation = prepare(
+        tmp_path / "state", "fixture/repo", 7, "advisory", config,
+        expected_head=head, expected_base=base)
     assert receipt["export_id"] == digest({k: v for k, v in receipt.items()
                                            if k != "export_id"})
     assert receipt["export_digest"] == receipt["selected_files_digest"]
-    assert receipt["base_ref_tip"] == base_tip and base_tip != base
+    assert observation["base_ref_tip"] == base_tip and base_tip != base
     assert receipt["diff_sha256"] == receipt["selected_files"][
         ".corral-review/candidate.diff"]["digest"]
     assert set(receipt["selected_files"]) == {
@@ -108,7 +109,9 @@ def test_controller_owned_pr_export_is_immutable_registered_shape(tmp_path, monk
     assert not (source / "should-not-exist").exists()
     workspace = Path(receipt["workspace"])
     assert workspace.is_absolute() and (workspace / "input.txt").read_text() == "candidate\n"
-    assert prepare(tmp_path / "state", "fixture/repo", 7, "advisory", config) == receipt
+    reused, second_observation = prepare(
+        tmp_path / "state", "fixture/repo", 7, "advisory", config)
+    assert reused == receipt and second_observation["base_ref_tip"] == base_tip
 
 
 def test_git_fetch_uses_only_explicit_trusted_credential_helper(tmp_path, monkeypatch):
@@ -131,6 +134,23 @@ def test_git_fetch_uses_only_explicit_trusted_credential_helper(tmp_path, monkey
     assert "credential.helper=!" in rendered and "auth git-credential" in rendered
     assert observed["kwargs"]["env"]["GIT_CONFIG_GLOBAL"] == "/dev/null"
     assert "TOKEN" not in rendered
+
+
+def test_export_reconciles_crash_after_rename_before_receipt(tmp_path, monkeypatch):
+    _, remote, fixture, _, _, _, fake_gh = pr_fixture(tmp_path)
+    monkeypatch.setenv("CORRAL_PR_FIXTURE", str(fixture))
+    config = repository_config(tmp_path, remote, fake_gh)
+    import corral.execution.github_candidate as candidate
+    original = candidate._write_receipt
+    monkeypatch.setattr(candidate, "_write_receipt",
+                        lambda *_args: (_ for _ in ()).throw(KeyboardInterrupt("crash")))
+    with pytest.raises(KeyboardInterrupt, match="crash"):
+        prepare(tmp_path / "state", "fixture/repo", 7, "advisory", config)
+    monkeypatch.setattr(candidate, "_write_receipt", original)
+    receipt, _observation = prepare(
+        tmp_path / "state", "fixture/repo", 7, "advisory", config)
+    assert Path(receipt["workspace"]).is_dir()
+    assert len(list((tmp_path / "state" / "trusted-export-receipts").glob("*.json"))) == 1
 
 
 def test_pr_admission_rejects_wrong_head_and_fetched_source_before_task(tmp_path, monkeypatch):

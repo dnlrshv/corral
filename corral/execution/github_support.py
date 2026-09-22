@@ -187,6 +187,9 @@ def find_remote_matching_review(
     bridge_actor: str | None = None,
 ) -> dict[str, Any] | None:
     for review in read_pages(request_fn, f"/repos/{repo}/pulls/{number}/reviews"):
+        # GitHub reports ``"body": null`` for reviews that carry only line comments.
+        if "body" in review and review["body"] is None:
+            review = {**review, "body": ""}
         # Incomplete rows cannot prove absence and therefore cannot permit a POST.
         if (
             type(review.get("id")) is not int

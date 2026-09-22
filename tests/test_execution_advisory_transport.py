@@ -167,3 +167,13 @@ def test_reconciliation_does_not_complete_newer_lease_or_change_receipt(tmp_path
         with pytest.raises(PermissionError):
             persist_delivery_receipt(store, intent, "pr:" + PR, tampered)
     assert store.get("advisory_receipt", intent) == receipt
+
+
+def test_null_body_reviews_from_others_do_not_block_publication(tmp_path):
+    store, http, transport, intent, payload = environment(tmp_path)
+    # GitHub reports ``"body": null`` for reviews that only carry line comments.
+    http.reviews = [{"id": 7, "user": {"login": "someone"}, "commit_id": HEAD,
+                     "state": "COMMENTED", "body": None}]
+    receipt = transport.advisory(PR, "candidate", intent, payload)
+    assert receipt["review_id"] == 901 and len(http.posts) == 1
+    assert transport.reconcile(PR, intent, payload)["review_id"] == 901

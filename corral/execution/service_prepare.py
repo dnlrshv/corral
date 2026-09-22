@@ -5,7 +5,7 @@ import json
 import time
 import uuid
 
-from .runtime_identity import alive, observe
+from .runtime_identity import process_status, observe
 from .store import canonical
 
 
@@ -24,7 +24,8 @@ def claim(store, event_id: str, task_id: str, transfer_id: str) -> bool:
         if ((existing.get("task_id"), existing.get("transfer_id"))
                 != (task_id, transfer_id)):
             raise ValueError("source preparation identity changed")
-        if alive(existing.get("process") or {}):
+        state = process_status(existing.get("process") or {})
+        if state != "dead":
             return False
         db.execute("UPDATE records SET value=? WHERE kind='service_prepare_claim' AND key=?",
                    (canonical(candidate), event_id))

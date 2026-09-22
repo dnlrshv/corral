@@ -26,21 +26,6 @@ BRIEF_FIELD_NAMES = (
 
 FENCE_RE = re.compile(r"```(?:ya?ml)?[ \t]*\r?\n(.*?)\r?\n```", re.DOTALL | re.IGNORECASE)
 TOP_LEVEL_FIELD_RE = re.compile(rf"^\s*({'|'.join(BRIEF_FIELD_NAMES)}):(?:\s|$)")
-_CREDENTIAL_KEY = (
-    r"[A-Za-z0-9_]*(?:access[_-]?token|api[_-]?key|token|secret|password|passwd|"
-    r"private[_-]?key|database[_-]?url|db[_-]?url|dsn|"
-    r"connection[_-]?(?:string|uri|url))[A-Za-z0-9_]*"
-)
-
-SECRET_PATTERNS = (
-    re.compile(r"(sk-ant-[A-Za-z0-9_-]+|ghp_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+)"),
-    re.compile(
-        rf"(?i)(?<![A-Za-z0-9_])(?P<key>[\"']?{_CREDENTIAL_KEY}[\"']?)"
-        r"\s*[:=]\s*"
-        r"(?:\"[^\"\r\n]*\"|'[^'\r\n]*'|[^\s\"',}]+)"
-    ),
-    re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._-]+"),
-)
 
 
 def parse_brief(raw_yaml: str) -> dict[str, Any]:

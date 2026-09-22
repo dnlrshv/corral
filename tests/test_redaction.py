@@ -1,6 +1,12 @@
 import pytest
 
-from corral.redaction import check_file_text_safe
+from corral.redaction import (
+    check_file_text_safe,
+    check_outbound_safe,
+    redact_text,
+    safe_config_diagnostic,
+)
+from corral.retro.bridge.security import sanitize_text
 
 WORKFLOW = ".github/workflows/review.yml"
 FAKE = "NotARealSecretValue"
@@ -66,5 +72,48 @@ def test_source_scanner_keeps_workflow_context_and_type_references():
               "api_key: SecretStr\n"
               "fencing_token: FencingEpoch\n"
               "record = {\"fencing_token\": fencing_token}\n"
+              "tokens_used: int = 0\n"
+              "token = b\"\"\n"
               "def publish(token: Token) -> None: ...\n")
     assert check_file_text_safe(python, source_name="orchestrator.py") == []
+
+
+@pytest.mark.parametrize("line", [
+    f'api_key = f"{FAKE}"',
+    f"api_key = b'{FAKE}'",
+    f'secret = rb"{FAKE}"',
+    f'password = u"{FAKE}"',
+    f"token = Br'{FAKE}'",
+    f'api_key: str = "{FAKE}"',
+    f'password: Optional[str] = "{FAKE}"',
+    f'api_key: ClassVar[bytes] = b"{FAKE}"',
+    f'    token: str = "{FAKE}"  # dataclass default',
+])
+def test_prefixed_and_annotated_literals_are_redacted_and_refused(line):
+    text = line + "\n"
+    assert FAKE not in redact_text(text)
+    assert FAKE not in sanitize_text(text)
+    assert check_outbound_safe(text)
+    assert check_file_text_safe(text, source_name="candidate.py")
+
+
+def test_redacted_literals_keep_their_prefix_and_stay_idempotent():
+    redacted = redact_text(f'api_key = rb"{FAKE}"\npassword: str = f"{FAKE}"\n')
+    assert redacted == 'api_key = rb"[REDACTED]"\npassword: str = f"[REDACTED]"\n'
+    assert redact_text(redacted) == redacted
+    assert not check_outbound_safe(redacted)
+
+
+def test_token_limits_are_counters_but_singular_token_names_are_credentials():
+    for text in ("max_tokens: 4096\n", '{"max_output_tokens": 1024, "cached_tokens": 12}',
+                 "daily_token_limit: int = 300_000\n"):
+        assert redact_text(text) == text
+        assert not check_outbound_safe(text)
+        assert check_file_text_safe(text, source_name="settings.py") == []
+    for text in ("output_token: 8374650192837465019283\n",
+                 "deploy_input_token: 8374650192837465019283\n",
+                 "input_tokens: 8374650192837465019283\n"):
+        assert "8374650192837465019283" not in redact_text(text)
+        assert check_outbound_safe(text)
+    assert safe_config_diagnostic({"max_tokens": 4096, "output_token": 8374650192837465019283}) == {
+        "max_tokens": 4096, "output_token": "[REDACTED]"}

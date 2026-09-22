@@ -1,10 +1,12 @@
 import copy
+import base64
+import hashlib
 import subprocess
 
 import pytest
 
 from corral.execution.scheduler import due_occurrence, ready
-from corral.execution.store import Store
+from corral.execution.store import Store, digest
 from corral.execution.workspace import apply_manifest, manifest
 
 
@@ -59,6 +61,23 @@ def test_manifest_allows_source_token_expressions_and_annotations(tmp_path):
     (repo / "selected.py").write_text(
         '_TOKEN = re.compile(r"(\\d+)([dhm])")\ndef parse(token: str):\n    return token\n')
     assert manifest(repo, ["selected.py"])["files"]["selected.py"]["digest"]
+
+
+def test_apply_manifest_refuses_forged_secret_before_write(tmp_path):
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-c", "user.name=Fixture", "-c", "user.email=f@example.invalid",
+                    "commit", "--allow-empty", "-qm", "fixture"], cwd=repo, check=True)
+    (repo / "selected.txt").write_text("safe\n")
+    expected = manifest(repo, ["selected.txt"])
+    secret = b"password: 'plain-text-secret'\n"
+    incoming = {"base": expected["base"], "files": {"selected.txt": {
+        "digest": hashlib.sha256(secret).hexdigest(),
+        "data": base64.b64encode(secret).decode(), "mode": 0o644}}}
+    incoming["digest"] = digest({"base": incoming["base"], "files": incoming["files"]})
+    with pytest.raises(PermissionError, match="credential-shaped"):
+        apply_manifest(repo, incoming, expected)
+    assert (repo / "selected.txt").read_text() == "safe\n"
 
 
 def test_fairness_resources_dependencies_and_recurrence(tmp_path):

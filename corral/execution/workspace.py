@@ -101,6 +101,8 @@ def apply_manifest(root, incoming, expected):
         data = base64.b64decode(value["data"], validate=True) if value["data"] is not None else None
         if data is not None and hashlib.sha256(data).hexdigest() != value["digest"]:
             raise ValueError("file digest mismatch")
+        if data and check_source_text_safe(data.decode("utf-8", errors="ignore")):
+            raise PermissionError("credential-shaped input refused")
         decoded.append((name, data, value["mode"]))
     for name, data, mode in decoded:
         safe_write_manifest_file(root, name, data, mode)

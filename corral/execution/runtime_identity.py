@@ -45,7 +45,21 @@ def launched(pid: int, executable: str, host: str) -> dict[str, Any]:
 
 
 def alive(identity: dict[str, Any]) -> bool:
+    return process_status(identity) == "alive"
+
+
+def process_status(identity: dict[str, Any]) -> str:
+    """Return alive, dead, or unknown without equating failed observation with death."""
     pid, expected = identity.get("pid"), identity.get("process_start")
     if not isinstance(pid, int) or not expected:
-        return False
-    return process_start(pid) == expected
+        return "unknown"
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return "dead"
+    except (PermissionError, OSError):
+        return "unknown"
+    observed = process_start(pid)
+    if observed is None:
+        return "unknown"
+    return "alive" if observed == expected else "dead"

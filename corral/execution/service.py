@@ -11,7 +11,6 @@ from typing import Any
 
 from . import continuation
 from .controller import Controller
-from .scheduler import ready
 from .store import canonical
 
 TERMINAL = {"completed", "failed", "refused-before-launch", "uncertain", "cancelled"}
@@ -222,7 +221,8 @@ class Service:
         self.store.replace("service_event", event_id, {**event, "status": "prepared"})
         return self.status(event_id)
 
-    def _claim(self, event_id: str, now: float, runtime: dict[str, Any]) -> dict | None:
+    def _claim(self, event_id: str, now: float, runtime: dict[str, Any], *,
+               scheduler_host: str | None = None) -> dict | None:
         with self.store.transaction() as db:
             row = db.execute("SELECT value FROM records WHERE kind='service_event' AND key=?",
                              (event_id,)).fetchone()
@@ -231,10 +231,41 @@ class Service:
             event = json.loads(row[0])
             if event.get("status") != "prepared":
                 return None
+            host = event.get("host")
+            if scheduler_host is not None and host != scheduler_host:
+                raise PermissionError("scheduler host does not match the admitted event")
+            spec = event.get("resolved_spec", {})
+            cpu, memory = spec.get("cpu", 1), spec.get("memory_mb", 0)
+            if not isinstance(cpu, int) or isinstance(cpu, bool) or cpu <= 0:
+                raise ValueError("invalid service CPU request")
+            if not isinstance(memory, int) or isinstance(memory, bool) or memory < 0:
+                raise ValueError("invalid service memory request")
+            active = []
+            for key, raw in db.execute(
+                    "SELECT key,value FROM records WHERE kind='service_event'").fetchall():
+                value = json.loads(raw)
+                if key != event_id and value.get("status") in {"dispatching", "uncertain"}:
+                    active.append(value)
+            workspace = str(Path(spec.get("workspace")).resolve())
+            if any(str(Path(value.get("resolved_spec", {}).get("workspace")).resolve()) == workspace
+                   for value in active if value.get("resolved_spec", {}).get("workspace")):
+                return None
+            host_active = [value for value in active if value.get("host") == host]
+            capacity = self.controller.hosts[host]
+            used_cpu = sum(value.get("resolved_spec", {}).get("cpu", 1)
+                           for value in host_active)
+            used_memory = sum(value.get("resolved_spec", {}).get("memory_mb", 0)
+                              for value in host_active)
+            if (used_cpu + cpu > capacity["cpu"]
+                    or used_memory + memory > capacity["memory_mb"]):
+                return None
             claimed = {**event, "status": "dispatching", "dispatch_started": now,
                        "service_runtime": runtime}
             db.execute("UPDATE records SET value=? WHERE kind='service_event' AND key=?",
                        (canonical(claimed), event_id))
+            if scheduler_host is not None:
+                db.execute("INSERT OR REPLACE INTO records VALUES('service_scheduler',?,?)",
+                           ("host_cursor", canonical({"last_host": scheduler_host})))
             return claimed
 
     def _materialize_schedules(self, now: float) -> list[str]:
@@ -264,28 +295,58 @@ class Service:
 
         reconciled = []
         for event_id, event in self.store.records("service_event").items():
-            if event.get("status") != "dispatching" or not event.get("task_id"):
+            if event.get("status") not in {"dispatching", "uncertain"} or not event.get("task_id"):
                 continue
             task = self.controller.status(self.token, event["task_id"])
             state = task.get("state") or {}
             if state.get("status") in TERMINAL:
                 result = task.get("result") or {}
-                if (state.get("status") == "completed" and result.get("accepted") and
-                        continuation.pending_generation(self.store, event["task_id"])):
+                pending = continuation.pending_generation(self.store, event["task_id"])
+                lineage = task.get("lineage") or {}
+                expected_generation = max(
+                    int(lineage.get("current_generation") or 1),
+                    int(lineage.get("scheduled_generation") or 1),
+                )
+                state_generation = continuation.generation_of(state)
+                result_generation = continuation.generation_of(result)
+                amendment_pending = bool(
+                    state.get("amended_objective_pending")
+                    or result.get("amendment_pending")
+                )
+                status = None
+                if self.store.get("cancel", event["task_id"]):
+                    workspace = event.get("resolved_spec", {}).get("workspace")
+                    ownership = self.store.ownership("workspace:" + str(Path(workspace).resolve())) \
+                        if workspace else None
+                    allocation = self.store.get("allocation", event["task_id"])
+                    settled = (state.get("status") == "cancelled"
+                               and (ownership is None or ownership[2] == "released")
+                               and (allocation is None or allocation.get("active") is False))
+                    status = "cancelled" if settled else "uncertain"
+                elif pending is not None:
                     status = "prepared"
-                elif self.store.get("cancel", event["task_id"]):
-                    status = "cancelled"
-                elif state.get("status") == "completed":
+                elif (state.get("status") == "completed"
+                      and state_generation >= expected_generation
+                      and result_generation >= expected_generation
+                      and not amendment_pending):
                     status = "completed" if result.get("accepted") else "failed"
-                else:
+                elif state.get("status") != "completed":
                     status = state.get("status")
-                worker = state.get("worker_identity") or {
-                    key: state.get(key) for key in ("pid", "pgid", "attempt", "host")
-                }
-                worker.setdefault("coverage", "partial-without-process-start-or-executable")
-                self.store.replace("service_event", event_id, {**event, "status": status,
-                                   "reconciled": True, "service_runtime": runtime,
-                                   "worker_identity": worker})
+                if status is not None:
+                    worker = {
+                        key: state.get(key) for key in ("pid", "pgid", "attempt", "host")
+                    }
+                    worker.update(state.get("worker_identity") or {})
+                    worker.setdefault("coverage", "partial-without-process-start-or-executable")
+                    updated = {**event, "status": status, "reconciled": True,
+                               "service_runtime": runtime, "worker_identity": worker}
+                    if self.store.get("cancel", event["task_id"]) and status == "uncertain":
+                        updated["error"] = (
+                            "cancellation requested; controller ownership is unresolved"
+                        )
+                    self.store.replace("service_event", event_id, updated)
+                    reconciled.append(event_id)
+                    continue
             elif alive(event.get("launcher_identity") or {}):
                 continue
             elif state.get("status") in ("running", "dispatching") and alive(
@@ -299,55 +360,27 @@ class Service:
 
     def tick(self, now: float | None = None) -> dict[str, Any]:
         from .runtime_identity import observe
+        from .service_scheduler import acquire_tick, dispatch_ready, release_tick
 
         runtime = observe()
         self.store.replace("service_runtime", "current", runtime)
-        now = time.time() if now is None else now
-        created = self._materialize_schedules(now)
-        reconciled = self._reconcile(runtime)
-        dispatched = []
-        events = self.store.records("service_event")
-        for host, host_cfg in self.controller.hosts.items():
-            busy_workspaces = {value.get("resolved_spec", {}).get("workspace")
-                               for value in events.values()
-                               if value.get("status") == "dispatching"}
-            pending = [{"id": key, "route": value["route"], "mode": value["mode"],
-                        "submitted": value["submitted"], "due": 0,
-                        "cpu": value.get("resolved_spec", {}).get("cpu", 1),
-                        "memory_mb": value.get("resolved_spec", {}).get("memory_mb", 0)}
-                       for key, value in events.items()
-                       if value.get("host") == host and value.get("status") == "prepared"
-                       and value.get("resolved_spec", {}).get("workspace") not in busy_workspaces]
-            running = [value for value in events.values()
-                       if value.get("host") == host and value.get("status") == "dispatching"]
-            capacity = {**host_cfg, "interactive_boost_seconds":
-                        host_cfg.get("interactive_boost_seconds", 60)}
-            for event_id in ready(pending, set(), running, capacity, now):
-                if len(dispatched) >= self.max_dispatch:
-                    break
-                event = self._claim(event_id, now, runtime)
-                if event is None:
-                    continue
-                try:
-                    if host != self.execution_host and not host_cfg.get("executor"):
-                        raise PermissionError(
-                            "nonlocal host requires an authenticated remote executor route")
-                    from .service_dispatch import launch
-                    launcher = launch(self.controller_path, self.store.path.parent,
-                                      event["task_id"], host,
-                                      development_mode=self.development_mode)
-                    self.store.replace("service_event", event_id,
-                                       {**event, "launcher_identity": launcher})
-                    busy_workspaces.add(event.get("resolved_spec", {}).get("workspace"))
-                except Exception as exc:
-                    self.store.replace("service_event", event_id,
-                                       {**event, "status": "uncertain", "error": str(exc)})
-                dispatched.append(event_id)
-            if len(dispatched) >= self.max_dispatch:
-                break
-        return {"created": created, "reconciled": reconciled, "dispatched": dispatched,
-                "pending": [k for k, v in self.store.records("service_event").items()
-                            if v.get("status") == "prepared"]}
+        lease = acquire_tick(self, runtime)
+        if lease is None:
+            return {"created": [], "reconciled": [], "dispatched": [], "busy": True,
+                    "pending": [k for k, v in self.store.records("service_event").items()
+                                if v.get("status") == "prepared"]}
+        try:
+            now = time.time() if now is None else now
+            created = self._materialize_schedules(now)
+            reconciled = self._reconcile(runtime)
+            events = self.store.records("service_event")
+            dispatched = dispatch_ready(self, events, now, runtime)
+            return {"created": created, "reconciled": reconciled, "dispatched": dispatched,
+                    "busy": False,
+                    "pending": [k for k, v in self.store.records("service_event").items()
+                                if v.get("status") == "prepared"]}
+        finally:
+            release_tick(self, lease)
 
     def return_artifact(self, event_id: str, relative_path: str, destination: str | Path) -> Path:
         event = self.store.get("service_event", event_id)

@@ -27,6 +27,10 @@ def _parser() -> argparse.ArgumentParser:
     submit.add_argument("--host")
     submit.add_argument("--role")
     submit.add_argument("--profile")
+    submit.add_argument("--inspection-path", action="append", default=[])
+    submit.add_argument("--diff-path")
+    submit.add_argument("--workspace-kind", choices=("checkout", "immutable_snapshot"),
+                        default="checkout")
     submit.add_argument("--run", action="store_true")
     submit.add_argument("--poll-interval", type=float, default=2.0)
     status = sub.add_parser("status")
@@ -69,7 +73,8 @@ def main(argv: list[str] | None = None) -> int:
         result = client.call("submit", event_id=event_id, repository=args.repository,
                              objective=args.objective, host=args.host, role=args.role,
                              profile_id=args.profile, candidate_paths=args.candidate or None,
-                             source_snapshot=snapshot)
+                             source_snapshot=snapshot, inspection_paths=args.inspection_path,
+                             diff_path=args.diff_path, workspace_kind=args.workspace_kind)
         if args.run:
             client.call("tick")
             while True:

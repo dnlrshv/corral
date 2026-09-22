@@ -1,7 +1,6 @@
 """Durable Corral service: event admission, schedules, fair dispatch and recovery."""
 from __future__ import annotations
 
-import argparse
 import base64
 import hashlib
 import json
@@ -79,7 +78,8 @@ class Service:
         self, event_id: str, repository: str, objective: str, *, host: str | None = None,
         mode: str = "interactive", role: str | None = None, profile_id: str | None = None,
         candidate_paths: list[str] | None = None, source_snapshot: dict | None = None,
-        source_reason: str = "interactive-cli",
+        source_reason: str = "interactive-cli", inspection_paths: list[str] | None = None,
+        diff_path: str | None = None, workspace_kind: str = "checkout",
     ) -> dict[str, Any]:
         if not event_id or not objective.strip():
             raise ValueError("event_id and objective are required")
@@ -95,10 +95,19 @@ class Service:
         selected_profile = profile_id or defaults.get("profile_id")
         outputs = list(candidate_paths if candidate_paths is not None
                        else defaults.get("candidate_paths", []))
+        inspected = list(inspection_paths or [])
+        if workspace_kind not in {"checkout", "immutable_snapshot"}:
+            raise ValueError("invalid workspace_kind")
+        if selected_role == "review" and not inspected:
+            raise ValueError("review admission requires inspection_paths")
+        if diff_path is not None and diff_path not in inspected:
+            raise ValueError("diff_path must be one of inspection_paths")
         spec = {**defaults, "repo": repository, "workspace": workspace,
                 "objective": objective, "host": selected_host, "mode": mode,
                 "role": selected_role, "candidate_paths": outputs,
-                "source_reason": source_reason, "source_confidence": "controller-registered"}
+                "source_reason": source_reason, "source_confidence": "controller-registered",
+                "workspace_kind": workspace_kind, "inspection_paths": inspected,
+                "diff_path": diff_path}
         if selected_profile:
             spec["profile_id"] = selected_profile
         spec["service_event_id"] = event_id
@@ -107,6 +116,8 @@ class Service:
                  "host": selected_host, "mode": mode, "role": selected_role,
                  "profile_id": selected_profile, "candidate_paths": outputs,
                  "source_snapshot": source_snapshot, "source_reason": source_reason,
+                 "inspection_paths": inspected, "diff_path": diff_path,
+                 "workspace_kind": workspace_kind,
                  "route": self._profile_route(spec, selected_host), "resolved_spec": spec}
         prior = self.store.get("service_event", event_id)
         if prior is not None:
@@ -345,57 +356,3 @@ class Service:
             if target.read_bytes() != data:
                 raise PermissionError("destination exists with newer or different content")
         return target
-
-
-def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", required=True)
-    sub = parser.add_subparsers(dest="command", required=True)
-    submit = sub.add_parser("submit")
-    submit.add_argument("--event-id", required=True)
-    submit.add_argument("--repository", required=True)
-    submit.add_argument("--objective", required=True)
-    submit.add_argument("--host")
-    submit.add_argument("--mode", default="interactive")
-    submit.add_argument("--role")
-    submit.add_argument("--profile")
-    submit.add_argument("--candidate", action="append", default=[])
-    submit.add_argument("--snapshot", type=Path)
-    status = sub.add_parser("status")
-    status.add_argument("--event-id", required=True)
-    tick = sub.add_parser("tick")
-    tick.add_argument("--now", type=float)
-    amend = sub.add_parser("amend")
-    amend.add_argument("--event-id", required=True)
-    amend.add_argument("--amendment-id", required=True)
-    amend.add_argument("--objective", required=True)
-    returned = sub.add_parser("return")
-    returned.add_argument("--event-id", required=True)
-    returned.add_argument("--path", required=True)
-    returned.add_argument("--destination", required=True)
-    return parser
-
-
-def main(argv: list[str] | None = None) -> int:
-    args = _parser().parse_args(argv)
-    service = Service(args.config)
-    if args.command == "submit":
-        snapshot = json.loads(args.snapshot.read_text()) if args.snapshot else None
-        result = service.submit(args.event_id, args.repository, args.objective, host=args.host,
-                                mode=args.mode, role=args.role, profile_id=args.profile,
-                                candidate_paths=args.candidate or None, source_snapshot=snapshot)
-    elif args.command == "status":
-        result = service.status(args.event_id)
-    elif args.command == "tick":
-        result = service.tick(args.now)
-    elif args.command == "amend":
-        result = service.amend(args.event_id, args.amendment_id, args.objective)
-    else:
-        result = {"path": str(service.return_artifact(
-            args.event_id, args.path, args.destination))}
-    print(json.dumps(result, indent=2, sort_keys=True))
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

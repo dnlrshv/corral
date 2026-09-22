@@ -18,7 +18,7 @@ from corral.preflight import auth
 from corral.preflight.parser import sanitize_preflight_error
 from corral.preflight.retry import BriefResponseError
 
-from .preflight_support import clean_preflight_env
+from .preflight_support import clean_preflight_env  # noqa: F401
 
 pytestmark = pytest.mark.usefixtures("clean_preflight_env")
 
@@ -48,7 +48,7 @@ estimated_blast_radius: medium
 do_not_touch: []
 """
 
-WRAPPED_BRIEF_YAML = f"preflight_brief_v1:\n" + "\n".join(
+WRAPPED_BRIEF_YAML = "preflight_brief_v1:\n" + "\n".join(
     f"  {line}" if line else line for line in VALID_BRIEF_YAML.strip().splitlines()
 )
 
@@ -274,3 +274,48 @@ def test_sanitize_preflight_error_redacts_secret_patterns() -> None:
     for secret in ("sk-ant-AbC123_xYz", "ghp_AbC123def", "github_pat_Zz9", "hunter2", "eyJ.hb-c.d"):
         assert secret not in sanitized
     assert sanitized.count("[REDACTED]") >= 5
+
+def test_sanitize_preflight_error_preserves_token_counters() -> None:
+    from corral.preflight.parser import sanitize_preflight_error
+    message = 'error formatting {"total_tokens": 1500, "input_tokens": 1000, "token": "secret_abc"}'
+    sanitized = sanitize_preflight_error(RuntimeError(message))
+    assert 'total_tokens": 1500' in sanitized
+    assert 'input_tokens": 1000' in sanitized
+    assert 'secret_abc' not in sanitized
+    assert '[REDACTED]' in sanitized
+
+
+def test_sanitize_preflight_error_redacts_disguised_token_counter_strings_and_preserves_json() -> None:
+    import json
+    from corral.preflight.parser import sanitize_preflight_error
+    payload = '{"input_tokens": "secret_bearer_disguised_here", "total_tokens": "super_confidential_token", "token": "secret123"}'
+    sanitized = sanitize_preflight_error(RuntimeError(payload))
+    assert "secret_bearer_disguised_here" not in sanitized
+    assert "super_confidential_token" not in sanitized
+    assert "secret123" not in sanitized
+    # JSON syntax remains valid and parseable
+    json_part = sanitized.split(": ", 1)[1]
+    parsed = json.loads(json_part)
+    assert parsed["input_tokens"] == "[REDACTED]"
+    assert parsed["total_tokens"] == "[REDACTED]"
+    assert parsed["token"] == "[REDACTED]"
+
+
+def test_sanitize_preflight_error_preserves_gemini_token_counters() -> None:
+    import json
+    from corral.preflight.parser import sanitize_preflight_error
+    payload = json.dumps({
+        "candidates_token_count": 800,
+        "cached_content_token_count": 2500,
+        "token_count": 500,
+        "candidatesTokenCount": 800,
+        "token": "secret_abc",
+    })
+    sanitized = sanitize_preflight_error(RuntimeError(payload))
+    json_part = sanitized.split(": ", 1)[1]
+    parsed = json.loads(json_part)
+    assert parsed["candidates_token_count"] == 800
+    assert parsed["cached_content_token_count"] == 2500
+    assert parsed["token_count"] == 500
+    assert parsed["candidatesTokenCount"] == 800
+    assert parsed["token"] == "[REDACTED]"

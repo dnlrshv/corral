@@ -1,0 +1,2 @@
+{"type":"thread_settings_applied","payload":{"thread_settings":{"model":"qwen3.8-max","reasoning_effort":"high","model_provider_id":"baba"}}}
+{"type":"turn.completed","usage":{"input_tokens":45528813,"cached_input_tokens":44310528,"output_tokens":290548,"reasoning_output_tokens":143366}}

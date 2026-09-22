@@ -35,6 +35,7 @@ corral-surface-check = "corral.hooks.surface_check:main"
 corral-surface-reminder = "corral.hooks.surface_reminder:main"
 corral-magic-numbers = "corral.hooks.magic_numbers:main"
 corral-telemetry-capture = "corral.telemetry.capture:main"
+corral-execution-client = "corral.execution.client:main"
 
 [tool.setuptools.packages.find]
 include = ["corral*"]

@@ -133,3 +133,41 @@ Near-term roadmap: stabilize configuration and registry schemas, expand portable
 ## License
 
 Apache-2.0. See [`LICENSE`](LICENSE).
+
+### Optional managed execution (offline development)
+
+`python -m corral.execution.demo /tmp/corral-example` runs one synthetic worker
+through explicit profile resolution, durable observation, and an exact-candidate
+verifier. `python -m corral.execution.pr_demo /tmp/corral-pr-example` exercises a
+fake GitHub lifecycle with a process-backed repair and guarded merge receipt.
+No provider calls, service installation, or GitHub writes occur in these demos.
+
+`corral-execution-client --config private-client.json --request request.json`
+(or `python -m corral.execution.client`) supports local and authenticated SSH
+channels. Requests use `submit`, `steer`, `status`, `dispatch`, `dispatch-wave`,
+`continue`, `cancel`, `snapshot`, and `transfer`; worker execution is detached
+from the client. Host capacity, enabled routes, profiles and controller paths
+are private config. Input/result manifests bind the Git base and explicitly
+selected file digests; changed destinations fail closed. Use isolated
+repositories for development.
+
+`continue` is the only post-terminal action. It checkpoints a task's terminal
+attempt and schedules exactly one later generation under the same task id, with
+its own objective, verifier policy, candidate declaration, artifact directory,
+worker session and usage attribution. It rebinds nothing else: host, endpoint,
+workspace, profile/model/route, role, resources, dependencies, command and
+credentials stay bound to the immutable submitted request, and a payload naming
+any of them is refused rather than merged. It never dispatches, retries or caps
+on its own, a repeated continuation id deduplicates, and an active, unresolved
+or cancelled attempt must be reconciled first. `status` then reports the
+current result together with the immutable per-generation history and lineage,
+so an accepted earlier artifact stays addressable and its receipt is never
+re-derived or overwritten.
+
+The execution package defaults to observation, with soft thresholds recorded
+without budget admission caps. Model/effort, harness, billing identities and
+observations remain separate; unknown telemetry stays unknown. The current
+launcher enables synthetic profiles only. Native provider bindings, OS identity
+separation, detached-descendant containment, installed bot cutover and live
+publication require separate validation. A same-user process is not an OS
+security boundary, and fixture verdicts do not establish native isolation.

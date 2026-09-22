@@ -98,8 +98,10 @@ def _response_record(response: dict[str, Any], *, requested_model: str, effort: 
     observed_model = response.get("model") if isinstance(response.get("model"), str) else None
     response_id = response.get("id") if isinstance(response.get("id"), str) else None
     usage = _usage(response.get("usage"))
-    identity = {"provider": provider, "account_ref": account_ref, "route": route,
-                "harness": "inspection-packet-http", "version": "1"}
+    # The provider only attests its response model.  Route/provider/account values are
+    # controller configuration, not a provider whoami result, so keep them out of the
+    # observed identity used for attribution and state their coverage explicitly.
+    identity = {"harness": "inspection-packet-http", "version": "1"}
     if observed_model:
         identity["model"] = observed_model
     return {
@@ -107,7 +109,15 @@ def _response_record(response: dict[str, Any], *, requested_model: str, effort: 
         "narrative": "", "result": None, "identity": identity,
         "requested": {"model": requested_model, "effort": effort},
         "observed": {"response_model": observed_model, "response_id": response_id,
-                     "effort_attested": False, "session_mode": "stateless"},
+                     "effort_attested": False, "session_mode": "stateless",
+                     "identity_coverage": {
+                         "model": "provider-response" if observed_model else "unavailable",
+                         "provider": "configured-https-endpoint-route",
+                         "account_ref": "configured-credential-reference",
+                         "route": "configured-route",
+                         "effort": "requested-not-attested",
+                         "harness": "local-transport",
+                     }},
         "provider_receipt": {"response_id": response_id, "response_model": observed_model,
                              "finish_reason": first.get("finish_reason"),
                              "choice_count": len(choices) if isinstance(choices, list) else None,

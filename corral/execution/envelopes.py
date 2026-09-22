@@ -199,6 +199,7 @@ def _parse_inspection(*, stdout_text: str, stderr_text: str, exit_code: int,
     observed = payload.get("observed") if isinstance(payload.get("observed"), dict) else {}
     envelope.detail = {"exit_code": exit_code, "stderr_tail": (stderr_text or "")[-500:],
                        "requested": payload.get("requested"), "observed": observed,
+                       "identity_coverage": observed.get("identity_coverage"),
                        "provider_receipt": payload.get("provider_receipt"),
                        "transport_error": payload.get("error"),
                        "session_mode": observed.get("session_mode"),

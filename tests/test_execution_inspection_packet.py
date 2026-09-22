@@ -103,6 +103,12 @@ def test_transport_sends_one_stateless_tool_free_request_and_records_usage(tmp_p
     assert seen["reasoning_effort"] == "medium" and seen["stream"] is False
     assert result["observed"]["session_mode"] == "stateless"
     assert result["observed"]["effort_attested"] is False
+    assert result["identity"] == {"model": "review-model", "harness": "inspection-packet-http",
+                                  "version": "1"}
+    assert result["observed"]["identity_coverage"] == {
+        "model": "provider-response", "provider": "configured-https-endpoint-route",
+        "account_ref": "configured-credential-reference", "route": "configured-route",
+        "effort": "requested-not-attested", "harness": "local-transport"}
     assert result["usage"] == {"input_tokens": 20, "output_tokens": 7,
                                "total_tokens": 27, "thinking_tokens": 3}
     assert json.loads(result_path.read_text())["report"].startswith("The source")
@@ -160,9 +166,11 @@ def test_model_misroute_retains_failed_usage_and_observed_identity(tmp_path):
                              stderr_text="", exit_code=1, invocation="attempt",
                              synthetic_expected=False)
     assert parsed.identity["model"] == "unexpected-model"
+    assert "provider" not in parsed.identity and "account_ref" not in parsed.identity
     assert parsed.usage_events[0]["counters"] == {
         "input_tokens": 5, "output_tokens": 2, "total_tokens": 7}
     assert parsed.detail["provider_receipt"]["response_id"] == "response-misroute"
+    assert parsed.detail["identity_coverage"]["effort"] == "requested-not-attested"
 
 
 def test_packet_refuses_credential_shaped_candidate_content(tmp_path):

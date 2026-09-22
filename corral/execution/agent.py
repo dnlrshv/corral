@@ -89,8 +89,6 @@ class CorralAgent:
         result_file: str = "result.json",
         usage_file: str = "usage.json",
         tools: list[str] | None = None,
-        workspace_kind: str = "checkout",
-        snapshot_provenance: dict[str, Any] | None = None,
         inspection_paths: list[str] | None = None,
         inspection_diff_path: str | None = None,
         inspection_base_ref: str | None = None,
@@ -112,7 +110,6 @@ class CorralAgent:
             "dependencies": dependencies or [],
             "result_file": result_file,
             "usage_file": usage_file,
-            "workspace_kind": workspace_kind,
         }
         if profile_id and self.config.profiles and profile_id in self.config.profiles:
             profile = self.config.profiles[profile_id]
@@ -147,8 +144,6 @@ class CorralAgent:
             spec["inspection_paths"] = inspection_paths
         if inspection_diff_path is not None:
             spec["inspection_diff_path"] = inspection_diff_path
-        if snapshot_provenance is not None:
-            spec["snapshot_provenance"] = snapshot_provenance
         if inspection_base_ref is not None:
             spec["inspection_base_ref"] = inspection_base_ref
         if inspection_pr is not None:
@@ -167,6 +162,28 @@ class CorralAgent:
             spec["candidate_paths"] = list(dict.fromkeys(
                 [*spec["candidate_paths"], *inspection_candidates]))
 
+        response = self.client.call("submit", request_id=req_id, spec=spec)
+        return str(response["task"])
+
+    def submit_export(
+        self, trusted_export_id: str, objective: str, *, request_id: str | None = None,
+        host: str | None = None, profile_id: str | None = None,
+        model: str | None = None, effort: str | None = None,
+    ) -> str:
+        """Submit a controller-registered immutable review export by opaque id."""
+        req_id = request_id or hashlib.sha256(
+            f"{trusted_export_id}:{objective}:{time.time()}".encode()).hexdigest()[:16]
+        spec: dict[str, Any] = {
+            "trusted_export_id": trusted_export_id, "objective": objective,
+            "host": host or self.config.default_host, "role": "review",
+            "tools": ["inspect-packet", "report"],
+        }
+        if profile_id:
+            spec["profile_id"] = profile_id
+        if model:
+            spec["model"] = model
+        if effort:
+            spec["effort"] = effort
         response = self.client.call("submit", request_id=req_id, spec=spec)
         return str(response["task"])
 
@@ -291,15 +308,15 @@ def main() -> int:
     run_parser.add_argument("--role", default="implementation")
     run_parser.add_argument("--inspection-paths", nargs="*")
     run_parser.add_argument("--inspection-diff")
-    run_parser.add_argument("--workspace-kind", choices=("checkout", "immutable_snapshot"),
-                            default="checkout")
-    run_parser.add_argument("--snapshot-repo")
-    run_parser.add_argument("--snapshot-head")
-    run_parser.add_argument("--snapshot-base")
-    run_parser.add_argument("--snapshot-export-id")
-    run_parser.add_argument("--snapshot-export-digest")
     run_parser.add_argument("--inspection-base-ref")
     run_parser.add_argument("--pr", type=int)
+
+    inspect_parser = subparsers.add_parser(
+        "inspect-export", help="Submit a controller-registered inspection export")
+    inspect_parser.add_argument("--export-id", required=True)
+    inspect_parser.add_argument("--objective", required=True)
+    inspect_parser.add_argument("--host", default=None)
+    inspect_parser.add_argument("--profile", required=True)
 
     # status
     status_parser = subparsers.add_parser("status", help="Query task status")
@@ -338,27 +355,19 @@ def main() -> int:
     agent = CorralAgent(args.config)
 
     if args.command == "run":
-        snapshot_values = (args.snapshot_repo, args.snapshot_head, args.snapshot_base,
-                           args.snapshot_export_id, args.snapshot_export_digest)
-        if any(snapshot_values) and not all(snapshot_values):
-            parser.error("snapshot provenance requires repo, head, base, export id, and export digest")
-        snapshot_provenance = None
-        if all(snapshot_values):
-            snapshot_provenance = {
-                "repo": args.snapshot_repo, "head": args.snapshot_head,
-                "base": args.snapshot_base, "export_id": args.snapshot_export_id,
-                "export_digest": args.snapshot_export_digest,
-            }
         result = agent.run(args.repo, args.objective, host=args.host, model=args.model,
                            effort=args.effort, candidate_paths=args.candidates,
                            profile_id=args.profile, role=args.role,
                            inspection_paths=args.inspection_paths,
                            inspection_diff_path=args.inspection_diff,
-                           workspace_kind=args.workspace_kind,
-                           snapshot_provenance=snapshot_provenance,
                            inspection_base_ref=args.inspection_base_ref,
                            inspection_pr=args.pr)
         print(json.dumps(result, indent=2))
+    elif args.command == "inspect-export":
+        task_id = agent.submit_export(args.export_id, args.objective, host=args.host,
+                                      profile_id=args.profile)
+        agent.dispatch(task_id)
+        print(json.dumps(agent.wait(task_id), indent=2))
     elif args.command == "status":
         print(json.dumps(agent.status(args.task_id), indent=2))
     elif args.command == "continue":

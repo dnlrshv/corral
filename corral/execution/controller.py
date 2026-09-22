@@ -37,6 +37,7 @@ class Controller:
     def submit(self, token, request_id, spec):
         self.authorize(token)
         spec = json.loads(json.dumps(spec))
+        spec = workspace_contract.resolve_spec(self.store, spec)
         if spec.get("native_resume") or spec.get("resume") or spec.get("session_resume"):
             raise PermissionError("native session resume is unsupported; fresh checkpoint-based generations are supported")
         spec.setdefault("host", self.default_host)
@@ -303,7 +304,7 @@ class Controller:
         if self.context(task_id).get("pause_dispatch"):
             raise PermissionError("dispatch paused")
         workspace = str(Path(spec["workspace"]).resolve())
-        workspace_provenance = workspace_contract.preflight(spec, workspace)
+        workspace_provenance = workspace_contract.preflight(spec, workspace, store=self.store)
         resource = "workspace:" + workspace
         epoch = self.store.acquire(resource, task_id)
         capacity = self.hosts[execution_host]

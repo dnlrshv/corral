@@ -12,7 +12,7 @@ from corral.execution.controller import Controller
 from corral.execution.inspection_packet import bind_candidate, build, persist
 from corral.execution.inspection_transport import invoke
 from corral.execution.profiles import Profile
-from corral.execution.store import digest
+from corral.execution.store import Store, digest
 from corral.execution.workspace import file_digest
 
 
@@ -28,29 +28,46 @@ class _Response(io.BytesIO):
         return None
 
 
-def _workspace(tmp_path: Path, *, snapshot: bool = True) -> tuple[Path, dict]:
+def _register_export(root: Path, state_path: Path) -> tuple[dict, Store]:
+    base_spec = {
+        "role": "review", "candidate_paths": ["candidate.py", "candidate.diff"],
+        "inspection_paths": ["candidate.py"], "inspection_diff_path": "candidate.diff",
+        "workspace_kind": "immutable_snapshot", "inspection_pr": 12,
+    }
+    files = {name: {"digest": file_digest(root / name),
+                    "mode": (root / name).stat().st_mode & 0o777}
+             for name in base_spec["candidate_paths"]}
+    core = {"repository": "example/repo", "pr_number": 12, "head": HEAD,
+            "base": BASE, "policy_id": "policy-12", "policy_digest": "d" * 64,
+            "workspace": str(root.resolve()), "selected_files": files,
+            "selected_files_digest": digest(files), "diff_path": "candidate.diff",
+            "diff_sha256": files["candidate.diff"]["digest"],
+            "export_digest": digest(files), "auth_mode": "user-token"}
+    export_id = digest(core)
+    store = Store(state_path)
+    store.put_once("trusted_export", export_id, {"export_id": export_id, **core})
+    spec = workspace_contract.resolve_spec(
+        store, {"role": "review", "trusted_export_id": export_id})
+    return spec, store
+
+
+def _workspace(tmp_path: Path, *, snapshot: bool = True) -> tuple[Path, dict, Store | None]:
     root = tmp_path / "workspace"
     root.mkdir()
     (root / "candidate.py").write_text("VALUE = 7\n")
     (root / "candidate.diff").write_text("+VALUE = 7\n")
-    spec = {
-        "role": "review", "candidate_paths": ["candidate.py", "candidate.diff"],
-        "inspection_paths": ["candidate.py"], "inspection_diff_path": "candidate.diff",
-        "workspace_kind": "immutable_snapshot" if snapshot else "checkout",
-        "inspection_pr": 12,
-    }
     if snapshot:
-        files = {name: {"digest": file_digest(root / name),
-                        "mode": (root / name).stat().st_mode & 0o777}
-                 for name in spec["candidate_paths"]}
-        spec["snapshot_provenance"] = {"repo": "example/repo", "head": HEAD,
-                                       "base": BASE, "export_id": "export-12",
-                                       "export_digest": digest(files)}
-    return root, spec
+        spec, store = _register_export(root, tmp_path / "state.sqlite")
+    else:
+        spec = {"role": "review", "candidate_paths": ["candidate.py", "candidate.diff"],
+                "inspection_paths": ["candidate.py"], "inspection_diff_path": "candidate.diff",
+                "workspace_kind": "checkout", "inspection_pr": 12}
+        store = None
+    return root, spec, store
 
 
-def _built(root: Path, spec: dict, objective: str) -> dict:
-    workspace_provenance = workspace_contract.preflight(spec, root)
+def _built(root: Path, spec: dict, objective: str, store: Store | None) -> dict:
+    workspace_provenance = workspace_contract.preflight(spec, root, store=store)
     binding = bind_candidate(spec, root, workspace_provenance)
     context = {"task": "task", "attempt": "attempt", "generation": 1,
                "objective": objective, "workspace_provenance": workspace_provenance}
@@ -58,8 +75,8 @@ def _built(root: Path, spec: dict, objective: str) -> dict:
 
 
 def _packet(tmp_path: Path, objective: str = "Inspect the source") -> Path:
-    root, spec = _workspace(tmp_path)
-    value = _built(root, spec, objective)
+    root, spec, store = _workspace(tmp_path)
+    value = _built(root, spec, objective, store)
     return persist(value, tmp_path / "scratch")
 
 
@@ -149,25 +166,22 @@ def test_model_misroute_retains_failed_usage_and_observed_identity(tmp_path):
 
 
 def test_packet_refuses_credential_shaped_candidate_content(tmp_path):
-    root, spec = _workspace(tmp_path)
+    root, spec, store = _workspace(tmp_path)
     (root / "candidate.py").write_text('api_key = "sk-proj-secretvalue123"\n')
-    files = {name: {"digest": file_digest(root / name),
-                    "mode": (root / name).stat().st_mode & 0o777}
-             for name in spec["candidate_paths"]}
-    spec["snapshot_provenance"]["export_digest"] = digest(files)
+    spec, store = _register_export(root, tmp_path / "secret-state.sqlite")
     with pytest.raises(PermissionError, match="credential-shaped"):
-        _built(root, spec, "Inspect the source")
+        _built(root, spec, "Inspect the source", store)
 
 
 def test_packet_refuses_credential_shaped_objective(tmp_path):
-    root, spec = _workspace(tmp_path)
+    root, spec, store = _workspace(tmp_path)
     with pytest.raises(PermissionError, match="credential-shaped inspection objective"):
-        _built(root, spec, "Review this with api_key=sk-proj-secretvalue123")
+        _built(root, spec, "Review this with api_key=sk-proj-secretvalue123", store)
 
 
 def test_packet_refuses_file_change_after_controller_preflight(tmp_path):
-    root, spec = _workspace(tmp_path)
-    workspace_provenance = workspace_contract.preflight(spec, root)
+    root, spec, store = _workspace(tmp_path)
+    workspace_provenance = workspace_contract.preflight(spec, root, store=store)
     binding = bind_candidate(spec, root, workspace_provenance)
     (root / "candidate.py").write_text("VALUE = 8\n")
     with pytest.raises(PermissionError, match="changed after controller preflight"):
@@ -176,17 +190,49 @@ def test_packet_refuses_file_change_after_controller_preflight(tmp_path):
                      "workspace_provenance": workspace_provenance}, root, binding)
 
 
+def test_trusted_export_rejects_caller_candidate_override_and_tampered_registry(tmp_path):
+    root, spec, store = _workspace(tmp_path)
+    with pytest.raises(PermissionError, match="cannot override controller fields"):
+        workspace_contract.resolve_spec(
+            store, {"role": "review", "trusted_export_id": spec["trusted_export_id"],
+                    "workspace": str(root), "inspection_pr": 999})
+    record = store.get("trusted_export", spec["trusted_export_id"])
+    store.replace("trusted_export", spec["trusted_export_id"],
+                  {**record, "head": "f" * 40})
+    with pytest.raises(PermissionError, match="identity digest is invalid"):
+        workspace_contract.resolve_spec(
+            store, {"role": "review", "trusted_export_id": spec["trusted_export_id"]})
+
+
+def test_checkout_head_is_rechecked_immediately_before_packet(tmp_path):
+    root, spec, _store = _workspace(tmp_path, snapshot=False)
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    subprocess.run(["git", "remote", "add", "origin", "https://github.com/example/repo.git"],
+                   cwd=root, check=True)
+    subprocess.run(["git", "add", "."], cwd=root, check=True)
+    subprocess.run(["git", "-c", "user.name=Fixture", "-c", "user.email=f@example.invalid",
+                    "commit", "-qm", "candidate"], cwd=root, check=True)
+    old_head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+    spec["inspection_base_ref"] = old_head
+    workspace_provenance = workspace_contract.preflight(spec, root)
+    subprocess.run(["git", "-c", "user.name=Fixture", "-c", "user.email=f@example.invalid",
+                    "commit", "--allow-empty", "-qm", "moved"], cwd=root, check=True)
+    with pytest.raises(PermissionError, match="candidate binding is invalid"):
+        bind_candidate(spec, root, workspace_provenance)
+
+
 def test_snapshot_uses_controller_document_digest_without_git(tmp_path, monkeypatch):
-    root, spec = _workspace(tmp_path)
+    root, spec, store = _workspace(tmp_path)
 
     def refuse_git(*_args, **_kwargs):
         raise AssertionError("snapshot preparation must not call Git")
 
     monkeypatch.setattr("corral.execution.inspection_packet.subprocess.check_output", refuse_git)
-    packet = _built(root, spec, "Inspect the source")
+    packet = _built(root, spec, "Inspect the source", store)
     provenance = packet["provenance"]
     assert provenance["git_metadata_required"] is False
-    assert provenance["export_digest"] == spec["snapshot_provenance"]["export_digest"]
+    assert len(provenance["export_digest"]) == 64
+    assert provenance["trusted_export_id"] == spec["trusted_export_id"]
     assert len(provenance["documents_digest"]) == 64
 
 
@@ -201,21 +247,15 @@ def test_agent_submit_builds_bound_inspection_spec_without_pilot_json(tmp_path):
     agent = CorralAgent(AgentConfig(controller_config=tmp_path / "controller.json",
                                     default_host="mini2"))
     agent.client = FakeClient()
-    task = agent.submit(
-        tmp_path, "Inspect the supplied change", role="review", profile_id=None,
-        inspection_paths=["candidate.py"], inspection_diff_path="candidate.diff",
-        workspace_kind="immutable_snapshot",
-        snapshot_provenance={"repo": "example/repo", "head": HEAD, "base": BASE,
-                             "export_id": "export-12", "export_digest": "c" * 64},
-        inspection_pr=12,
-    )
+    task = agent.submit_export("c" * 64, "Inspect the supplied change",
+                               profile_id="inspection-medium")
     assert task == "inspection-task"
     spec = captured["spec"]
     assert spec["host"] == "mini2"
-    assert spec["tools"] == ["inspect-packet", "report"]
-    assert spec["candidate_paths"] == ["candidate.py", "candidate.diff"]
-    assert spec["snapshot_provenance"]["head"] == HEAD
-    assert spec["inspection_pr"] == 12
+    assert spec == {"trusted_export_id": "c" * 64,
+                    "objective": "Inspect the supplied change", "host": "mini2",
+                    "role": "review", "tools": ["inspect-packet", "report"],
+                    "profile_id": "inspection-medium"}
 
 
 def test_inspection_route_rejects_broad_tools_and_runtime_hooks(tmp_path):

@@ -70,7 +70,8 @@ def bind_candidate(spec: dict, workspace: Path | str, workspace_provenance: Any)
     if pr is not None and (isinstance(pr, bool) or not isinstance(pr, int) or pr <= 0):
         raise PermissionError("inspection PR number must be a positive integer")
     if trusted["kind"] == "immutable_snapshot":
-        required = ("repo", "base", "export_id", "export_digest")
+        required = ("repo", "base", "export_id", "export_digest", "trusted_export_id",
+                    "policy_id", "policy_digest", "auth_mode")
         if any(not isinstance(trusted.get(key), str) or not trusted[key] for key in required):
             raise PermissionError("controller snapshot provenance is incomplete")
         base = trusted["base"]
@@ -79,6 +80,9 @@ def bind_candidate(spec: dict, workspace: Path | str, workspace_provenance: Any)
         result = {"kind": "immutable_snapshot", "repo": trusted["repo"],
                   "head": trusted["head"], "base": base,
                   "export_id": trusted["export_id"], "export_digest": trusted["export_digest"],
+                  "trusted_export_id": trusted["trusted_export_id"],
+                  "policy_id": trusted["policy_id"], "policy_digest": trusted["policy_digest"],
+                  "auth_mode": trusted["auth_mode"],
                   "workspace_provenance_digest": trusted["digest"],
                   "git_metadata_required": False}
     else:
@@ -89,12 +93,15 @@ def bind_candidate(spec: dict, workspace: Path | str, workspace_provenance: Any)
             remote = subprocess.check_output(
                 ["git", "remote", "get-url", "origin"], cwd=workspace, text=True,
                 stderr=subprocess.DEVNULL).strip()
+            current_head = subprocess.check_output(
+                ["git", "rev-parse", "--verify", "HEAD^{commit}"], cwd=workspace, text=True,
+                stderr=subprocess.DEVNULL).strip()
             base = subprocess.check_output(
                 ["git", "rev-parse", "--verify", f"{base_ref}^{{commit}}"], cwd=workspace,
                 text=True, stderr=subprocess.DEVNULL).strip()
         except (OSError, subprocess.CalledProcessError) as error:
             raise PermissionError("checkout inspection candidate binding is unavailable") from error
-        if not remote or not _HEX_REV.fullmatch(base):
+        if not remote or current_head != trusted["head"] or not _HEX_REV.fullmatch(base):
             raise PermissionError("checkout inspection candidate binding is invalid")
         result = {"kind": "checkout", "repo": _remote_identity(remote),
                   "head": trusted["head"], "base": base, "base_ref": base_ref,

@@ -193,6 +193,7 @@ def test_new_local_worker_persists_launch_identity(setup):
     assert identity["host"]
     assert identity["os_started"]
     assert identity["boot_identity"]
+    assert identity["birth_identity_observed"] is True
     assert identity["executable"]
     assert len(identity["executable_sha256"]) == 64
 

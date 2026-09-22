@@ -115,7 +115,7 @@ if pid:
     os._exit(0)
 signal.signal(signal.SIGTERM,signal.SIG_IGN)
 pathlib.Path('ready').write_text(str(os.getpid()))
-time.sleep(30)
+while not pathlib.Path('stop').exists(): time.sleep(.01)
 """
     try:
         with (tmp_path / "out").open("wb") as out:
@@ -125,13 +125,62 @@ time.sleep(30)
             receipt = process.cancel()
         child = (tmp_path / "ready").read_text()
         status = subprocess.run(["ps", "-p", child, "-o", "stat="], capture_output=True, text=True).stdout.strip()
-        assert not status or status.startswith("Z")
+        # After the session leader exits, neither an accessible group nor macOS EPERM
+        # re-establishes ownership.  The descendant is fenced rather than signalled.
+        assert receipt["signal_blocked"] is True
+        assert receipt["signal_attempts"] == []
+        assert receipt["signal_blocker"] in (
+            "launch-leader-not-provably-live", "process-group-inaccessible")
+        assert receipt["group_stopped"] is False
+        assert status and not status.startswith("Z")
         assert receipt["detached_descendants"] == "unknown"
         assert sentinel.poll() is None
         assert (tmp_path / "ready").exists()
+        # Cooperative fixture cleanup is intentionally outside Process: after the
+        # leader exit the production path must leave ownership uncertain.
+        (tmp_path / "stop").write_text("done")
     finally:
         sentinel.terminate()
         sentinel.wait()
+
+
+def test_inaccessible_process_group_stays_fenced_without_signal(tmp_path, monkeypatch):
+    """EPERM is a live uncertainty, never a reason to signal or release a group."""
+    calls = []
+
+    def inaccessible(pgid, sig):
+        calls.append((pgid, sig))
+        raise PermissionError("simulated EPERM")
+
+    with (tmp_path / "out").open("wb") as out:
+        process = Process([sys.executable, "-c", "import time; time.sleep(1)"], tmp_path, out, out)
+        monkeypatch.setattr("corral.execution.process.os.killpg", inaccessible)
+        receipt = process.cancel()
+        assert process.running_group() is True
+    try:
+        assert receipt["process_group_status"] == "inaccessible"
+        assert receipt["group_stopped"] is False
+        assert receipt["signal_blocked"] is True
+        assert receipt["signal_attempts"] == []
+        assert receipt["signal_blocker"] == "process-group-inaccessible"
+        assert calls and all(sig == 0 for _pgid, sig in calls)
+    finally:
+        process.child.terminate()
+        process.child.wait()
+
+
+def test_identity_does_not_claim_birth_after_process_observation_is_lost(monkeypatch):
+    """A host boot token alone is not an identity for an already-exited PID."""
+    process = Process.__new__(Process)
+    process.child = type("Child", (), {"pid": 424242})()
+    process.pgid = 424242
+    monkeypatch.setattr("corral.execution.process._os_process_identity",
+                        lambda _pid: {"started": None, "command": None})
+    monkeypatch.setattr("corral.execution.process._boot_identity", lambda: "boot-token")
+    identity = process._identity([sys.executable])
+    assert identity["os_started"] is None
+    assert identity["boot_identity"] is None
+    assert identity["birth_identity_observed"] is False
 
 
 def test_simulated_crash_reconciliation_no_duplicate_effect(setup):

@@ -340,9 +340,12 @@ class Service:
                 )
                 status = None
                 if cancelled:
-                    workspace = request_spec(self.store, event)["workspace"]
-                    ownership = self.store.ownership("workspace:" + str(Path(workspace).resolve())) \
-                        if workspace else None
+                    spec = request_spec(self.store, event)
+                    # The fence the controller's run path holds for this host kind.
+                    resource = ("remote-workspace:" + spec["host"] + ":" + spec["workspace"]
+                                if (self.controller.hosts.get(spec["host"]) or {}).get("executor")
+                                else "workspace:" + str(Path(spec["workspace"]).resolve()))
+                    ownership = self.store.ownership(resource)
                     allocation = self.store.get("allocation", task_id) or {}
                     released = ((ownership is None or ownership[0] != task_id
                                  or ownership[2] == "released")

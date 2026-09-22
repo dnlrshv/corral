@@ -293,3 +293,36 @@ def test_busy_tick_forgets_only_its_own_identity(tmp_path):
     service.store.acquire(TICK_RESOURCE, "live-holder")
     assert service.tick(now=10)["busy"] is True
     assert service.store.records("service_tick_identity") == {"live-holder": holder}
+
+
+def test_remote_cancel_waits_for_the_remote_workspace_fence(tmp_path):
+    from corral.execution import continuation
+
+    service = _two_repositories(tmp_path)
+    raw = json.loads(service.controller_path.read_text())
+    raw["hosts"]["remote"] = {"routes": ["deterministic"], "harnesses": [], "cpu": 2,
+                              "memory_mb": 1024, "executor": {"declared": "fixture"}}
+    service.controller_path.write_text(json.dumps(raw))
+    config = json.loads(service.config_path.read_text())
+    remote_workspace = str(git_repo(tmp_path / "remote-workspace"))
+    config["repositories"]["demo"]["allowed_hosts"].append("remote")
+    config["repositories"]["demo"]["workspaces"]["remote"] = remote_workspace
+    service.config_path.write_text(json.dumps(config))
+    service = Service(service.config_path)
+    task = service.submit("remote-cancel", "demo", "cancel remotely", host="remote")["event"]["task_id"]
+    assert service._claim("remote-cancel", 10, RUNTIME, scheduler_host="remote")
+    # The logical controller's remote run finished its generation while a cancel was pending
+    # and kept its remote-workspace fence uncertain.
+    resource = "remote-workspace:remote:" + remote_workspace
+    epoch = service.store.acquire(resource, task)
+    service.store.transition_owner(resource, task, epoch, "uncertain")
+    service.store.put_once("claim", task, {"attempt": "remote-attempt", "generation": 1})
+    service.store.replace("state", task, {"status": "completed", "generation": 1, "epoch": epoch})
+    continuation.record_result(service.store, task, 1, {"accepted": False, "generation": 1})
+    service.controller.cancel(service.token, task)
+    service._reconcile(RUNTIME)
+    assert service.status("remote-cancel")["event"]["status"] == "uncertain"
+    service.store.transition_owner(resource, task, epoch, "released")
+    service._reconcile(RUNTIME)
+    assert service.status("remote-cancel")["event"]["status"] == "failed"
+    assert service.store.get("allocation", task)["active"] is False

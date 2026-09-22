@@ -7,6 +7,7 @@ import time
 import uuid
 from pathlib import Path
 
+from ..redaction import redact_nested_text
 from . import (completion, containment, continuation, inspection_packet, inspection_report, native, routes,
                verifier, workspace_contract)
 from .adapter import source_root
@@ -556,8 +557,8 @@ class Controller:
                       "generation": generation,
                       "native": native_evidence,
                       "inspection_validation": inspection_validation,
-                      "adapter_errors": (adapter_result or {}).get("errors") or [],
-                      "adapter_warnings": (adapter_result or {}).get("warnings") or [],
+                      "adapter_errors": redact_nested_text((adapter_result or {}).get("errors") or []),
+                      "adapter_warnings": redact_nested_text((adapter_result or {}).get("warnings") or []),
                       "amendment_pending": amendment_pending,
                       "dispatch_objective": dispatch_objective,
                       "current_objective": current_obj}

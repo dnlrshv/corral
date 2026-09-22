@@ -20,6 +20,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from ..redaction import redact_nested_text
 from . import containment, envelopes
 from .inspection_packet import PACKET_FILE
 from .store import digest
@@ -327,6 +328,10 @@ def _finish(task_dir: Path, result: dict, usage_path: Path, started: float, atte
     result["detail"]["duration_seconds"] = round(time.time() - started, 3)
     result["detail"]["raw_stdout_preserved"] = (task_dir / "harness.stdout").exists()
     result["detail"]["raw_stderr_preserved"] = (task_dir / "harness.stderr").exists()
+    # Harness errors, warnings and stdout/stderr tails can echo credentials (tracebacks,
+    # request dumps); only redacted diagnostics leave the raw harness streams.
+    for field in ("errors", "warnings", "detail"):
+        result[field] = redact_nested_text(result[field])
     _write_result(task_dir, result)
     _record_attempt(task_dir, {"attempt": attempt, "status": result["status"],
                                "errors": result["errors"], "warnings": result["warnings"],

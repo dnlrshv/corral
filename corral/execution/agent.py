@@ -257,13 +257,15 @@ class CorralAgent:
                               "refused-before-launch"):
                 lineage = st.get("lineage") or {}
                 pending = lineage.get("pending_generation")
+                expected_generation = max(lineage.get("current_generation", 1),
+                                          lineage.get("scheduled_generation") or 1)
                 if pending:
                     self.dispatch(task_id)
                 elif (not state.get("amended_objective_pending")
-                      and state.get("generation", 1) == lineage.get("current_generation", 1)
+                      and state.get("generation", 1) == expected_generation
                       and (status_val not in ("completed", "reconciled")
                            or (st.get("result") or {}).get("generation", 1)
-                           == lineage.get("current_generation", 1))):
+                           == expected_generation)):
                     # A continuation claim precedes its new state record. A status
                     # read in that window must not return the prior accepted result.
                     return st

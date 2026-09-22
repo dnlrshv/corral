@@ -18,6 +18,8 @@ from .github_support import (
     persist_delivery_receipt,
     verify_remote_candidate,
 )
+from .publication_store import record_absence
+from .store import lease_holder_alive
 
 
 class GitHubAdvisoryTransport:
@@ -36,13 +38,21 @@ class GitHubAdvisoryTransport:
         authorized_bridge_actors: frozenset[str] | None = None,
         timeout: float = 20.0,
         policy_inputs: dict | None = None,
+        absence_reads: int = 3,
+        absence_quiet_seconds: float = 300.0,
     ):
+        if absence_reads < 2:
+            raise ValueError("absence proof requires at least two consistent readbacks")
         self.http_client = http_client
         self.bridge_token = bridge_token
         self.store = store
         self.allow_network = allow_network
         self.timeout = timeout
         self.policy_inputs = policy_inputs
+        # A failed POST is proven absent only after this many consecutive readbacks,
+        # and only once GitHub can no longer be processing a request sent that long ago.
+        self.absence_reads = absence_reads
+        self.absence_quiet_seconds = absence_quiet_seconds
         self.authorized_bridge_actors = (frozenset({"github-actions[bot]"})
                                          if authorized_bridge_actors is None
                                          else authorized_bridge_actors)
@@ -216,9 +226,12 @@ class GitHubAdvisoryTransport:
                 ):
                     raise PermissionError("delivered intent payload mismatch")
                 return self.store.get("advisory_receipt", intent)
-            raise PermissionError(
-                f"recorded {prior[0]} intent requires reconciliation; re-posting prohibited"
-            )
+            # An attempt proven absent by authenticated readback may be attempted again;
+            # the readback before POST below still refuses if a late review has landed.
+            if prior[0] != "absent":
+                raise PermissionError(
+                    f"recorded {prior[0]} intent requires reconciliation; re-posting prohibited"
+                )
         attempt_id = str(uuid.uuid4())
         acquired, reason, _, lease_epoch = self.store.acquire_lease(
             resource, "corral", payload["head"], os.getpid(), attempt_id
@@ -353,21 +366,61 @@ class GitHubAdvisoryTransport:
             )
         if self.has_advisory(intent):
             return self.store.get("advisory_receipt", intent)
-        matching = self._find_remote_matching_review(
-            repo, number, payload["head"], payload["body"], payload.get("comments")
-        )
-        if matching:
-            receipt = self._receipt(
-                pr,
-                self.candidates.get(pr),
-                intent,
-                payload,
-                matching,
-                reconciled=True,
-                is_stale=is_stale,
+        attempt = self._absence_candidate(intent, resource)
+        reads = 0
+        while True:
+            matching = self._find_remote_matching_review(
+                repo, number, payload["head"], payload["body"], payload.get("comments")
             )
-            persist_delivery_receipt(self.store, intent, resource, receipt)
-            return receipt
+            if matching:
+                receipt = self._receipt(
+                    pr,
+                    self.candidates.get(pr),
+                    intent,
+                    payload,
+                    matching,
+                    reconciled=True,
+                    is_stale=is_stale,
+                )
+                persist_delivery_receipt(self.store, intent, resource, receipt)
+                return receipt
+            if not isinstance(attempt, dict):
+                break
+            if attempt["status"] == "absent":
+                evidence = self.store.get(
+                    "advisory_absence", f"{intent}:{attempt['attempt_id']}"
+                )
+                return self._absent_result(pr, intent, evidence, is_stale)
+            try:
+                self._verify_candidate_remote(
+                    repo, number, payload["head"], payload["base"]
+                )
+            except PermissionError:
+                attempt = "candidate-changed"
+                break
+            reads += 1
+            if reads >= self.absence_reads:
+                evidence = {
+                    "intent": intent,
+                    "resource": resource,
+                    "attempt_id": attempt["attempt_id"],
+                    "prior_status": attempt["status"],
+                    "consistent_reads": reads,
+                    "head": payload["head"],
+                    "base": payload["base"],
+                    "bridge_actor": self.validated_bridge_actor,
+                    "settled_at": time.time(),
+                }
+                record_absence(
+                    self.store,
+                    intent,
+                    resource,
+                    attempt_id=attempt["attempt_id"],
+                    prior_status=attempt["status"],
+                    prior_updated_at=attempt["updated_at"],
+                    evidence=evidence,
+                )
+                return self._absent_result(pr, intent, evidence, is_stale)
         return {
             "pr": pr,
             "intent": intent,
@@ -377,6 +430,52 @@ class GitHubAdvisoryTransport:
             "uncertain": True,
             "status": "ambiguous_pending",
             "stale_reconciliation": is_stale,
+            "absence_unproven": attempt,
+        }
+
+    def _absence_candidate(self, intent: str, resource: str) -> dict[str, Any] | str:
+        """The attempt that authenticated readback may settle as absent, or why not.
+
+        The attempt must no longer be in flight (its outcome was recorded ambiguous,
+        or its lease holder is gone), carry an attempt identity, and be older than the
+        quiet period during which GitHub could still be processing its POST.
+        """
+        with self.store.transaction() as db:
+            status, attempt_id, updated_at = db.execute(
+                "SELECT status,attempt_id,updated_at FROM publication_intents WHERE intent=?",
+                (intent,),
+            ).fetchone()
+            lease = db.execute(
+                "SELECT attempt_id,status,holder_pid FROM leases WHERE resource=?",
+                (resource,),
+            ).fetchone()
+        attempt = {"status": status, "attempt_id": attempt_id, "updated_at": updated_at}
+        if status == "absent":
+            return attempt
+        if status not in ("pending", "ambiguous"):
+            return f"intent-{status}"
+        if not attempt_id:
+            return "attempt-identity-missing"
+        if (status == "pending" and lease and lease[0] == attempt_id
+                and lease[1] in ("in_flight", "active") and lease_holder_alive(lease[2])):
+            return "attempt-in-flight"
+        if time.time() - updated_at < self.absence_quiet_seconds:
+            return "quiet-period"
+        return attempt
+
+    def _absent_result(
+        self, pr: str, intent: str, evidence: dict[str, Any] | None, is_stale: bool
+    ) -> dict[str, Any]:
+        return {
+            "pr": pr,
+            "intent": intent,
+            "advisory": False,
+            "reconciled": True,
+            "delivered": False,
+            "uncertain": False,
+            "status": "absent",
+            "stale_reconciliation": is_stale,
+            "absence": evidence,
         }
 
     def reconcile_shared_authority(

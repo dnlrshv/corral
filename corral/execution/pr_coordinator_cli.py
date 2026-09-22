@@ -56,7 +56,8 @@ def main(argv=None) -> None:
             raise PermissionError("publisher account reference changed after coordinator binding")
         transport = GitHubAdvisoryTransport(
             store=coordinator.store, bridge_token=token, bridge_actor=config["publisher"],
-            authorized_bridge_actors=frozenset({config["publisher"]}), allow_network=True)
+            authorized_bridge_actors=frozenset({config["publisher"]}), allow_network=True,
+            policy_inputs=config["publication_policy_inputs"])
         result = coordinator.publish_advisory(transport)
     elif args.action == "merge":
         merge = config["merge"]

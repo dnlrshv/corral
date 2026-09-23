@@ -246,10 +246,12 @@ def _opens_python_block(text: str, position: int) -> bool:
     A block-opening ``:`` is never inside an open bracket, so a key after an unclosed
     ``(``, ``[`` or ``{`` is a mapping key (``if x: d = {API_KEY:``). Counting with
     ``<=`` keeps the closing line of a multi-line signature (``) -> Token:``). Brackets
-    and ``->`` inside a one-line string are data, so strings are dropped first.
+    and ``->`` inside a one-line string are data, so strings are dropped first; a key
+    after a ``#`` left outside them is in a comment, which never ends a header.
     """
     prefix = _LINE_STRING.sub("", text[text.rfind("\n", 0, position) + 1:position])
-    return (sum(map(prefix.count, "([{")) <= sum(map(prefix.count, ")]}"))
+    return ("#" not in prefix
+            and sum(map(prefix.count, "([{")) <= sum(map(prefix.count, ")]}"))
             and bool(_PYTHON_BLOCK_OPENER.match(prefix)))
 
 
@@ -287,6 +289,15 @@ def check_source_text_safe(text: str, *, source_name: str | None = None) -> list
             continue
         if value in ("<redacted>", "[REDACTED]"):
             continue
+        # A comment holds no annotation: ``# password: value = x`` binds ``value``, which
+        # passes only as a type name or an expression, as it would without the ``= x``.
+        if (python_source and match.group("sep") == "=" and ":" in match.group("sep_space")
+                and _in_comment(text, match.start())):
+            bound = text[match.end("key"):match.start("sep")].split(":", 1)[1]
+            bound = bound.split("|", 1)[0].strip().strip("\"'")
+            if bound not in type_names and not any(char in bound for char in ".()[]{}"):
+                offenders.append(assignment.pattern)
+                continue
         line_end = text.find("\n", match.start())
         line = text[match.start():None if line_end < 0 else line_end]
         separator_at = line.find(match.group("sep"))

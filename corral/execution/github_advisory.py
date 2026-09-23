@@ -236,8 +236,11 @@ class GitHubAdvisoryTransport:
         acquired, reason, _, lease_epoch = self.store.acquire_lease(
             resource, "corral", payload["head"], os.getpid(), attempt_id
         )
-        if not acquired or lease_epoch != epoch:
+        if not acquired:
             raise PermissionError(f"cannot acquire publication lease: {reason}")
+        if lease_epoch != epoch:
+            self.store.release_lease(resource, attempt_id)
+            raise PermissionError("ownership epoch changed after approval verification")
         try:
             matching = self._find_remote_matching_review(
                 repo, number, payload["head"], payload["body"], payload.get("comments")

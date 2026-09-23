@@ -10,7 +10,8 @@ import sys
 
 import pytest
 
-from tests.advisory_http_fixture import ACTOR, HEAD, PR, environment
+from tests.advisory_http_fixture import ACTOR, HEAD, PR, REPO, environment
+from corral.execution import advisory_cli
 from corral.execution.publication_store import record_absence
 
 RESOURCE = "pr:" + PR
@@ -231,3 +232,22 @@ def test_sparse_post_acknowledgement_is_settled_by_readback_not_accepted(tmp_pat
     assert receipt["review_id"] == 901 and receipt["reconciled"] is True
     assert transport.has_advisory(intent) and store.records("advisory_absence") == {}
     assert len(http.posts) == 1
+
+
+def test_reconcile_cli_exit_code_separates_proven_absence_from_delivery(tmp_path, monkeypatch):
+    store, http, transport, intent, payload = environment(tmp_path)
+    transport.http_client = _lose_post(http)
+    with pytest.raises(ConnectionRefusedError):
+        transport.advisory(PR, "candidate", intent, payload)
+    transport.http_client = http
+    monkeypatch.setattr(advisory_cli, "_get_auth_token", lambda: "fake-token")
+    monkeypatch.setattr(advisory_cli, "GitHubAdvisoryTransport", lambda **_: transport)
+    argv = ["reconcile", "--repo", REPO, "--pr", PR, "--intent", intent,
+            "--store", str(tmp_path / "authority.sqlite")]
+
+    assert advisory_cli.main(argv) == 2  # still inside the quiet period
+    transport.absence_quiet_seconds = 0
+    assert advisory_cli.main(argv) == 3  # reconciled, but nothing was delivered
+    assert _intent_status(store, intent) == "absent"
+    transport.advisory(PR, "candidate", intent, payload)
+    assert advisory_cli.main(argv) == 0 and len(http.posts) == 1

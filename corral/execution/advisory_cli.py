@@ -202,7 +202,10 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
     )
     receipt = transport.reconcile(args.pr, args.intent, payload, is_stale=args.is_stale)
     print(json.dumps(receipt, indent=2))
-    return 0 if receipt.get("reconciled") else 2
+    if receipt.get("delivered") is True:
+        return 0
+    # 3: settled as proven never posted, so nothing was delivered; 2: still unresolved.
+    return 3 if receipt.get("status") == "absent" else 2
 
 
 def cmd_publish(args: argparse.Namespace) -> int:
@@ -285,7 +288,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_imp.set_defaults(func=cmd_import_approved)
 
     # reconcile
-    p_rec = subparsers.add_parser("reconcile", help="Reconcile uncertain or ambiguous advisory delivery")
+    p_rec = subparsers.add_parser(
+        "reconcile",
+        help="Reconcile uncertain or ambiguous advisory delivery "
+             "(exit 0 delivered, 2 unresolved, 3 proven absent)",
+    )
     p_rec.add_argument("--repo", required=True)
     p_rec.add_argument("--pr", required=True)
     p_rec.add_argument("--intent", required=True)

@@ -37,8 +37,8 @@ with open(args.workspace + "/math_ops.py", "w") as f:
 with open(args.result, "w") as f:
     f.write(json.dumps({"structured": {"answer": 5, "changed": ["math_ops.py"]}}))
 
-sys.stdout.write('{"type":"thread_settings_applied","payload":{"thread_settings":{"model":"qwen3.8-max","reasoning_effort":"high","model_provider_id":"baba"}}}\\n')
-sys.stdout.write('{"type":"turn.completed","usage":{"input_tokens":325497,"cached_input_tokens":292352,"output_tokens":13206,"reasoning_output_tokens":7567}}\\n')
+sys.stdout.write('{"type":"thread_settings_applied","payload":{"thread_settings":{"model":"qwen3.8-max","reasoning_effort":"high","model_provider_id":"fixture-provider"}}}\\n')
+sys.stdout.write('{"type":"turn.completed","usage":{"input_tokens":320000,"cached_input_tokens":288000,"output_tokens":13000,"reasoning_output_tokens":7500}}\\n')
 sys.stdout.flush()
 """
     binary.write_text(script)
@@ -51,10 +51,10 @@ sys.stdout.flush()
     assert result["accepted"] is True
     usage = result["usage"]
     # Qwen mapping: cached_input_tokens -> cache_read_tokens
-    assert usage["measured_fields"]["input_tokens"] == 325497
-    assert usage["measured_fields"]["cache_read_tokens"] == 292352
-    assert usage["measured_fields"]["output_tokens"] == 13206
-    assert usage["measured_fields"]["thinking_tokens"] == 7567
+    assert usage["measured_fields"]["input_tokens"] == 320000
+    assert usage["measured_fields"]["cache_read_tokens"] == 288000
+    assert usage["measured_fields"]["output_tokens"] == 13000
+    assert usage["measured_fields"]["thinking_tokens"] == 7500
 
     # Repeated polling/replay unchanged
     run2 = controller.run("owner", task, execution_host=ns.FAKE_HOST)

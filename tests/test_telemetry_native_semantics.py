@@ -10,7 +10,7 @@ def test_codex_duplicate_turn_completed():
     fixture_path = Path(__file__).parent / "fixtures" / "qwen_codex_turn.jsonl"
     stdout_text = fixture_path.read_text()
     # Add a duplicate turn.completed to simulate the duplicate terminal events
-    stdout_text += '{"type":"turn.completed","usage":{"input_tokens":45528813,"cached_input_tokens":44310528,"output_tokens":290548,"reasoning_output_tokens":143366}}\n'
+    stdout_text += '{"type":"turn.completed","usage":{"input_tokens":1250000,"cached_input_tokens":1100000,"output_tokens":34000,"reasoning_output_tokens":12000}}\n'
 
     envelope = parse("codex-jsonl-v1", stdout_text=stdout_text, stderr_text="", exit_code=0, invocation="inv-1")
     assert envelope.status == "completed"
@@ -18,10 +18,10 @@ def test_codex_duplicate_turn_completed():
 
     event = envelope.usage_events[0]
     assert event["mode"] == "cumulative"
-    assert event["counters"]["input_tokens"] == 45528813
-    assert event["counters"]["cache_read_tokens"] == 44310528
-    assert event["counters"]["output_tokens"] == 290548
-    assert event["counters"]["thinking_tokens"] == 143366
+    assert event["counters"]["input_tokens"] == 1250000
+    assert event["counters"]["cache_read_tokens"] == 1100000
+    assert event["counters"]["output_tokens"] == 34000
+    assert event["counters"]["thinking_tokens"] == 12000
     assert envelope.detail["duplicate_terminal_events"] == 2
     assert "deduplicated to single snapshot" in "\n".join(envelope.warnings)
 
@@ -54,7 +54,7 @@ def test_failed_native_attempt_emits_usage():
         publish_usage(spool, store, output=path, spec={"soft_thresholds": {}}, attempt="inv-failed", telemetry_errors=[])
 
         usage = json.loads((path / "usage.json").read_text())
-        assert usage["observed_fields"]["input_tokens"] == 45528813
+        assert usage["observed_fields"]["input_tokens"] == 1250000
 
 def test_resume_accounting_rejected():
     fixture_path = Path(__file__).parent / "fixtures" / "qwen_codex_turn.jsonl"

@@ -36,7 +36,7 @@ def test_real_pr_admission_dispatches_same_task_once_after_service_restart(tmp_p
     reused = restarted.submit_pr_review("demo", 7, "advisory")
     assert reused["event"]["task_id"] == event["task_id"]
     assert reused["event"]["resolved_spec"] == event["resolved_spec"]
-    assert launches == [(event["task_id"], "mini2")]
+    assert launches == [(event["task_id"], "primary")]
     assert restarted.store.records("request") == {event["task_id"]: spec}
     assert restarted.store.records("invocation") == {}
 
@@ -60,7 +60,7 @@ def test_snapshot_cancellation_waits_for_resolved_workspace_owner(tmp_path, monk
 
 def test_claim_uses_authoritative_capacity_and_refuses_missing_request(tmp_path, monkeypatch):
     service, event, spec = admitted_review(tmp_path, monkeypatch)
-    spec["cpu"] = service.controller.hosts["mini2"]["cpu"] + 1
+    spec["cpu"] = service.controller.hosts["primary"]["cpu"] + 1
     service.store.replace("request", event["task_id"], spec)
     assert service._claim(event["event_id"], 10, {}) is None
     assert service.tick(now=10)["dispatched"] == []

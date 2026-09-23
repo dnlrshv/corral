@@ -17,8 +17,8 @@ def _find_config_path(
     state_dir: Optional[Path] = None, cohort_control_path: Optional[Path] = None
 ) -> Optional[Path]:
     target_path = cohort_control_path or (
-        Path(os.environ["GEMINI_REVIEW_COHORT_CONTROL"])
-        if "GEMINI_REVIEW_COHORT_CONTROL" in os.environ
+        Path(os.environ["CORRAL_REVIEW_COHORT_CONTROL"])
+        if "CORRAL_REVIEW_COHORT_CONTROL" in os.environ
         else None
     )
     if target_path is not None:

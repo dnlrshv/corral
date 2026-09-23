@@ -29,12 +29,11 @@ class Profile:
 # gemini-3.1-pro-high is deliberately absent rather than declared with a borrowed number). Each entry binds a
 # harness binary version, a provider, an account reference and the context window that the
 # harness itself reported; a placeholder model or an unobserved route is not a profile.
-# Evidence: Mini2 agy 1.2.8 model catalogue exposed the exact labels
+# Evidence: the agy 1.2.8 model catalogue exposed the exact labels
 # gemini-3.8-flash-medium and gemini-3.8-flash-high. The historical context observation
 # remains 235849 tokens; a route must still record its actual harness version at launch.
-# codex-cli 0.144.1 `thread_settings_applied` model=qwen3.8-max effort=high over the
-# Alibaba Baba Token Plan endpoint with model_context_window 258400
-# (M4_EVIDENCE/qwen-command-map-native-metadata.json).
+# codex-cli 0.144.1 `thread_settings_applied` reported model=qwen3.8-max effort=high over
+# an Alibaba Cloud token-plan endpoint with model_context_window 258400.
 STANDARD_NATIVE_PROFILES = (
     Profile(
         id="gemini-3.8-flash-high",
@@ -71,20 +70,20 @@ STANDARD_NATIVE_PROFILES = (
         quota_pool="antigravity-subscription",
     ),
     Profile(
-        id="qwen3.8-max-high-codex-baba",
+        id="qwen3.8-max-high-codex-alibaba",
         model="qwen3.8-max",
         effort="high",
         harness="codex",
         version="0.144.1",
-        route="native-codex-baba",
+        route="native-codex-alibaba",
         roles=("implementation", "repair", "adjudication"),
         tools=("read", "search", "edit", "shell", "test"),
         context=258400,
         speed="normal",
         provider="alibaba",
         family="qwen",
-        account_ref="baba-token-plan",
-        quota_pool="baba-token-plan",
+        account_ref="alibaba-token-plan",
+        quota_pool="alibaba-token-plan",
     ),
 )
 

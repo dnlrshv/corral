@@ -33,8 +33,8 @@ def configs(tmp_path: Path, workspace: Path, *, schedules=None, worker=None):
     )
     controller = {
         "state": str(tmp_path / "state"), "token": "fixture-owner",
-        "default_host": "mini2",
-        "hosts": {"mini2": {"routes": ["deterministic"], "harnesses": [],
+        "default_host": "primary",
+        "hosts": {"primary": {"routes": ["deterministic"], "harnesses": [],
                               "cpu": 2, "memory_mb": 1024}},
     }
     controller_path = tmp_path / "controller.json"
@@ -43,8 +43,8 @@ def configs(tmp_path: Path, workspace: Path, *, schedules=None, worker=None):
         "controller_config": str(controller_path), "max_dispatch_per_tick": 1,
         "development_mode": True,
         "repositories": {"demo": {
-            "enabled": True, "default_host": "mini2", "allowed_hosts": ["mini2"],
-            "workspaces": {"mini2": str(workspace)},
+            "enabled": True, "default_host": "primary", "allowed_hosts": ["primary"],
+            "workspaces": {"primary": str(workspace)},
             "allowed_roles": ["implementation"],
             "task_defaults": {
                 "role": "implementation", "candidate_paths": ["output.txt"],
@@ -252,7 +252,7 @@ def test_long_worker_does_not_block_service_or_other_workspace(tmp_path):
     config = configs(tmp_path, first, worker=slow)
     raw = json.loads(config.read_text())
     fast = json.loads(json.dumps(raw["repositories"]["demo"]))
-    fast["workspaces"]["mini2"] = str(second)
+    fast["workspaces"]["primary"] = str(second)
     fast["task_defaults"]["command"] = [sys.executable, "-c",
         "import json; from pathlib import Path; Path('output.txt').write_text('fast'); Path('result.json').write_text(json.dumps({'ok':1}))"]
     raw["repositories"]["fast"] = fast

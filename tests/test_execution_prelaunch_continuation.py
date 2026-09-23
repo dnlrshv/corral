@@ -126,12 +126,12 @@ def test_trusted_export_inspection_refusal_continues_without_a_test_verifier(tmp
                 "account_ref": "fixture", "endpoint": "fixture", "synthetic": True,
                 "inspection_only": True, "supported_models": ["fixture-model"],
                 "supported_efforts": ["medium"], "credential_env": ["FIXTURE_KEY"]}}}
-    controller = Controller(tmp_path / "state", "owner", {"mini2": host},
-                            default_host="mini2", profiles=[profile])
+    controller = Controller(tmp_path / "state", "owner", {"primary": host},
+                            default_host="primary", profiles=[profile])
     controller.store.put_once("trusted_export", export["export_id"], export)
     controller.store.acquire("pr:fixture/repo#7", "corral")
     task = controller.submit("owner", "inspection-refusal", {
-        "trusted_export_id": export["export_id"], "role": "review", "host": "mini2",
+        "trusted_export_id": export["export_id"], "role": "review", "host": "primary",
         "profile_id": profile.id, "objective": "Inspect the candidate.",
         "tools": ["inspect-packet", "report"]})
     request = controller.store.get("request", task)
@@ -139,7 +139,7 @@ def test_trusted_export_inspection_refusal_continues_without_a_test_verifier(tmp
     epoch = controller.store.acquire(resource, task)
     controller.store.transition_owner(resource, task, epoch, "released")
     controller.store.replace("allocation", task, {
-        "host": "mini2", "cpu": 1, "memory_mb": 0, "active": False})
+        "host": "primary", "cpu": 1, "memory_mb": 0, "active": False})
     attempt = "inspection-prelaunch-attempt"
     controller.store.put_once("claim", task, {"attempt": attempt, "generation": 1})
     controller.store.put_once("invocation", attempt, {
@@ -148,7 +148,7 @@ def test_trusted_export_inspection_refusal_continues_without_a_test_verifier(tmp
         "usage": "unknown-until-native-events"})
     controller.store.replace("state", task, {
         "status": "refused-before-launch", "attempt": attempt, "epoch": epoch,
-        "host": "mini2", "profile": request["selection"], "process_status": None,
+        "host": "primary", "profile": request["selection"], "process_status": None,
         "endpoint": "local", "generation": 1, "error": "PermissionError"})
 
     scheduled = controller.continue_task(

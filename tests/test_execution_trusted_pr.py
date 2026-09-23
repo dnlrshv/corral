@@ -75,13 +75,13 @@ def repository_config(tmp_path, remote, fake_gh):
 def service_config(tmp_path: Path, repo: dict) -> Path:
     workspace = git_repo(tmp_path / "registered")
     controller = {"state": str(tmp_path / "state"), "token": "fixture-owner",
-                  "default_host": "mini2", "hosts": {"mini2": {
+                  "default_host": "primary", "hosts": {"primary": {
                       "routes": ["deterministic"], "harnesses": [],
                       "cpu": 2, "memory_mb": 1024}}}
     controller_path = tmp_path / "controller.json"
     controller_path.write_text(json.dumps(controller))
-    repo.update({"enabled": True, "default_host": "mini2", "allowed_hosts": ["mini2"],
-                 "workspaces": {"mini2": str(workspace)}, "task_defaults": {
+    repo.update({"enabled": True, "default_host": "primary", "allowed_hosts": ["primary"],
+                 "workspaces": {"primary": str(workspace)}, "task_defaults": {
                      "command": [sys.executable, "-c", "pass"]}})
     path = tmp_path / "service.json"
     path.write_text(json.dumps({"controller_config": str(controller_path),

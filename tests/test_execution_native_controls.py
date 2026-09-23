@@ -39,7 +39,7 @@ def test_registered_profiles_are_evidenced_and_contain_no_placeholders():
     """Only routes/models actually observed on this host may be registered."""
     ids = {profile.id for profile in STANDARD_NATIVE_PROFILES}
     assert ids == {"gemini-3.8-flash-high", "gemini-3.8-flash-medium",
-                   "qwen3.8-max-high-codex-baba"}
+                   "qwen3.8-max-high-codex-alibaba"}
     for profile in STANDARD_NATIVE_PROFILES:
         assert profile.model not in PLACEHOLDER_MODELS
         assert profile.context > 0, profile.id
@@ -48,10 +48,10 @@ def test_registered_profiles_are_evidenced_and_contain_no_placeholders():
         assert profile.provider and profile.account_ref, profile.id
         # Requested effort is bound to each profile, never defaulted at launch time.
         assert profile.effort in {"medium", "high"}, profile.id
-    qwen = next(p for p in STANDARD_NATIVE_PROFILES if p.id == "qwen3.8-max-high-codex-baba")
-    # The Qwen route is the existing Baba Token Plan binding: Codex harness, Qwen model.
+    qwen = next(p for p in STANDARD_NATIVE_PROFILES if p.id == "qwen3.8-max-high-codex-alibaba")
+    # The Qwen route is the Alibaba Cloud token-plan binding: Codex harness, Qwen model.
     assert (qwen.harness, qwen.model, qwen.account_ref, qwen.provider) == \
-        ("codex", "qwen3.8-max", "baba-token-plan", "alibaba")
+        ("codex", "qwen3.8-max", "alibaba-token-plan", "alibaba")
     assert qwen.context == 258400 and qwen.version == "0.144.1"
     gemini = next(p for p in STANDARD_NATIVE_PROFILES if p.id == "gemini-3.8-flash-high")
     assert (gemini.harness, gemini.model, gemini.route, gemini.account_ref) == \

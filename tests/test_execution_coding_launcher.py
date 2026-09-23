@@ -19,10 +19,10 @@ def test_agy_coding_contract_uses_supported_flags_and_unbounded_wait():
 
 
 def test_codex_coding_contract_binds_provider_and_effort_without_an_effort_flag():
-    argv = argv_for("codex", model_provider="approved_baba")
+    argv = argv_for("codex", model_provider="approved_provider")
     assert "--sandbox" in argv and "workspace-write" in argv
     assert "--effort" not in argv
-    assert 'model_provider="approved_baba"' in argv
+    assert 'model_provider="approved_provider"' in argv
     assert 'model_reasoning_effort="{effort}"' in argv
 
 

@@ -26,11 +26,11 @@ def test_service_dispatch_rotates_hosts_under_global_limit(tmp_path, monkeypatch
     }
     controller_path.write_text(json.dumps(controller_raw))
     repo = service_raw["repositories"]["demo"]
-    repo["allowed_hosts"] = ["mini2", "remote"]
+    repo["allowed_hosts"] = ["primary", "remote"]
     repo["workspaces"]["remote"] = str(second)
     config.write_text(json.dumps(service_raw))
     service = Service(config)
-    service.submit("first-host", "demo", "first", host="mini2")
+    service.submit("first-host", "demo", "first", host="primary")
     service.submit("second-host", "demo", "second", host="remote")
 
     launches = []
@@ -43,7 +43,7 @@ def test_service_dispatch_rotates_hosts_under_global_limit(tmp_path, monkeypatch
     monkeypatch.setattr("corral.execution.runtime_identity.alive", lambda identity: bool(identity))
     assert service.tick(now=10)["dispatched"] == ["first-host"]
     assert service.tick(now=11)["dispatched"] == ["second-host"]
-    assert [host for _task, host in launches] == ["mini2", "remote"]
+    assert [host for _task, host in launches] == ["primary", "remote"]
     assert service.store.get("service_scheduler", "host_cursor") == {"last_host": "remote"}
 
 
@@ -57,7 +57,7 @@ def test_lost_launcher_ack_converges_from_uncertain_when_task_finishes(tmp_path)
 
     service._reconcile({"pid": os.getpid()})
     assert service.status("lost-ack")["event"]["status"] == "uncertain"
-    assert service.controller.run(service.token, task, execution_host="mini2")["result"]["accepted"]
+    assert service.controller.run(service.token, task, execution_host="primary")["result"]["accepted"]
 
     service._reconcile({"pid": os.getpid()})
     assert service.status("lost-ack")["event"]["status"] == "completed"
@@ -97,13 +97,13 @@ def test_terminal_event_keeps_launcher_and_controller_worker_identities_separate
     submitted = service.submit("identities", "demo", "record the worker")
     task = submitted["event"]["task_id"]
     event = service.store.get("service_event", "identities")
-    launcher = {"pid": 7001, "process_start": "launcher", "host": "mini2"}
+    launcher = {"pid": 7001, "process_start": "launcher", "host": "primary"}
     service.store.replace("service_event", "identities", {
         **event, "status": "dispatching", "launcher_identity": launcher,
     })
     service.store.replace("state", task, {
         "status": "completed", "attempt": "attempt-1", "generation": 1,
-        "host": "mini2", "worker_identity": {
+        "host": "primary", "worker_identity": {
             "pid": 7002, "process_start": "worker", "birth_identity_observed": True,
         },
     })
@@ -154,10 +154,10 @@ def test_active_cancellation_is_uncertain_until_controller_releases_owner(tmp_pa
     task = submitted["event"]["task_id"]
     resource = "workspace:" + str(workspace.resolve())
     epoch = service.store.acquire(resource, task)
-    assert service.store.allocate(task, "mini2", 1, 0, {"cpu": 2, "memory_mb": 1024})
+    assert service.store.allocate(task, "primary", 1, 0, {"cpu": 2, "memory_mb": 1024})
     service.store.replace("state", task, {
         "status": "completed", "attempt": "cancelled-attempt", "epoch": epoch,
-        "generation": 1, "host": "mini2",
+        "generation": 1, "host": "primary",
     })
     event = service.store.get("service_event", "cancel-active")
     service.store.replace("service_event", "cancel-active", {**event, "status": "dispatching"})
@@ -172,7 +172,7 @@ def test_active_cancellation_is_uncertain_until_controller_releases_owner(tmp_pa
     service.store.release_allocation(task)
     service.store.replace("state", task, {
         "status": "cancelled", "attempt": "cancelled-attempt", "epoch": epoch,
-        "generation": 1, "host": "mini2",
+        "generation": 1, "host": "primary",
     })
     service._reconcile({"pid": os.getpid()})
     assert service.status("cancel-active")["event"]["status"] == "cancelled"
@@ -218,7 +218,7 @@ def test_atomic_claim_refuses_host_oversubscription_across_service_instances(tmp
     config = configs(tmp_path, first_workspace)
     raw = json.loads(config.read_text())
     raw["repositories"]["other"] = json.loads(json.dumps(raw["repositories"]["demo"]))
-    raw["repositories"]["other"]["workspaces"]["mini2"] = str(second_workspace)
+    raw["repositories"]["other"]["workspaces"]["primary"] = str(second_workspace)
     for repository in raw["repositories"].values():
         repository["task_defaults"]["cpu"] = 2
     config.write_text(json.dumps(raw))
@@ -226,8 +226,8 @@ def test_atomic_claim_refuses_host_oversubscription_across_service_instances(tmp
     first.submit("cpu-one", "demo", "first")
     second.submit("cpu-two", "other", "second")
     runtime = {"pid": os.getpid()}
-    assert first._claim("cpu-one", 10, runtime, scheduler_host="mini2") is not None
-    assert second._claim("cpu-two", 10, runtime, scheduler_host="mini2") is None
+    assert first._claim("cpu-one", 10, runtime, scheduler_host="primary") is not None
+    assert second._claim("cpu-two", 10, runtime, scheduler_host="primary") is None
     assert second.status("cpu-two")["event"]["status"] == "prepared"
 
 
@@ -254,11 +254,11 @@ def test_atomic_claim_canonicalizes_workspace_aliases(tmp_path):
     config = configs(tmp_path, workspace)
     raw = json.loads(config.read_text())
     raw["repositories"]["alias"] = json.loads(json.dumps(raw["repositories"]["demo"]))
-    raw["repositories"]["alias"]["workspaces"]["mini2"] = str(alias)
+    raw["repositories"]["alias"]["workspaces"]["primary"] = str(alias)
     config.write_text(json.dumps(raw))
     first, second = Service(config), Service(config)
     first.submit("canonical", "demo", "first")
     second.submit("alias", "alias", "second")
     runtime = {"pid": os.getpid()}
-    assert first._claim("canonical", 10, runtime, scheduler_host="mini2") is not None
-    assert second._claim("alias", 10, runtime, scheduler_host="mini2") is None
+    assert first._claim("canonical", 10, runtime, scheduler_host="primary") is not None
+    assert second._claim("alias", 10, runtime, scheduler_host="primary") is None

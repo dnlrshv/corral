@@ -65,7 +65,7 @@ def run(directory):
     receipt = lifecycle.merge("owner", pr, "corral", transfer["epoch"], expected=current)
     assert receipt["merged"] and receipt["reconciled"] and len(github.merged) == 1
     rollback = lifecycle.transfer("owner", pr, "corral", transfer["epoch"], "legacy", stopped=True)
-    evidence = {"scenario": "M3-fake-PR-with-real-repair-process", "environment": platform.platform(),
+    evidence = {"scenario": "fake-PR-with-real-repair-process", "environment": platform.platform(),
         "revision": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
         "command": [sys.executable, "-m", "corral.execution.pr_demo", str(directory)],
         "expected": "one repaired candidate, two required reviews, one reconciled merge, one rollback owner",

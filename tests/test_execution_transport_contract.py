@@ -1,4 +1,4 @@
-"""Comprehensive regression and contract verification tests for M5 transport, policy, and cohort boundaries."""
+"""Regression and contract tests for the advisory transport, policy, and cohort boundaries."""
 
 import json
 import os
@@ -10,6 +10,7 @@ from corral.execution.advisory import compute_advisory_intent
 from corral.execution.advisory_cli import main as cli_main
 from corral.execution.github_advisory import GitHubAdvisoryTransport, _NoRedirectHandler
 from corral.execution.legacy_adapter import (
+    _find_config_path,
     bootstrap_cohort_store,
     check_cohort_admission,
     pr_lease,
@@ -236,3 +237,10 @@ def test_post_receipt_validation_and_no_redirect_handler(tmp_path: Path):
     handler = _NoRedirectHandler()
     with pytest.raises(PermissionError, match="HTTP redirect prohibited"):
         handler.redirect_request(None, None, 301, "Moved", {}, "https://evil.redirect.com")
+
+
+def test_cohort_control_path_is_read_from_the_corral_environment_variable(tmp_path, monkeypatch):
+    control = tmp_path / "cohort_control.json"
+    control.write_text("{}")
+    monkeypatch.setenv("CORRAL_REVIEW_COHORT_CONTROL", str(control))
+    assert _find_config_path() == control.resolve()

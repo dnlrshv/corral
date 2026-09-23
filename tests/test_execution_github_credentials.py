@@ -26,11 +26,11 @@ def test_loads_allowlisted_gh_account_without_exposing_token(tmp_path, monkeypat
 
     monkeypatch.setattr("corral.execution.github_credentials.subprocess.run", run)
     token, identity = load({"mode": "gh-cli", "executable": str(executable),
-                            "hostname": "github.com", "account_ref": "mini2-user"})
+                            "hostname": "github.com", "account_ref": "fixture-user"})
     assert token == "stored-token"
     assert seen[0][0] == [str(executable), "auth", "token", "--hostname", "github.com"]
     assert seen[0][1]["capture_output"] is True
-    assert identity == {"mode": "gh-cli", "account_ref": "mini2-user",
+    assert identity == {"mode": "gh-cli", "account_ref": "fixture-user",
                         "hostname": "github.com"}
     assert "stored-token" not in repr(identity)
 

@@ -227,7 +227,7 @@ def test_cancelled_missing_git_metadata_preserves_history_without_verifier(setup
     state = {"status": "uncertain", "attempt": "post-adapter", "epoch": epoch, "generation": 1}
     bind_interrupted_attempt(controller, task, state)
     controller.store.put_once("usage", "post-adapter", {"input": "unknown"})
-    # Match #3518's exported snapshot contract: no Git metadata exists at reconciliation.
+    # Match the exported-snapshot contract: no Git metadata exists at reconciliation.
     import shutil
     shutil.rmtree(repo / ".git")
     controller.cancel("owner", task)

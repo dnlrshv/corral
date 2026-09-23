@@ -139,6 +139,10 @@ def test_a_colon_value_before_a_later_assignment_is_redacted(line):
     f"# password: {FAKE} = x\n",
     f"# password: {FAKE} | user=bob\n",
     f"x = 1  # api_key: {FAKE} = see vault\n",
+    # A quoted bound passes only as a known type name, never through the expression rule.
+    f'# password: "{FAKE}.prod" = x\n',
+    f'# secret: "a.{FAKE}" | str = x\n',
+    f"# api_key: '{FAKE}(1)' = None\n",
 ])
 def test_comment_colon_values_cannot_pass_as_annotations(text):
     assert check_file_text_safe(text, source_name="settings.py")
@@ -209,6 +213,7 @@ def test_a_key_in_a_header_comment_does_not_open_a_block(text):
 def test_commented_out_annotated_code_and_hash_strings_stay_accepted():
     source = ('if s.startswith("#") and not token:\n    """Parse the token."""\n'
               "# token: Optional[str] = None\n"
+              '# token: "str" = None\n'
               '# api_key: str = os.environ["API_KEY"]\n'
               "#     access_token: str | None = None\n")
     assert check_file_text_safe(source, source_name="loader.py") == []

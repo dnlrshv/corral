@@ -294,8 +294,11 @@ def check_source_text_safe(text: str, *, source_name: str | None = None) -> list
         if (python_source and match.group("sep") == "=" and ":" in match.group("sep_space")
                 and _in_comment(text, match.start())):
             bound = text[match.end("key"):match.start("sep")].split(":", 1)[1]
-            bound = bound.split("|", 1)[0].strip().strip("\"'")
-            if bound not in type_names and not any(char in bound for char in ".()[]{}"):
+            bound = bound.split("|", 1)[0].strip()
+            # A quoted bound passes only as a known type name: its quotes are kept for the
+            # expression test, so ``"<value>.prod"`` is still data.
+            if bound.strip("\"'") not in type_names and (
+                    bound.startswith(("\"", "'")) or not any(char in bound for char in ".()[]{}")):
                 offenders.append(assignment.pattern)
                 continue
         line_end = text.find("\n", match.start())

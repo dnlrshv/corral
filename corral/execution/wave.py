@@ -13,10 +13,13 @@ Artifact handoff binds:
   dependents while independent ready tasks proceed.
 """
 from __future__ import annotations
+import math
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from corral.redaction import redact_text
 
 from .handoff import execute_handoff, HANDOFF_KIND, BLOCKED_KIND
 from . import continuation, scheduler
@@ -72,6 +75,34 @@ def _detect_cycle(tasks: list[dict[str, Any]]) -> list[str] | None:
             if dfs(t["id"], []):
                 return cycle
     return None
+
+
+def resource_error(spec: dict[str, Any]) -> str | None:
+    """Why a task's resource request can never be scheduled, or None when it can.
+
+    The scheduler and the store refuse a CPU request that is not positive and a memory
+    request that is negative; anything that is not a finite number cannot be compared.
+    """
+    def usable(value) -> bool:
+        return (isinstance(value, (int, float)) and not isinstance(value, bool)
+                and math.isfinite(value))
+
+    cpu, memory = spec.get("cpu", 1), spec.get("memory_mb", 0)
+    if not usable(cpu) or cpu <= 0:
+        return "invalid resource request: cpu must be a positive number"
+    if not usable(memory) or memory < 0:
+        return "invalid resource request: memory_mb must be a non-negative number"
+    return None
+
+
+def _latest_dispatches(store) -> dict[str, dict[str, Any]]:
+    latest = {}
+    for key, record in store.records("wave_dispatch").items():
+        task = record.get("task") or key
+        generation = int(record.get("generation") or 1)
+        if generation >= int((latest.get(task) or {}).get("generation") or 0):
+            latest[task] = record
+    return latest
 
 
 class WaveRunner:
@@ -141,8 +172,16 @@ class WaveRunner:
         self.controller.store.replace(WAVE_STATE_KIND, wave_id, {"status": "running", "wave_id": wave_id})
         return wave_record
 
-    def step(self, wave_id: str, execution_host: str) -> dict[str, Any]:
-        """Advance wave by one deterministic step without model inference."""
+    def step(self, wave_id: str, execution_host: str, dispatcher=None, *,
+             running: list[dict[str, Any]] | None = None,
+             capacity: dict[str, Any] | None = None,
+             dispatch_limit: int | None = None) -> dict[str, Any]:
+        """Advance wave by one deterministic step without model inference.
+
+        The maintained service passes a ``dispatcher`` that launches detached workers, the
+        store's active allocations as ``running`` and the controller's registered
+        ``capacity``; without them the runner dispatches in-process against its own view.
+        """
         wave = self.controller.store.get(WAVE_KIND, wave_id)
         if not wave:
             raise KeyError(f"Wave not found: {wave_id}")
@@ -150,7 +189,9 @@ class WaveRunner:
         task_ids = wave["task_ids"]
         handoffs = wave.get("handoffs", [])
 
-        # Evaluate pending handoffs
+        # Evaluate pending handoffs. A failed handoff blocks only its consumer, and one that
+        # waits for a busy consumer workspace keeps the wave live without failing the step.
+        waiting: dict[str, str] = {}
         for h in handoffs:
             key = handoff_key(h["producer"], h["producer_path"], h["consumer"], h["consumer_path"])
             existing = self.controller.store.get(HANDOFF_KIND, key)
@@ -159,7 +200,17 @@ class WaveRunner:
             prod_result = continuation.current_result(self.controller.store, h["producer"])
             prod_state = self.controller.store.get("state", h["producer"]) or {}
             if prod_result and prod_result.get("accepted") and not prod_state.get("amended_objective_pending"):
-                execute_handoff(self.controller, self.token, h)
+                try:
+                    outcome = execute_handoff(self.controller, self.token, h)
+                except Exception as error:
+                    self.controller.store.replace(BLOCKED_KIND, h["consumer"], {
+                        "status": "blocked", "key": key, "producer": h["producer"],
+                        "consumer": h["consumer"],
+                        "reason": redact_text(f"artifact handoff failed: {error}"),
+                    })
+                    continue
+                if outcome.get("status") == "waiting":
+                    waiting[h["consumer"]] = outcome["reason"]
 
         requests = self.controller.store.records("request")
         states = self.controller.store.records("state")
@@ -177,7 +228,18 @@ class WaveRunner:
             return True
 
         completed_tasks = [t for t in task_ids if is_task_complete(t)]
-        blocked_tasks = {t for t in task_ids if (blocked_records.get(t) or {}).get("status") == "blocked"}
+        wave_dispatches = {
+            task: record for task, record in _latest_dispatches(self.controller.store).items()
+            if int(record.get("generation") or 1)
+            == continuation.current_generation(self.controller.store, task)
+        }
+        blocked_tasks = {
+            t for t in task_ids
+            if (blocked_records.get(t) or {}).get("status") == "blocked"
+            or (wave_dispatches.get(t) or {}).get("status") == "uncertain"
+            or ((wave_dispatches.get(t) or {}).get("status") == "terminal"
+                and (wave_dispatches.get(t) or {}).get("terminal_status") != "completed")
+        }
 
         # Find ready candidates
         candidates = []
@@ -197,6 +259,9 @@ class WaveRunner:
                 continue
 
             st = states.get(t)
+            dispatch_state = (wave_dispatches.get(t) or {}).get("status")
+            if dispatch_state in ("launching", "active", "uncertain"):
+                continue
             if st and st.get("status") in ("running", "dispatching", "completed"):
                 if not continuation.pending_generation(self.controller.store, t):
                     continue
@@ -211,29 +276,71 @@ class WaveRunner:
             })
 
         host_cfg = self.controller.hosts[execution_host]
+        limits = capacity if capacity is not None else {
+            "cpu": host_cfg.get("cpu", 4), "memory_mb": host_cfg.get("memory_mb", 8192)}
         host = {
-            "cpu": host_cfg.get("cpu", 4), "memory_mb": host_cfg.get("memory_mb", 8192),
+            "cpu": limits["cpu"], "memory_mb": limits["memory_mb"],
             "interactive_boost_seconds": 10, "routes": [*host_cfg.get("routes", []), "deterministic"],
         }
-        running = [requests[k] for k, v in states.items() if v.get("status") in ("running", "dispatching") and v.get("host") == execution_host]
+        # A candidate that can never be admitted blocks instead of keeping the wave running
+        # forever: an invalid resource request, one larger than the whole registered host,
+        # or a route the execution host does not serve.
+        unschedulable: dict[str, str] = {}
+        for c in candidates:
+            reason = resource_error(c)
+            if reason is None and (c.get("cpu", 1) > host["cpu"]
+                                   or c.get("memory_mb", 0) > host["memory_mb"]):
+                reason = "exceeds registered host capacity"
+            if reason is None and c["route"] not in host["routes"]:
+                reason = f"route {c['route']} is not served by execution host {execution_host}"
+            if reason is not None:
+                unschedulable[c["id"]] = reason
+        blocked_tasks |= set(unschedulable)
+        candidates = [c for c in candidates if c["id"] not in unschedulable]
+        if running is None:
+            running = [requests[k] for k, v in states.items() if v.get("status") in ("running", "dispatching") and v.get("host") == execution_host]
         admitted = scheduler.ready(candidates, completed_tasks, running, host, time.time())
+        if dispatch_limit is not None:
+            admitted = admitted[:dispatch_limit]
 
         dispatched = []
         for task_id in admitted:
-            res = self.controller.run(self.token, task_id, execution_host=execution_host)
-            dispatched.append({"task": task_id, "status": res.get("state", {}).get("status")})
+            if dispatcher is None:
+                res = self.controller.run(self.token, task_id, execution_host=execution_host)
+                status = res.get("state", {}).get("status")
+            else:
+                status = dispatcher(wave_id, task_id, execution_host)
+            dispatched.append({"task": task_id, "status": status})
 
         task_summary = {
             t: {
-                "status": "accepted" if is_task_complete(t) else states.get(t, {}).get("status", "submitted"),
+                "status": ("accepted" if is_task_complete(t)
+                           else "handoff-waiting" if t in waiting and t not in blocked_tasks
+                           else (wave_dispatches.get(t) or {}).get("status")
+                           or states.get(t, {}).get("status", "submitted")),
                 "blocked": t in blocked_tasks,
-                "blocker": (blocked_records.get(t) or {}).get("reason") if t in blocked_tasks else None,
+                "blocker": ((blocked_records.get(t) or {}).get("reason")
+                            or (wave_dispatches.get(t) or {}).get("error")
+                            or (wave_dispatches.get(t) or {}).get("terminal_status")
+                            or unschedulable.get(t))
+                           if t in blocked_tasks else None,
             }
             for t in task_ids
         }
+        if waiting:
+            for t, reason in waiting.items():
+                if t in task_summary and t not in blocked_tasks:
+                    task_summary[t]["waiting"] = reason
         all_done = all(v["status"] == "accepted" for v in task_summary.values())
-        has_running = any(states.get(t, {}).get("status") in ("running", "dispatching") for t in task_ids)
-        is_terminal = all_done or (not has_running and not admitted)
+        has_running = any(
+            states.get(t, {}).get("status") in ("running", "dispatching")
+            or (wave_dispatches.get(t) or {}).get("status") in ("launching", "active")
+            for t in task_ids)
+        # A ready task may be temporarily capacity-blocked by interactive work, and a handoff
+        # may wait for its consumer workspace. Both keep the wave live; only a wave with no
+        # runnable candidate and nothing waiting can be terminal.
+        live_waiting = any(t not in blocked_tasks for t in waiting)
+        is_terminal = all_done or (not has_running and not candidates and not live_waiting)
 
         wave_status = "completed" if all_done else ("blocked" if is_terminal else "running")
         self.controller.store.replace(WAVE_STATE_KIND, wave_id, {"status": wave_status, "wave_id": wave_id, "summary": task_summary})

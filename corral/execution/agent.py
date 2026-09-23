@@ -29,6 +29,7 @@ class AgentConfig:
     ssh_options: list[str] | None = None
     default_host: str | None = None
     profiles: dict[str, dict[str, Any]] | None = None
+    development_mode: bool = False
 
     @classmethod
     def load(cls, path: Path | str) -> AgentConfig:
@@ -42,15 +43,21 @@ class AgentConfig:
             ssh_options=data.get("ssh_options"),
             default_host=data.get("default_host"),
             profiles=data.get("profiles", {}),
+            development_mode=data.get("development_mode") is True,
         )
 
     def as_client_config(self) -> dict[str, Any]:
         cfg: dict[str, Any] = {
             "python": self.python,
             "controller_config": str(self.controller_config),
-            "source": str(self.source) if self.source else str(Path.cwd()),
             "transport": self.transport,
         }
+        if self.source is not None:
+            cfg["source"] = str(self.source)
+        elif self.development_mode:
+            cfg["source"] = str(Path.cwd())
+        if self.development_mode:
+            cfg["development_mode"] = True
         if self.transport == "ssh":
             if not self.ssh_host:
                 raise ValueError("ssh transport requires ssh_host")

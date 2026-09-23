@@ -22,7 +22,7 @@ def test_usable_agent_run_wrong_host_refusal(setup, tmp_path):
     }))
     config_path = tmp_path / "config.json"
     config_path.write_text(json.dumps({
-        "controller_config": str(controller_config)
+        "controller_config": str(controller_config), "development_mode": True
     }))
     agent_inst = CorralAgent(config_path)
     # Test that run on wrong host raises or blocks appropriately
@@ -56,6 +56,7 @@ def test_usable_agent_run_profile_defaults(setup, tmp_path):
     config_path = tmp_path / "config.json"
     config_path.write_text(json.dumps({
         "controller_config": str(controller_config),
+        "development_mode": True,
         "default_host": "fixture",
         "profiles": {
             "my-repo-profile": {
@@ -96,7 +97,7 @@ def test_usable_agent_run_verified_outcome(setup, tmp_path, monkeypatch):
     config_path = tmp_path / "config.json"
     config_path.write_text(json.dumps({
         "controller_config": str(controller_config),
-        "default_host": "fixture"
+        "default_host": "fixture", "development_mode": True
     }))
 
     agent_inst = CorralAgent(config_path)
@@ -122,7 +123,7 @@ def test_usable_agent_wave_start_and_disconnect(setup, tmp_path, monkeypatch):
     config_path = tmp_path / "config.json"
     config_path.write_text(json.dumps({
         "controller_config": str(controller_config),
-        "default_host": "fixture"
+        "default_host": "fixture", "development_mode": True
     }))
 
     agent_inst = CorralAgent(config_path)
@@ -233,7 +234,7 @@ def test_wait_amendment_dispatch(setup, tmp_path, monkeypatch):
     config_path = tmp_path / "config.json"
     config_path.write_text(json.dumps({
         "controller_config": str(controller_config),
-        "default_host": "fixture"
+        "default_host": "fixture", "development_mode": True
     }))
 
     agent_inst = CorralAgent(config_path)
@@ -266,7 +267,7 @@ def test_usable_agent_return_artifact(setup, tmp_path):
     config_path = tmp_path / "config.json"
     config_path.write_text(json.dumps({
         "controller_config": str(controller_config),
-        "default_host": "fixture"
+        "default_host": "fixture", "development_mode": True
     }))
 
     agent_inst = CorralAgent(config_path)

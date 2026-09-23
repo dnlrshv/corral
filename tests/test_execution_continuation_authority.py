@@ -261,7 +261,8 @@ def _remote(env, tmp_path: Path) -> client.Client:
         "state": str(env["state"]), "token": "owner", "hosts": {env["host_id"]: env["host"]},
         "default_host": env["host_id"], "execution_host": env["host_id"], "profiles": []}))
     return client.Client({"python": sys.executable, "controller_config": str(config),
-                          "source": str(REPO_ROOT), "transport": "local"})
+                          "source": str(REPO_ROOT), "transport": "local",
+                          "development_mode": True})
 
 
 def _await_generation(remote: client.Client, task: str, state: Path, generation: int,

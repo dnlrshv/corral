@@ -2,6 +2,7 @@
 import argparse
 import json
 import os
+import socket
 import subprocess
 import sys
 import time
@@ -9,8 +10,27 @@ from pathlib import Path
 
 from . import continuation
 from .controller import Controller
+from .runtime_identity import launched, process_status
 from .scheduler import ready
 from corral.redaction import redact_text, safe_config_diagnostic
+
+
+def _runner_status(pid_record):
+    """alive, dead or unknown for a recorded wave runner, robust to PID reuse."""
+    identity = pid_record.get("identity")
+    if isinstance(identity, dict) and identity.get("pid") == pid_record.get("pid"):
+        status = process_status(identity)
+        if status != "unknown":
+            return status
+    # Without an observable birth identity an absent PID still proves the runner dead, but
+    # an existing PID may belong to a different process, so it never proves it alive.
+    try:
+        os.kill(pid_record["pid"], 0)
+    except ProcessLookupError:
+        return "dead"
+    except (KeyError, TypeError, ValueError, OSError):
+        pass
+    return "unknown"
 
 
 def main(argv=None):
@@ -127,15 +147,18 @@ def main(argv=None):
                     owner_id = owner_row[0]
                     pid_record = controller.store.get("wave_runner_pid", request["wave_id"])
                     if pid_record and pid_record.get("owner") == owner_id:
-                        try:
-                            os.kill(pid_record["pid"], 0)
+                        # A live PID proves nothing by itself: after the runner exits the OS
+                        # may hand its PID to an unrelated process. Only the recorded birth
+                        # identity can prove the runner alive or dead.
+                        status = _runner_status(pid_record)
+                        if status == "alive":
                             reason = "process is still alive"
-                        except ProcessLookupError:
+                        elif status == "dead":
                             controller.store.transition_owner(f"wave_runner:{request['wave_id']}", owner_id, owner_row[1], "released")
                             reconciled = True
                             reason = "proven dead"
-                        except Exception as e:
-                            reason = f"cannot verify process: {e}"
+                        else:
+                            reason = "cannot verify process identity"
                             controller.store.transition_owner(f"wave_runner:{request['wave_id']}", owner_id, owner_row[1], "uncertain")
                     else:
                         reason = "unobservable identity"
@@ -161,7 +184,11 @@ def main(argv=None):
                                           "--epoch", str(epoch), "--runner-id", runner_id],
                                          stdin=subprocess.DEVNULL, stdout=log, stderr=log,
                                          start_new_session=True)
-                        controller.store.replace("wave_runner_pid", request["wave_id"], {"pid": proc.pid, "owner": runner_id})
+                        identity = launched(proc.pid, str(Path(sys.executable).resolve()),
+                                            socket.gethostname())
+                        controller.store.replace("wave_runner_pid", request["wave_id"],
+                                                 {"pid": proc.pid, "owner": runner_id,
+                                                  "identity": identity})
                     result = {"wave_id": request["wave_id"], "dispatch": "launched", "runner_id": runner_id}
         else:
             raise ValueError("unsupported action")

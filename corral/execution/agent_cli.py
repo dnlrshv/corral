@@ -59,7 +59,15 @@ def _parser() -> argparse.ArgumentParser:
     continued.add_argument("--objective", required=True)
     wave = sub.add_parser("wave")
     wave.add_argument("--wave-id", required=True)
-    wave.add_argument("--spec", required=True, type=Path)
+    source = wave.add_mutually_exclusive_group(required=True)
+    source.add_argument("--plan")
+    source.add_argument("--spec", type=Path)
+    wave.add_argument("--objective")
+    wave.add_argument("--host")
+    wave_status = sub.add_parser("wave-status")
+    wave_status.add_argument("--wave-id", required=True)
+    wave_resume = sub.add_parser("wave-resume")
+    wave_resume.add_argument("--wave-id", required=True)
     sub.add_parser("tick")
     returned = sub.add_parser("return")
     returned.add_argument("--event-id", required=True)
@@ -114,9 +122,17 @@ def main(argv: list[str] | None = None) -> int:
         result = client.call("continue", event_id=args.event_id,
                              continuation_id=args.continuation_id, objective=args.objective)
     elif args.command == "wave":
-        spec = json.loads(args.spec.read_text())
-        result = client.call("wave", wave_id=args.wave_id, tasks=spec["tasks"],
-                             handoffs=spec.get("handoffs"))
+        if args.plan:
+            result = client.call("wave-plan", wave_id=args.wave_id, plan=args.plan,
+                                 objective=args.objective, host=args.host)
+        else:
+            if args.objective is not None or args.host is not None:
+                raise ValueError("objective/host overrides require a named plan")
+            spec = json.loads(args.spec.read_text())
+            result = client.call("wave-advanced", wave_id=args.wave_id, tasks=spec["tasks"],
+                                 handoffs=spec.get("handoffs"))
+    elif args.command in ("wave-status", "wave-resume"):
+        result = client.call(args.command, wave_id=args.wave_id)
     elif args.command == "tick":
         result = client.call("tick")
     else:

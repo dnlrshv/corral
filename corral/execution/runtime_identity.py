@@ -13,10 +13,22 @@ from . import controller, service
 from .store import digest
 
 
-def process_start(pid: int) -> str | None:
+# ``ps -o lstart`` renders the start time in the caller's time zone and locale, so the
+# same process reads differently from two environments. Identities are recorded and
+# compared in one fixed rendering.
+_START_ENVIRONMENT = {"LC_ALL": "C", "TZ": "UTC"}
+
+
+def process_start(pid: int, *, normalized: bool = True) -> str | None:
+    """The process's start time as ``ps`` renders it, or None when it cannot be observed.
+
+    ``normalized=False`` renders it in the current environment instead, the format that
+    identities recorded before normalization carry.
+    """
+    environment = {**os.environ, **_START_ENVIRONMENT} if normalized else None
     try:
         value = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)], check=True,
-                               text=True, capture_output=True).stdout.strip()
+                               text=True, capture_output=True, env=environment).stdout.strip()
         return value or None
     except (OSError, subprocess.SubprocessError):
         return None
@@ -65,7 +77,14 @@ def process_status(identity: dict[str, Any]) -> str:
     observed = process_start(pid)
     if observed is None:
         return "unknown"
-    return "alive" if observed == expected else "dead"
+    if observed == expected:
+        return "alive"
+    # An identity recorded before start times were normalized carries this environment's
+    # rendering; it still proves the same process birth.
+    legacy = process_start(pid, normalized=False)
+    if legacy is None:
+        return "unknown"
+    return "alive" if legacy == expected else "dead"
 
 
 def _worker_process_status(identity: dict[str, Any]) -> str:

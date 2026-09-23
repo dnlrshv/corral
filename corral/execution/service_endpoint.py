@@ -38,14 +38,23 @@ def main(argv: list[str] | None = None) -> int:
     elif action == "reconcile":
         service.tick(request.get("now"))
         result = service.status(request["event_id"])
-    elif action == "wave":
-        from .client import Client
-        result = Client({"python": __import__("sys").executable,
-                         "controller_config": str(service.controller_path),
-                         "source": str(Path(__file__).parents[2]),
-                         "transport": "local"}).call(
-                             "run-wave", wave_id=request["wave_id"],
-                             tasks=request["tasks"], handoffs=request.get("handoffs"))
+    elif action == "wave-plan":
+        result = service.submit_wave_plan(
+            request["plan"], request["wave_id"], objective=request.get("objective"),
+            host=request.get("host"))
+    elif action in ("wave-advanced", "wave"):
+        # ``wave`` is the earlier name of this action, kept as an alias. Both only admit the
+        # wave (idempotently, by wave id) and return its record; the service tick then
+        # dispatches and advances it, so neither blocks on or launches a wave runner.
+        from .service_wave import submit_advanced
+        result = submit_advanced(service, request["wave_id"], request["tasks"],
+                                 request.get("handoffs"))
+    elif action == "wave-status":
+        from .service_wave import status as wave_status
+        result = wave_status(service, request["wave_id"])
+    elif action == "wave-resume":
+        from .service_wave import resume
+        result = resume(service, request["wave_id"])
     elif action == "fetch":
         event = service.store.get("service_event", request["event_id"])
         if not event or not event.get("task_id"):

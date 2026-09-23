@@ -63,6 +63,11 @@ def test_source_scanner_allows_github_workflow_references_not_literal_values():
     ("loader.py", f'for s in x: settings.update({{"secret":\n    "{FAKE}"}})\n'),
     ("loader.py", f'def f() -> dict: return {{"api_key":\n    "{FAKE}"}}\n'),
     ("loader.py", f'if x: d = {{API_KEY:\n    "{FAKE}"}}\n'),
+    # A '->' inside a string does not make a mapping line a signature's closing line.
+    ("loader.py", f'd = {{\n    "key": " -> ", API_KEY:\n    "{FAKE}"\n}}\n'),
+    ("loader.py", f'd = {{\n    ")": "->", API_KEY:\n    "{FAKE}"\n}}\n'),
+    # A ')' inside a string does not close the mapping's '{'.
+    ("loader.py", f'if s.startswith(")"): d = {{API_KEY:\n    "{FAKE}"}}\n'),
 ])
 def test_source_scanner_refuses_reference_lookalikes(source_name, text):
     assert check_file_text_safe(text, source_name=source_name)
@@ -179,6 +184,8 @@ def test_triple_quoted_and_multiline_values_are_redacted_in_place():
 def test_python_block_colon_before_a_docstring_is_not_an_assignment():
     source = ('def load() -> AuthToken:\n    """Load the snapshot."""\n    return AuthToken()\n'
               'def read(\n    path,\n) -> Token:\n    """Read one token."""\n'
+              'def write(\n    path: str = "(") -> Token:\n    """Write one token."""\n'
+              'if line.startswith("(") and token:\n    """Parse the token."""\n'
               'if not token:\n    raise ValueError("token required")\n')
     assert check_file_text_safe(source, source_name="loader.py") == []
     for mapping in (f'CONFIG = {{"password":\n    "{FAKE}"}}\n', f'CONFIG = {{password:\n    "{FAKE}"}}\n'):

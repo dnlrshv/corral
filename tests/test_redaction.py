@@ -136,6 +136,9 @@ def test_a_colon_value_before_a_later_assignment_is_redacted(line):
     f"# api_key: {FAKE}, region=us_east\n",
     f"# auth_token: {FAKE}, retries=3\n",
     f"x = 1  # password: {FAKE}, user=bob\n",
+    f"# password: {FAKE} = x\n",
+    f"# password: {FAKE} | user=bob\n",
+    f"x = 1  # api_key: {FAKE} = see vault\n",
 ])
 def test_comment_colon_values_cannot_pass_as_annotations(text):
     assert check_file_text_safe(text, source_name="settings.py")
@@ -190,3 +193,22 @@ def test_python_block_colon_before_a_docstring_is_not_an_assignment():
     assert check_file_text_safe(source, source_name="loader.py") == []
     for mapping in (f'CONFIG = {{"password":\n    "{FAKE}"}}\n', f'CONFIG = {{password:\n    "{FAKE}"}}\n'):
         assert check_file_text_safe(mapping, source_name="loader.py")
+
+
+@pytest.mark.parametrize("text", [
+    f'if x:  # api_key:\n    "{FAKE}"\n',
+    f'def rotate():  # new api_key:\n    """{FAKE}"""\n',
+    f'class Config:  # password:\n    "{FAKE}"\n',
+    f'else:  # secret:\n    "{FAKE}"\n',
+    f'if x == "a":  # token:\n    "{FAKE}"\n',
+])
+def test_a_key_in_a_header_comment_does_not_open_a_block(text):
+    assert check_file_text_safe(text, source_name="settings.py")
+
+
+def test_commented_out_annotated_code_and_hash_strings_stay_accepted():
+    source = ('if s.startswith("#") and not token:\n    """Parse the token."""\n'
+              "# token: Optional[str] = None\n"
+              '# api_key: str = os.environ["API_KEY"]\n'
+              "#     access_token: str | None = None\n")
+    assert check_file_text_safe(source, source_name="loader.py") == []

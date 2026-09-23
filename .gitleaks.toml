@@ -9,15 +9,14 @@
 useDefault = true
 
 [[allowlists]]
-description = "Synthetic token-shaped fixtures (matched by captured value)"
-regexTarget = "match"
+description = "Synthetic token-shaped fixtures in the redaction and bridge tests (exact secret values)"
 regexes = [
-    '''sk-ant-AbC123_xYz''',
-    '''ghp_AbC123def''',
-    '''github_pat_Zz9''',
-    '''ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456''',
-    '''AKIAABCDEFGHIJKLMNOP''',
-    '''glpat-ABCDEFGHIJKLMNOPQRST''',
+    '''^sk-ant-AbC123_xYz$''',
+    '''^ghp_AbC123def$''',
+    '''^github_pat_Zz9$''',
+    '''^ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456$''',
+    '''^AKIAABCDEFGHIJKLMNOP$''',
+    '''^glpat-ABCDEFGHIJKLMNOPQRST$''',
 ]
 
 [[allowlists]]

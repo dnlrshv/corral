@@ -31,6 +31,20 @@ def main(argv: list[str] | None = None) -> int:
     review.add_argument("--expected-head")
     review.add_argument("--expected-base")
     review.add_argument("--host")
+    review.add_argument("--replacement-of-task")
+    repair = sub.add_parser("repair-pr")
+    repair.add_argument("--repository", required=True)
+    repair.add_argument("--pr", required=True, type=int)
+    repair.add_argument("--review-receipt", required=True)
+    repair.add_argument("--expected-head", required=True)
+    repair.add_argument("--expected-base", required=True)
+    repair.add_argument("--host")
+    publish_repair = sub.add_parser("publish-repair")
+    publish_repair.add_argument("--repository", required=True)
+    publish_repair.add_argument("--event-id", required=True)
+    reconcile_repair = sub.add_parser("reconcile-repair")
+    reconcile_repair.add_argument("--repository", required=True)
+    reconcile_repair.add_argument("--intent", required=True)
     for name in ("status", "return"):
         item = sub.add_parser(name)
         item.add_argument("--event-id", required=True)
@@ -51,7 +65,17 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "review-pr":
         result = service.submit_pr_review(
             args.repository, args.pr, args.policy, expected_head=args.expected_head,
-            expected_base=args.expected_base, host=args.host)
+            expected_base=args.expected_base, host=args.host,
+            replacement_of_task=args.replacement_of_task)
+    elif args.command == "repair-pr":
+        result = service.submit_pr_repair(
+            args.repository, args.pr, args.review_receipt,
+            expected_head=args.expected_head, expected_base=args.expected_base,
+            host=args.host)
+    elif args.command == "publish-repair":
+        result = service.publish_pr_repair(args.repository, args.event_id)
+    elif args.command == "reconcile-repair":
+        result = service.reconcile_pr_repair(args.repository, args.intent)
     elif args.command == "status":
         result = service.status(args.event_id)
     elif args.command == "tick":

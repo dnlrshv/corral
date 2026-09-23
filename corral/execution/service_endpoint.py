@@ -20,6 +20,12 @@ def main(argv: list[str] | None = None) -> int:
         result = service.submit(**request)
     elif action == "submit-pr-review":
         result = service.submit_pr_review(**request)
+    elif action == "submit-pr-repair":
+        result = service.submit_pr_repair(**request)
+    elif action == "publish-pr-repair":
+        result = service.publish_pr_repair(**request)
+    elif action == "reconcile-pr-repair":
+        result = service.reconcile_pr_repair(**request)
     elif action == "status":
         result = service.status(request["event_id"])
     elif action == "tick":

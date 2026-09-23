@@ -133,6 +133,19 @@ class Service:
         from .service_pr import submit_pr_review
         return submit_pr_review(self, repository, pr_number, policy_id, **kwargs)
 
+    def submit_pr_repair(self, repository: str, pr_number: int,
+                         review_receipt_id: str, **kwargs):
+        from .service_repair import submit_pr_repair
+        return submit_pr_repair(self, repository, pr_number, review_receipt_id, **kwargs)
+
+    def publish_pr_repair(self, repository: str, event_id: str):
+        from .github_branch import BranchPublisher
+        return BranchPublisher(service=self, repository=repository).publish(event_id)
+
+    def reconcile_pr_repair(self, repository: str, intent: str):
+        from .github_branch import BranchPublisher
+        return BranchPublisher(service=self, repository=repository).reconcile(intent)
+
     def submit_wave_plan(self, name: str, wave_id: str, **kwargs):
         from .service_wave import submit
         return submit(self, name, wave_id, **kwargs)

@@ -13,13 +13,18 @@ class Client:
 
     def call(self, action, **payload):
         cfg = self.config
-        command = [cfg["python"], "-m", "corral.execution.cli", "--config", cfg["controller_config"]]
+        development = cfg.get("development_mode") is True
+        if cfg.get("source") and not development:
+            raise ValueError("source checkout requires explicit development_mode")
+        command = [cfg["python"], *([] if development else ["-I"]),
+                   "-m", "corral.execution.cli", "--config", cfg["controller_config"]]
         if cfg.get("transport", "local") == "ssh":
-            remote = "cd " + shlex.quote(cfg["source"]) + " && " + shlex.join(command)
+            remote = (("cd " + shlex.quote(cfg["source"]) + " && ") if development else "") \
+                + shlex.join(command)
             command = ["ssh", "-o", "BatchMode=yes", *cfg.get("ssh_options", []), cfg["ssh_host"], remote]
             cwd = None
         else:
-            cwd = cfg["source"]
+            cwd = cfg.get("source") if development else "/"
         result = subprocess.run(command, input=json.dumps({"action": action, **payload}),
                                 capture_output=True, text=True, cwd=cwd)
         if result.returncode:

@@ -65,20 +65,25 @@ def _host_order(service) -> list[str]:
     return hosts[start:] + hosts[:start]
 
 
-def _busy_workspaces(events: dict[str, dict[str, Any]], specs: dict[str, dict]) -> set[str]:
-    return {
+def _busy_workspaces(events: dict[str, dict[str, Any]], specs: dict[str, dict],
+                     reservations: list[dict[str, Any]]) -> set[str]:
+    busy = {
         str(Path(specs[key]["workspace"]).resolve())
         for key, value in events.items()
         if value.get("status") in {"dispatching", "uncertain"}
     }
+    busy.update(str(Path(item["workspace"]).resolve())
+                for item in reservations if item.get("workspace"))
+    return busy
 
 
 def dispatch_ready(service, events: dict[str, dict[str, Any]], now: float,
-                   runtime: dict[str, Any]) -> list[str]:
+                   runtime: dict[str, Any], *, reservations=()) -> list[str]:
     """Dispatch fairly across hosts while preserving per-host capacity and workspace fencing."""
     from .service_dispatch import launch
 
     dispatched: list[str] = []
+    reservations = list(reservations)
     hosts = _host_order(service)
     while len(dispatched) < service.max_dispatch:
         made_progress = False
@@ -86,7 +91,7 @@ def dispatch_ready(service, events: dict[str, dict[str, Any]], now: float,
             host_cfg = service.controller.hosts[host]
             specs = {key: request_spec(service.store, event) for key, event in events.items()
                      if event.get("status") in {"prepared", "dispatching", "uncertain"}}
-            busy = _busy_workspaces(events, specs)
+            busy = _busy_workspaces(events, specs, reservations)
             pending = [
                 {"id": key, "route": value["route"], "mode": value["mode"],
                  "submitted": value["submitted"], "due": 0,
@@ -98,6 +103,7 @@ def dispatch_ready(service, events: dict[str, dict[str, Any]], now: float,
                 not in busy
             ]
             # Capacity in use is read from the store, the authority the claim reserves against.
+            # Launched wave tasks hold store reservations too, so they are already counted.
             running = service.store.active_allocations(host)
             capacity = {**host_cfg, **service.controller.capacity(host), "interactive_boost_seconds":
                         host_cfg.get("interactive_boost_seconds", 60)}
@@ -132,3 +138,19 @@ def dispatch_ready(service, events: dict[str, dict[str, Any]], now: float,
         if not made_progress:
             break
     return dispatched
+
+
+def dispatch_lanes(service, events: dict[str, dict[str, Any]], now: float,
+                   runtime: dict[str, Any]) -> tuple[list[str], list[dict[str, Any]]]:
+    """Alternate interactive/service and finite-wave work under the tick lease."""
+    from .service_wave import pending as wave_pending
+    from .service_wave import progress, running_resources, select_lane
+
+    service_ready = any(value.get("status") == "prepared" for value in events.values())
+    lane = select_lane(service.store, service_ready=service_ready,
+                       wave_ready=wave_pending(service))
+    if lane == "wave":
+        return [], progress(service)
+    dispatched = dispatch_ready(
+        service, events, now, runtime, reservations=running_resources(service))
+    return dispatched, []

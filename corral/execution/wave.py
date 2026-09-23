@@ -141,7 +141,8 @@ class WaveRunner:
         self.controller.store.replace(WAVE_STATE_KIND, wave_id, {"status": "running", "wave_id": wave_id})
         return wave_record
 
-    def step(self, wave_id: str, execution_host: str) -> dict[str, Any]:
+    def step(self, wave_id: str, execution_host: str, dispatcher=None,
+             additional_running=(), dispatch_limit: int | None = None) -> dict[str, Any]:
         """Advance wave by one deterministic step without model inference."""
         wave = self.controller.store.get(WAVE_KIND, wave_id)
         if not wave:
@@ -177,7 +178,9 @@ class WaveRunner:
             return True
 
         completed_tasks = [t for t in task_ids if is_task_complete(t)]
-        blocked_tasks = {t for t in task_ids if (blocked_records.get(t) or {}).get("status") == "blocked"}
+        wave_dispatches = self.controller.store.records("wave_dispatch")
+        blocked_tasks = {t for t in task_ids if (blocked_records.get(t) or {}).get("status") == "blocked"
+                         or (wave_dispatches.get(t) or {}).get("status") == "uncertain"}
 
         # Find ready candidates
         candidates = []
@@ -197,6 +200,9 @@ class WaveRunner:
                 continue
 
             st = states.get(t)
+            dispatch_state = (wave_dispatches.get(t) or {}).get("status")
+            if dispatch_state in ("launching", "active", "uncertain"):
+                continue
             if st and st.get("status") in ("running", "dispatching", "completed"):
                 if not continuation.pending_generation(self.controller.store, t):
                     continue
@@ -216,24 +222,40 @@ class WaveRunner:
             "interactive_boost_seconds": 10, "routes": [*host_cfg.get("routes", []), "deterministic"],
         }
         running = [requests[k] for k, v in states.items() if v.get("status") in ("running", "dispatching") and v.get("host") == execution_host]
+        running.extend(additional_running)
         admitted = scheduler.ready(candidates, completed_tasks, running, host, time.time())
+        if dispatch_limit is not None:
+            admitted = admitted[:dispatch_limit]
 
         dispatched = []
         for task_id in admitted:
-            res = self.controller.run(self.token, task_id, execution_host=execution_host)
-            dispatched.append({"task": task_id, "status": res.get("state", {}).get("status")})
+            if dispatcher is None:
+                res = self.controller.run(self.token, task_id, execution_host=execution_host)
+                status = res.get("state", {}).get("status")
+            else:
+                status = dispatcher(wave_id, task_id, execution_host)
+            dispatched.append({"task": task_id, "status": status})
 
         task_summary = {
             t: {
-                "status": "accepted" if is_task_complete(t) else states.get(t, {}).get("status", "submitted"),
+                "status": ("accepted" if is_task_complete(t)
+                           else (wave_dispatches.get(t) or {}).get("status")
+                           or states.get(t, {}).get("status", "submitted")),
                 "blocked": t in blocked_tasks,
-                "blocker": (blocked_records.get(t) or {}).get("reason") if t in blocked_tasks else None,
+                "blocker": ((blocked_records.get(t) or {}).get("reason")
+                            or (wave_dispatches.get(t) or {}).get("error"))
+                           if t in blocked_tasks else None,
             }
             for t in task_ids
         }
         all_done = all(v["status"] == "accepted" for v in task_summary.values())
-        has_running = any(states.get(t, {}).get("status") in ("running", "dispatching") for t in task_ids)
-        is_terminal = all_done or (not has_running and not admitted)
+        has_running = any(
+            states.get(t, {}).get("status") in ("running", "dispatching")
+            or (wave_dispatches.get(t) or {}).get("status") in ("launching", "active")
+            for t in task_ids)
+        # A ready task may be temporarily capacity-blocked by interactive work. That is
+        # still a live wave; only a wave with no runnable candidate can be terminal.
+        is_terminal = all_done or (not has_running and not candidates)
 
         wave_status = "completed" if all_done else ("blocked" if is_terminal else "running")
         self.controller.store.replace(WAVE_STATE_KIND, wave_id, {"status": wave_status, "wave_id": wave_id, "summary": task_summary})

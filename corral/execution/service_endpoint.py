@@ -38,14 +38,14 @@ def main(argv: list[str] | None = None) -> int:
     elif action == "reconcile":
         service.tick(request.get("now"))
         result = service.status(request["event_id"])
-    elif action == "wave":
-        from .client import Client
-        result = Client({"python": __import__("sys").executable,
-                         "controller_config": str(service.controller_path),
-                         "source": str(Path(__file__).parents[2]),
-                         "transport": "local"}).call(
-                             "run-wave", wave_id=request["wave_id"],
-                             tasks=request["tasks"], handoffs=request.get("handoffs"))
+    elif action == "wave-plan":
+        result = service.submit_wave_plan(
+            request["plan"], request["wave_id"], objective=request.get("objective"),
+            host=request.get("host"))
+    elif action == "wave-advanced":
+        from .wave import WaveRunner
+        result = WaveRunner(service.controller, service.token).submit_wave(
+            request["wave_id"], request["tasks"], request.get("handoffs"))
     elif action == "fetch":
         event = service.store.get("service_event", request["event_id"])
         if not event or not event.get("task_id"):

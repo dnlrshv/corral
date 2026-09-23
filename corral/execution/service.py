@@ -133,6 +133,10 @@ class Service:
         from .service_pr import submit_pr_review
         return submit_pr_review(self, repository, pr_number, policy_id, **kwargs)
 
+    def submit_wave_plan(self, name: str, wave_id: str, **kwargs):
+        from .service_wave import submit
+        return submit(self, name, wave_id, **kwargs)
+
     def _ensure_task(self, event_id: str, spec: dict | None = None) -> dict[str, Any]:
         event = self.store.get("service_event", event_id)
         if event is None:
@@ -400,13 +404,14 @@ class Service:
 
     def tick(self, now: float | None = None) -> dict[str, Any]:
         from .runtime_identity import observe
-        from .service_scheduler import acquire_tick, dispatch_ready, release_tick
+        from .service_scheduler import acquire_tick, dispatch_lanes, release_tick
 
         runtime = observe()
         self.store.replace("service_runtime", "current", runtime)
         lease = acquire_tick(self, runtime)
         if lease is None:
-            return {"created": [], "reconciled": [], "dispatched": [], "busy": True,
+            return {"created": [], "reconciled": [], "dispatched": [], "waves": [],
+                    "busy": True,
                     "pending": [k for k, v in self.store.records("service_event").items()
                                 if v.get("status") == "prepared"]}
         try:
@@ -414,9 +419,9 @@ class Service:
             created = self._materialize_schedules(now)
             reconciled = self._reconcile(runtime)
             events = self.store.records("service_event")
-            dispatched = dispatch_ready(self, events, now, runtime)
-            return {"created": created, "reconciled": reconciled, "dispatched": dispatched,
-                    "busy": False,
+            dispatched, waves = dispatch_lanes(self, events, now, runtime)
+            return {"created": created, "reconciled": reconciled,
+                    "dispatched": dispatched, "waves": waves, "busy": False,
                     "pending": [k for k, v in self.store.records("service_event").items()
                                 if v.get("status") == "prepared"]}
         finally:

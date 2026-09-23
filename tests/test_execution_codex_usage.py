@@ -11,7 +11,7 @@ Covers:
 - Item.completed agent message narrative extraction
 - Item.completed error notice retained as warning, not terminal failure
 - Terminal turn.failed and top-level error events fail envelope even if exit code is 0
-- Portable checked-in sanitized pilot fixture replay
+- Portable checked-in synthetic stream replay
 - Opt-in raw artifact replay via CORRAL_PILOT_HARNESS_STDOUT
 """
 from __future__ import annotations
@@ -32,8 +32,8 @@ def test_codex_turn_completed_usage_exact_counters():
         json.dumps({"type": "item.completed", "item": {"id": "item_1", "type": "agent_message", "text": "all done"}}),
         json.dumps({
             "type": "turn.completed",
-            "usage": {"input_tokens": 325497, "cached_input_tokens": 292352,
-                      "output_tokens": 13206, "reasoning_output_tokens": 7567},
+            "usage": {"input_tokens": 320000, "cached_input_tokens": 288000,
+                      "output_tokens": 13000, "reasoning_output_tokens": 7500},
         }),
     ])
     env = envelope_streams.parse_codex(
@@ -48,15 +48,15 @@ def test_codex_turn_completed_usage_exact_counters():
     assert event["scope"] == "session" and event["mode"] == "cumulative" and event["sequence"] == 1
     assert event["origin"] == "native-measured" and event["session_id"] == "thread-abc-123"
     assert event["counters"] == {
-        "input_tokens": 325497, "cache_read_tokens": 292352,
-        "output_tokens": 13206, "thinking_tokens": 7567,
+        "input_tokens": 320000, "cache_read_tokens": 288000,
+        "output_tokens": 13000, "thinking_tokens": 7500,
     }
 
     # Verify summary: subset fields are NOT added back into input/output totals.
     summary = usage.summarize(env.usage_events)
     assert summary["measured_fields"] == {
-        "input_tokens": 325497, "cache_read_tokens": 292352,
-        "output_tokens": 13206, "thinking_tokens": 7567,
+        "input_tokens": 320000, "cache_read_tokens": 288000,
+        "output_tokens": 13000, "thinking_tokens": 7500,
     }
     assert summary["observed_fields"] == summary["measured_fields"]
     assert summary["unknown"] == []
@@ -270,9 +270,9 @@ def test_codex_legacy_payload_shape_unchanged():
 
 
 def test_replay_sanitized_pilot_stream():
-    """Replay checked-in sanitized pilot stream fixture; verify measured counters match captured turn.completed."""
+    """Replay a checked-in synthetic stream in the pilot's event shape; measured counters match turn.completed."""
     sanitized_stdout = "\n".join([
-        json.dumps({"type": "thread.started", "thread_id": "01a0a9a7-0ad7-7da3-9298-8aea8f9a6273"}),
+        json.dumps({"type": "thread.started", "thread_id": "00000000-0000-4000-8000-000000000001"}),
         json.dumps({"type": "item.completed", "item": {
             "id": "item_0", "type": "error",
             "message": "Model metadata for `qwen3.8-max` not found. Defaulting to fallback metadata; "
@@ -284,15 +284,15 @@ def test_replay_sanitized_pilot_stream():
             "text": "Completed implementation and verified duration parser tests pass cleanly.",
         }}),
         json.dumps({"type": "turn.completed", "usage": {
-            "input_tokens": 325497, "cached_input_tokens": 292352,
-            "output_tokens": 13206, "reasoning_output_tokens": 7567,
+            "input_tokens": 320000, "cached_input_tokens": 288000,
+            "output_tokens": 13000, "reasoning_output_tokens": 7500,
         }}),
     ])
     env = envelope_streams.parse_codex(
         stdout_text=sanitized_stdout, stderr_text="", exit_code=0, invocation="pilot-sanitized-inv", result_path=None
     )
     assert env.ok and env.status == "completed"
-    assert env.identity.get("session_id") == "01a0a9a7-0ad7-7da3-9298-8aea8f9a6273"
+    assert env.identity.get("session_id") == "00000000-0000-4000-8000-000000000001"
     assert env.narrative == "Completed implementation and verified duration parser tests pass cleanly."
     assert any("item notice" in w for w in env.warnings)
     assert len(env.usage_events) == 1
@@ -301,14 +301,14 @@ def test_replay_sanitized_pilot_stream():
     assert event["origin"] == "native-measured" and event["scope"] == "session"
     assert event["mode"] == "cumulative" and event["sequence"] == 1
     assert event["counters"] == {
-        "input_tokens": 325497, "cache_read_tokens": 292352,
-        "output_tokens": 13206, "thinking_tokens": 7567,
+        "input_tokens": 320000, "cache_read_tokens": 288000,
+        "output_tokens": 13000, "thinking_tokens": 7500,
     }
 
     summary = usage.summarize(env.usage_events)
     assert summary["measured_fields"] == {
-        "input_tokens": 325497, "cache_read_tokens": 292352,
-        "output_tokens": 13206, "thinking_tokens": 7567,
+        "input_tokens": 320000, "cache_read_tokens": 288000,
+        "output_tokens": 13000, "thinking_tokens": 7500,
     }
     assert summary["origin_breakdown"]["native-measured"] == 1
     assert summary["unknown"] == []
@@ -326,7 +326,8 @@ def test_replay_raw_pilot_stream_opt_in():
     env = envelope_streams.parse_codex(
         stdout_text=stdout, stderr_text="", exit_code=0, invocation="pilot-replay-inv", result_path=None
     )
+    # A captured stream is private to the run that produced it, so only its shape is checked.
     assert env.ok and env.status == "completed"
-    assert env.identity.get("session_id") == "01a0a9a7-0ad7-7da3-9298-8aea8f9a6273"
+    assert env.identity.get("session_id")
     assert len(env.usage_events) == 1
-    assert env.usage_events[0]["counters"]["input_tokens"] == 325497
+    assert isinstance(env.usage_events[0]["counters"]["input_tokens"], int)

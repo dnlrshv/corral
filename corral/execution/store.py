@@ -14,9 +14,9 @@ from pathlib import Path
 def lease_holder_alive(pid, acquired_at: float | None = None) -> bool:
     """Whether a lease's local holder process still exists.
 
-    A pid that names no process holds nothing, and neither does a process that
-    started after the lease was acquired: its pid was reused. An unobservable start
-    time fails closed.
+    A pid that names no process holds nothing, and neither does an exited holder
+    that its parent has not reaped yet (a zombie) or a process that started after
+    the lease was acquired: its pid was reused. An unobservable process fails closed.
     """
     if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
         return False
@@ -26,24 +26,29 @@ def lease_holder_alive(pid, acquired_at: float | None = None) -> bool:
         return False
     except OSError:
         pass  # The process exists but belongs to another user.
-    if acquired_at is None:
+    observed = _process_state(pid)
+    if observed is None:
         return True
-    elapsed = _process_elapsed_seconds(pid)
+    state, elapsed = observed
+    if state.startswith("Z"):
+        return False
     # ``ps`` reports whole seconds; allow that rounding before calling the pid reused.
-    return elapsed is None or elapsed + 2 >= time.time() - acquired_at
+    return acquired_at is None or elapsed + 2 >= time.time() - acquired_at
 
 
-def _process_elapsed_seconds(pid: int) -> int | None:
+def _process_state(pid: int) -> tuple[str, int] | None:
+    """The ``ps`` state code and elapsed seconds of ``pid``, or None when unobservable."""
     try:
-        raw = subprocess.run(["ps", "-o", "etime=", "-p", str(pid)], capture_output=True,
-                             text=True, timeout=10, check=True).stdout.strip()
+        raw = subprocess.run(["ps", "-o", "stat=", "-o", "etime=", "-p", str(pid)],
+                             capture_output=True, text=True, timeout=10,
+                             check=True).stdout.strip()
     except (OSError, subprocess.SubprocessError):
         return None
-    match = re.fullmatch(r"(?:(?:(\d+)-)?(\d+):)?(\d+):(\d+)", raw)
+    match = re.fullmatch(r"(\S+)\s+(?:(?:(\d+)-)?(\d+):)?(\d+):(\d+)", raw)
     if not match:
         return None
-    days, hours, minutes, seconds = (int(part or 0) for part in match.groups())
-    return ((days * 24 + hours) * 60 + minutes) * 60 + seconds
+    days, hours, minutes, seconds = (int(part or 0) for part in match.groups()[1:])
+    return match.group(1), ((days * 24 + hours) * 60 + minutes) * 60 + seconds
 
 
 def canonical(value):

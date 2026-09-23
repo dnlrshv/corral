@@ -28,11 +28,18 @@ _COUNTER_VALUE = re.compile(r"^-?\d(?:_?\d){0,11}(?:\.\d+)?$")
 _STRING_PREFIX = r"(?:[rR][bBfF]?|[bBfF][rR]?|[uU])"
 _QUOTED_VALUE = re.compile(
     rf"(?P<prefix>{_STRING_PREFIX}?)(?P<q>\"\"\"|'''|[\"'])(?P<body>.*)(?P=q)", re.DOTALL)
-# ``key: Annotation = value`` binds ``value``; the annotation is never the value.
-_ANNOTATION = r"[\"']?[A-Za-z_][\w.\[\], |\"']*?"
+# ``key: Annotation = value`` binds ``value``; the annotation is never the value. Call
+# arguments nest two levels and may quote parentheses: ``Annotated[str, Field(
+# pattern="^(x)$", default_factory=lambda: env.get("X"))] = value``. The annotation
+# absorbs the blanks before ``=`` itself: a separate ``[ \t]*`` there would rescan a
+# run of blanks at every lazy step, which is quadratic in the run length.
+_ANNOTATION_STRING = r"\"[^\"\n]*\"|'[^'\n]*'"
+_ANNOTATION_CALL = (rf"\((?:[^()\"'\n]|{_ANNOTATION_STRING}"
+                    rf"|\((?:[^()\"'\n]|{_ANNOTATION_STRING})*\))*\)")
+_ANNOTATION = rf"[\"']?[A-Za-z_](?:[\w.\[\], \t|\"']|{_ANNOTATION_CALL})*?"
 _ASSIGNMENT = (
     rf"(?i)(?<![A-Za-z0-9_])(?P<key>[\"']?{_CREDENTIAL_KEY}[\"']?)"
-    rf"(?P<sep_space>\s*(?::[ \t]*{_ANNOTATION}[ \t]*(?==))?(?P<sep>[:=])\s*)"
+    rf"(?P<sep_space>\s*(?::[ \t]*{_ANNOTATION}(?==))?(?P<sep>[:=])\s*)"
     r"(?![\"']?(?:<redacted>|\[REDACTED\])[\"']?)"
     rf"(?P<val>{_STRING_PREFIX}?(?:\"\"\"[\s\S]*?\"\"\"|'''[\s\S]*?''')"
     rf"|{_STRING_PREFIX}?\"[^\"]*\"|{_STRING_PREFIX}?'[^']*'|[^\s\"',}}]+)"

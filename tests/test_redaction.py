@@ -1,3 +1,5 @@
+import time
+
 import pytest
 
 from corral.redaction import (
@@ -95,6 +97,10 @@ def test_source_scanner_keeps_workflow_context_and_type_references():
     f'password: Optional[str] = "{FAKE}"',
     f'api_key: ClassVar[bytes] = b"{FAKE}"',
     f'    token: str = "{FAKE}"  # dataclass default',
+    f"api_key: Annotated[str, Field(alias='x')] = '{FAKE}'",
+    f'password: Annotated[str, Field(min_length=3)] = "{FAKE}"',
+    f'api_key: Annotated[str, Field(pattern="^(ab)+$")] = "{FAKE}"',
+    f'secret: Annotated[str, Field(default_factory=lambda: env.get("X"))] = "{FAKE}"',
 ])
 def test_prefixed_and_annotated_literals_are_redacted_and_refused(line):
     text = line + "\n"
@@ -102,6 +108,15 @@ def test_prefixed_and_annotated_literals_are_redacted_and_refused(line):
     assert FAKE not in sanitize_text(text)
     assert check_outbound_safe(text)
     assert check_file_text_safe(text, source_name="candidate.py")
+
+
+def test_blank_run_after_a_credential_key_is_scanned_in_linear_time():
+    # Every lazy annotation step once rescanned the rest of the blank run (quadratic).
+    text = "api_key: A" + " " * 60_000 + "x\n"
+    started = time.monotonic()
+    redact_text(text)
+    check_outbound_safe(text)
+    assert time.monotonic() - started < 5
 
 
 def test_redacted_literals_keep_their_prefix_and_stay_idempotent():

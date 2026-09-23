@@ -245,6 +245,29 @@ class Store:
                 return True
             return False
 
+    def owned_once(self, resource, owner, epoch, kind, key, identity, first):
+        """Persist ``{**first, **identity}`` once under an owner fence; return the stored record.
+
+        ``first`` carries fields fixed by the first write, such as a first-build time; an
+        ``identity`` field of the same name takes precedence over it. A retry
+        with the same ``identity`` gets the stored record back unchanged, so values derived from
+        it stay reproducible; a different identity under the same key is refused.
+        """
+        expected = json.loads(canonical(identity))
+        with self.transaction() as db:
+            row = db.execute("SELECT owner,epoch,status FROM owners WHERE resource=?", (resource,)).fetchone()
+            if row != (owner, epoch, "active"):
+                raise PermissionError("stale operation fence")
+            old = db.execute("SELECT value FROM records WHERE kind=? AND key=?", (kind, key)).fetchone()
+            if old:
+                stored = json.loads(old[0])
+                if {name: stored.get(name) for name in expected} != expected:
+                    raise ValueError("conflicting operation identity")
+                return stored
+            raw = canonical({**first, **identity})
+            db.execute("INSERT INTO records VALUES(?,?,?)", (kind, key, raw))
+            return json.loads(raw)
+
     def acquire(self, resource, owner):
         with self.transaction() as db:
             return self._acquire(db, resource, owner)[0]

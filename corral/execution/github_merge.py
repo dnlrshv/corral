@@ -239,7 +239,9 @@ class GitHubMergeTransport:
                 return observed
             raise PermissionError("merge intent has an unresolved external effect; retry is prohibited")
         response = self._request("PUT", f"/repos/{repo}/pulls/{number}/merge", json_data={"sha": head})
-        ack_sha = response.get("sha") if isinstance(response, dict) else None
+        if not isinstance(response, dict):
+            response = {}
+        ack_sha = response.get("sha")
         if (response.get("merged") is not True or not isinstance(ack_sha, str)
                 or re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", ack_sha) is None):
             raise PermissionError("GitHub merge response did not confirm a merge commit")

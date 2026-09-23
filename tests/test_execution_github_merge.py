@@ -237,3 +237,24 @@ def test_non_sha_merge_ack_is_not_accepted(tmp_path):
     with pytest.raises(PermissionError, match="merge response"):
         client.merge(**payload(epoch))
     assert store.records("merge_intent") and not store.records("merge_receipt")
+
+
+@pytest.mark.parametrize("ack", [["merged"], "merged", None, 1])
+def test_non_object_merge_ack_is_refused_and_left_for_reconciliation(tmp_path, ack):
+    github = GitHub()
+    client, store, epoch = transport(tmp_path, github)
+    original = github.__call__
+
+    def odd_ack(method, path, *, headers, json):
+        response = original(method, path, headers=headers, json=json)
+        return ack if method == "PUT" else response
+
+    client.http_client = odd_ack
+    with pytest.raises(PermissionError, match="merge response"):
+        client.merge(**payload(epoch))
+    assert store.records("merge_intent") and not store.records("merge_receipt")
+    assert not store.records("merge_ack")
+    # The PUT did merge; the retry resolves the persisted intent by authenticated readback.
+    client.http_client = original
+    assert client.merge(**payload(epoch))["merged"] is True
+    assert github.puts == 1

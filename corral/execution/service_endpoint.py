@@ -42,7 +42,10 @@ def main(argv: list[str] | None = None) -> int:
         result = service.submit_wave_plan(
             request["plan"], request["wave_id"], objective=request.get("objective"),
             host=request.get("host"))
-    elif action == "wave-advanced":
+    elif action in ("wave-advanced", "wave"):
+        # ``wave`` is the earlier name of this action, kept as an alias. Both only admit the
+        # wave (idempotently, by wave id) and return its record; the service tick then
+        # dispatches and advances it, so neither blocks on or launches a wave runner.
         from .wave import WaveRunner
         result = WaveRunner(service.controller, service.token).submit_wave(
             request["wave_id"], request["tasks"], request.get("handoffs"))

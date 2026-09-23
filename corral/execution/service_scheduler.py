@@ -66,24 +66,28 @@ def _host_order(service) -> list[str]:
 
 
 def _busy_workspaces(events: dict[str, dict[str, Any]], specs: dict[str, dict],
-                     reservations: list[dict[str, Any]]) -> set[str]:
+                     wave_dispatches: list[dict[str, Any]]) -> set[str]:
     busy = {
         str(Path(specs[key]["workspace"]).resolve())
         for key, value in events.items()
         if value.get("status") in {"dispatching", "uncertain"}
     }
     busy.update(str(Path(item["workspace"]).resolve())
-                for item in reservations if item.get("workspace"))
+                for item in wave_dispatches if item.get("workspace"))
     return busy
 
 
 def dispatch_ready(service, events: dict[str, dict[str, Any]], now: float,
-                   runtime: dict[str, Any], *, reservations=()) -> list[str]:
-    """Dispatch fairly across hosts while preserving per-host capacity and workspace fencing."""
+                   runtime: dict[str, Any], *, wave_dispatches=()) -> list[str]:
+    """Dispatch fairly across hosts while preserving per-host capacity and workspace fencing.
+
+    ``wave_dispatches`` only fence workspaces here; their capacity is already held in the
+    store, which is where ``running`` is read from.
+    """
     from .service_dispatch import launch
 
     dispatched: list[str] = []
-    reservations = list(reservations)
+    wave_dispatches = list(wave_dispatches)
     hosts = _host_order(service)
     while len(dispatched) < service.max_dispatch:
         made_progress = False
@@ -91,7 +95,7 @@ def dispatch_ready(service, events: dict[str, dict[str, Any]], now: float,
             host_cfg = service.controller.hosts[host]
             specs = {key: request_spec(service.store, event) for key, event in events.items()
                      if event.get("status") in {"prepared", "dispatching", "uncertain"}}
-            busy = _busy_workspaces(events, specs, reservations)
+            busy = _busy_workspaces(events, specs, wave_dispatches)
             pending = [
                 {"id": key, "route": value["route"], "mode": value["mode"],
                  "submitted": value["submitted"], "due": 0,
@@ -142,15 +146,20 @@ def dispatch_ready(service, events: dict[str, dict[str, Any]], now: float,
 
 def dispatch_lanes(service, events: dict[str, dict[str, Any]], now: float,
                    runtime: dict[str, Any]) -> tuple[list[str], list[dict[str, Any]]]:
-    """Alternate interactive/service and finite-wave work under the tick lease."""
-    from .service_wave import pending as wave_pending
-    from .service_wave import progress, running_resources, select_lane
+    """Alternate interactive/service and finite-wave work under the tick lease.
 
+    Wave dispatch records are reconciled on every tick, so a wave task's launcher or
+    worker that died releases its reservation even while the service lane is selected.
+    """
+    from .service_wave import pending as wave_pending
+    from .service_wave import progress, reconcile_dispatches, running_resources, select_lane
+
+    reconcile_dispatches(service)
     service_ready = any(value.get("status") == "prepared" for value in events.values())
     lane = select_lane(service.store, service_ready=service_ready,
                        wave_ready=wave_pending(service))
     if lane == "wave":
-        return [], progress(service)
+        return [], progress(service, reconcile=False)
     dispatched = dispatch_ready(
-        service, events, now, runtime, reservations=running_resources(service))
+        service, events, now, runtime, wave_dispatches=running_resources(service))
     return dispatched, []

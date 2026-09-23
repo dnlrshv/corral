@@ -242,14 +242,10 @@ class Service:
                 raise ValueError("invalid service CPU request")
             if not isinstance(memory, int) or isinstance(memory, bool) or memory < 0:
                 raise ValueError("invalid service memory request")
-            active = []
-            for key, raw in db.execute(
-                    "SELECT key,value FROM records WHERE kind='service_event'").fetchall():
-                value = json.loads(raw)
-                if key != event_id and value.get("status") in {"dispatching", "uncertain"}:
-                    active.append(request_spec(self.store, value, db=db))
+            # Another dispatched service event or a launched wave task fences the workspace.
+            from .service_wave import workspace_busy
             workspace = str(Path(spec.get("workspace")).resolve())
-            if any(str(Path(value["workspace"]).resolve()) == workspace for value in active):
+            if workspace_busy(self.store, db, workspace, event_id=event_id):
                 return None
             # Capacity is reserved in the store, the single allocation authority that the
             # controller dispatch adopts. A refusal means not dispatched and nothing acquired.

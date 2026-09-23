@@ -28,7 +28,7 @@ class FakeService:
                 "workspaces": {"primary": "/work/primary", "dev": "/work/dev"},
                 "wave_workspaces": {
                     "primary": {"producer": "/wave/primary-producer",
-                              "consumer": "/wave/primary-consumer"},
+                                "consumer": "/wave/primary-consumer"},
                     "dev": {"producer": "/wave/dev-producer",
                             "consumer": "/wave/dev-consumer"}},
                 "task_defaults": {"role": "implementation", "profile_id": "impl"}}
@@ -83,8 +83,13 @@ def test_wave_dispatch_claim_is_idempotent_and_progress_is_detached(tmp_path, mo
     launched = []
 
     class Controller:
-        def context(self, _task):
-            return {"host": "primary"}
+        hosts = {"primary": {}}
+
+        def context(self, task):
+            return {"host": "primary", "workspace": str(tmp_path / task)}
+
+        def capacity(self, _host):
+            return {"cpu": 2, "memory_mb": 0}
 
         def status(self, _token, _task):
             return {"state": {"status": "submitted"}}
@@ -94,6 +99,7 @@ def test_wave_dispatch_claim_is_idempotent_and_progress_is_detached(tmp_path, mo
         controller = Controller()
         controller_path = tmp_path / "controller.json"
         token = "owner"
+        execution_host = "primary"
         development_mode = False
         max_dispatch = 1
 
@@ -103,18 +109,22 @@ def test_wave_dispatch_claim_is_idempotent_and_progress_is_detached(tmp_path, mo
     assert service_wave._dispatch(service, "wave-1", "task-1", "primary") == "active"
     assert service_wave._dispatch(service, "wave-1", "task-1", "primary") == "active"
     assert launched == ["one"]
+    # The dispatch holds its capacity in the store until a controller dispatch adopts it.
+    assert service.store.get("allocation", "task-1") == {
+        "host": "primary", "cpu": 1, "memory_mb": 0, "active": True, "reservation": "task-1"}
 
     service.store.replace("wave_state", "wave-1", {"status": "running"})
     service.store.replace("wave", "wave-1", {"task_ids": ["task-2"]})
     observed = []
-    monkeypatch.setattr(service_wave, "_reconcile_dispatches", lambda _service: None)
+    monkeypatch.setattr(service_wave, "reconcile_dispatches", lambda _service: set())
     monkeypatch.setattr(service_wave.WaveRunner, "step", lambda _runner, wave, host, dispatcher,
-                        additional_running, dispatch_limit: (
-        observed.append((wave, host, dispatcher("wave-1", "task-2", "primary")))
+                        running, capacity, dispatch_limit: (
+        observed.append((wave, host, dispatcher("wave-1", "task-2", "primary"),
+                         [item["reservation"] for item in running], capacity))
         or {"wave_id": wave, "status": "running"}))
     progressed = service_wave.progress(service)
     assert progressed == [{"wave_id": "wave-1", "status": "running"}]
-    assert observed == [("wave-1", "primary", "active")]
+    assert observed == [("wave-1", "primary", "active", ["task-1"], {"cpu": 2, "memory_mb": 0})]
     assert launched == ["one", "one"]
 
 

@@ -181,6 +181,38 @@ current result together with the immutable per-generation history and lineage,
 so an accepted earlier artifact stays addressable and its receipt is never
 re-derived or overwritten.
 
+Finite waves run through the maintained service. The service endpoint's
+`wave-plan` action admits a named plan from the service configuration
+(`wave_plans`): every task's repository, host, workspace (a `workspace_key`
+into the repository's `wave_workspaces`), role and defaults come from
+registered profiles, and a plan may allow an objective or host override only
+if it says so. `wave-advanced` admits caller-supplied controller task
+specifications. `wave` is kept as an alias of `wave-advanced`: it used to
+start a detached wave runner through the controller, and now, like
+`wave-advanced`, only admits the wave (idempotently by wave id) and returns
+its record. The service tick then advances admitted waves alongside
+interactive events, alternating lanes when both have work, and launches each
+ready wave task as a detached worker. A wave task reserves its capacity in the
+controller store in the same transaction as its dispatch claim, behind the
+same workspace fence as service admission; the controller dispatch adopts that
+reservation, and a refusal writes nothing and leaves the task ready. Dispatch
+records are bound to the task generation their launcher will claim and are
+reconciled on every tick: a launcher proven dead before claiming returns its
+reservation, and a dispatch that cannot be observed stays `uncertain` and
+blocks the wave until it is reconciled. A task larger than its whole host
+blocks instead of waiting forever. The controller's own `run-wave` runner
+records its birth identity, so `reconcile-wave` never mistakes a reused PID
+for a live runner.
+
+Clients run the installed package in isolated mode (`python -I`) from `/`; a
+source checkout is used only with an explicit `development_mode: true`.
+`python -m corral.execution.executor_endpoint --config endpoint.json` is the
+forced-command boundary for a remote executor (for example an SSH
+`command=` key). It accepts a submission only with a controller request
+identity, a logical authority binding and a registered host, repository and
+workspace; every other action must name a task that this executor admitted
+within that same scope, so a caller cannot reach another repository's task.
+
 The execution package defaults to observation, with soft thresholds recorded
 without budget admission caps. Model/effort, harness, billing identities and
 observations remain separate; unknown telemetry stays unknown. Native provider

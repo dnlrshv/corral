@@ -151,9 +151,16 @@ class WaveRunner:
         self.controller.store.replace(WAVE_STATE_KIND, wave_id, {"status": "running", "wave_id": wave_id})
         return wave_record
 
-    def step(self, wave_id: str, execution_host: str, dispatcher=None,
-             additional_running=(), dispatch_limit: int | None = None) -> dict[str, Any]:
-        """Advance wave by one deterministic step without model inference."""
+    def step(self, wave_id: str, execution_host: str, dispatcher=None, *,
+             running: list[dict[str, Any]] | None = None,
+             capacity: dict[str, Any] | None = None,
+             dispatch_limit: int | None = None) -> dict[str, Any]:
+        """Advance wave by one deterministic step without model inference.
+
+        The maintained service passes a ``dispatcher`` that launches detached workers, the
+        store's active allocations as ``running`` and the controller's registered
+        ``capacity``; without them the runner dispatches in-process against its own view.
+        """
         wave = self.controller.store.get(WAVE_KIND, wave_id)
         if not wave:
             raise KeyError(f"Wave not found: {wave_id}")
@@ -236,12 +243,20 @@ class WaveRunner:
             })
 
         host_cfg = self.controller.hosts[execution_host]
+        limits = capacity if capacity is not None else {
+            "cpu": host_cfg.get("cpu", 4), "memory_mb": host_cfg.get("memory_mb", 8192)}
         host = {
-            "cpu": host_cfg.get("cpu", 4), "memory_mb": host_cfg.get("memory_mb", 8192),
+            "cpu": limits["cpu"], "memory_mb": limits["memory_mb"],
             "interactive_boost_seconds": 10, "routes": [*host_cfg.get("routes", []), "deterministic"],
         }
-        running = [requests[k] for k, v in states.items() if v.get("status") in ("running", "dispatching") and v.get("host") == execution_host]
-        running.extend(additional_running)
+        # A candidate larger than the whole registered host can never be admitted; it blocks
+        # instead of keeping the wave running forever.
+        oversized = {c["id"] for c in candidates
+                     if c.get("cpu", 1) > host["cpu"] or c.get("memory_mb", 0) > host["memory_mb"]}
+        blocked_tasks |= oversized
+        candidates = [c for c in candidates if c["id"] not in oversized]
+        if running is None:
+            running = [requests[k] for k, v in states.items() if v.get("status") in ("running", "dispatching") and v.get("host") == execution_host]
         admitted = scheduler.ready(candidates, completed_tasks, running, host, time.time())
         if dispatch_limit is not None:
             admitted = admitted[:dispatch_limit]
@@ -263,7 +278,8 @@ class WaveRunner:
                 "blocked": t in blocked_tasks,
                 "blocker": ((blocked_records.get(t) or {}).get("reason")
                             or (wave_dispatches.get(t) or {}).get("error")
-                            or (wave_dispatches.get(t) or {}).get("terminal_status"))
+                            or (wave_dispatches.get(t) or {}).get("terminal_status")
+                            or ("exceeds registered host capacity" if t in oversized else None))
                            if t in blocked_tasks else None,
             }
             for t in task_ids

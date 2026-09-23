@@ -1,11 +1,12 @@
 """Resolve named finite-wave plans from trusted service configuration."""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
 from . import continuation
-from .store import digest
+from .store import canonical, digest
 from .wave import WaveRunner
 
 
@@ -86,28 +87,80 @@ def submit(service, name: str, wave_id: str, *, objective: str | None = None,
     return {"plan": binding, "wave": record}
 
 
-def _dispatch(service, wave_id: str, task_id: str, host: str) -> str:
-    from .service_dispatch import launch
-    from .store import canonical
+ACTIVE_DISPATCH = ("launching", "active", "uncertain")
 
-    generation = continuation.current_generation(service.store, task_id)
+
+def workspace_busy(store, db, workspace: str, *, wave_key: str | None = None,
+                   event_id: str | None = None) -> bool:
+    """True while another wave dispatch or a dispatched service event fences ``workspace``.
+
+    Both admission paths call this inside their claim transaction, so a wave task and a
+    service event can never be dispatched into the same workspace concurrently.
+    """
+    from .service_specs import request_spec
+
+    for other, raw in db.execute(
+            "SELECT key,value FROM records WHERE kind='wave_dispatch'").fetchall():
+        value = json.loads(raw)
+        if (other != wave_key and value.get("status") in ACTIVE_DISPATCH
+                and value.get("workspace")
+                and str(Path(value["workspace"]).resolve()) == workspace):
+            return True
+    for other, raw in db.execute(
+            "SELECT key,value FROM records WHERE kind='service_event'").fetchall():
+        event = json.loads(raw)
+        if other != event_id and event.get("status") in ("dispatching", "uncertain"):
+            spec = request_spec(store, event, db=db)
+            if str(Path(spec["workspace"]).resolve()) == workspace:
+                return True
+    return False
+
+
+def _dispatch(service, wave_id: str, task_id: str, host: str) -> str:
+    """Claim one task generation, reserve its capacity in the store, then launch it detached.
+
+    The claim, the workspace fence check and the store reservation commit together, so a
+    busy workspace or unavailable capacity writes nothing and the task stays a candidate.
+    The controller dispatch the launcher runs adopts the reservation; a launch that never
+    produced a process returns it.
+    """
+    from .service_dispatch import launch
+
+    # Bind the dispatch to the generation its launcher will claim, as service admission does.
+    generation = continuation.pending_generation(service.store, task_id) or 1
     key = continuation.claim_key(task_id, generation)
     spec = service.controller.context(task_id)
+    cpu, memory = spec.get("cpu", 1), spec.get("memory_mb", 0)
+    workspace = str(Path(spec["workspace"]).resolve())
     claim = {"wave_id": wave_id, "task": task_id, "host": host,
-             "workspace": spec.get("workspace"), "cpu": spec.get("cpu", 1),
-             "memory_mb": spec.get("memory_mb", 0), "generation": generation,
-             "status": "launching"}
+             "workspace": spec.get("workspace"), "cpu": cpu,
+             "memory_mb": memory, "generation": generation,
+             "reservation": key, "status": "launching"}
     with service.store.transaction() as db:
         row = db.execute(
             "SELECT value FROM records WHERE kind='wave_dispatch' AND key=?", (key,)).fetchone()
         if row:
-            return __import__("json").loads(row[0]).get("status", "unknown")
+            return json.loads(row[0]).get("status", "unknown")
+        if workspace_busy(service.store, db, workspace, wave_key=key):
+            return "workspace-busy"
+        # The store is the single capacity authority; a refusal means nothing was acquired.
+        try:
+            if not service.store.allocate(task_id, host, cpu, memory,
+                                          service.controller.capacity(host),
+                                          reservation=key, db=db):
+                return "capacity-unavailable"
+        except PermissionError:
+            return "capacity-unavailable"
         db.execute("INSERT INTO records VALUES('wave_dispatch',?,?)",
                    (key, canonical(claim)))
     try:
+        if host != service.execution_host and not service.controller.hosts[host].get("executor"):
+            raise PermissionError("nonlocal host requires an authenticated remote executor route")
         identity = launch(service.controller_path, service.store.path.parent, task_id, host,
                           development_mode=service.development_mode)
     except Exception as error:
+        # No launcher process exists, so its reservation is returned to the host.
+        service.store.release_reservation(task_id, key)
         service.store.replace("wave_dispatch", key,
                               {**claim, "status": "uncertain", "error": str(error)})
         return "uncertain"
@@ -116,26 +169,67 @@ def _dispatch(service, wave_id: str, task_id: str, host: str) -> str:
     return "active"
 
 
-def _cancel_settled(service, task_id: str, state: dict[str, Any]) -> bool:
+def _fence_resource(service, spec: dict[str, Any]) -> str:
+    """The workspace fence the controller's run path holds for this host kind."""
+    if (service.controller.hosts.get(spec["host"]) or {}).get("executor"):
+        return "remote-workspace:" + spec["host"] + ":" + spec["workspace"]
+    return "workspace:" + str(Path(spec["workspace"]).resolve())
+
+
+def _cancel_settled(service, task_id: str, key: str, state: dict[str, Any]) -> bool:
     if state.get("status") != "cancelled":
         return False
     spec = service.controller.context(task_id)
-    owner = service.store.ownership("workspace:" + str(Path(spec["workspace"]).resolve()))
-    allocation = service.store.get("allocation", task_id)
-    return ((owner is None or owner[2] == "released")
-            and (allocation is None or allocation.get("active") is False))
+    owner = service.store.ownership(_fence_resource(service, spec))
+    allocation = service.store.get("allocation", task_id) or {}
+    return ((owner is None or owner[0] != task_id or owner[2] == "released")
+            and not (allocation.get("active") and allocation.get("reservation") != key))
 
 
-def _reconcile_dispatches(service) -> set[str]:
+def _settle(service, key: str, record: dict[str, Any], updated: dict[str, Any]) -> bool:
+    if updated == record:
+        return False
+    service.store.replace("wave_dispatch", key, updated)
+    return True
+
+
+def reconcile_dispatches(service) -> set[str]:
+    """Converge wave dispatch records from generation-bound controller evidence.
+
+    Runs on every service tick under the tick lease, whichever lane dispatches. Returns the
+    tasks whose dispatch record changed; a blocked wave holding one is reopened so the wave
+    lane re-evaluates it instead of leaving it blocked on a stale record.
+    """
     from .runtime_identity import process_status
 
     terminal = {"completed", "failed", "refused-before-launch", "cancelled", "reconciled"}
     reconciled = set()
     for key, record in service.store.records("wave_dispatch").items():
-        if record.get("status") not in ("launching", "active", "uncertain"):
+        if record.get("status") not in ACTIVE_DISPATCH:
             continue
         task_id = record.get("task") or key
         generation = int(record.get("generation") or 1)
+        launcher = process_status(record.get("launcher_identity") or {})
+        cancelled = service.store.get("cancel", task_id) is not None
+        if service.store.get("claim", continuation.claim_key(task_id, generation)) is None:
+            # The launcher has not claimed the generation this record dispatched. The claim
+            # precedes any controller ownership or worker, so a live launcher is in flight and
+            # state from an earlier generation is not this dispatch's.
+            if launcher == "alive":
+                continue
+            # Only a launcher proven dead can no longer adopt the reservation; an
+            # unobservable one is reported uncertain but keeps its capacity.
+            if launcher == "dead":
+                service.store.release_reservation(task_id, key)
+            if cancelled and launcher == "dead":
+                updated = {**record, "status": "terminal", "terminal_status": "cancelled"}
+            else:
+                updated = {**record, "status": "uncertain", "error": (
+                    "dispatch acknowledgement lost before the launcher claimed generation "
+                    f"{generation}; reconcile before retry")}
+            if _settle(service, key, record, updated):
+                reconciled.add(task_id)
+            continue
         state = (service.controller.status(service.token, task_id).get("state") or {})
         state_status = state.get("status")
         result = continuation.results(service.store, task_id).get(generation)
@@ -143,29 +237,38 @@ def _reconcile_dispatches(service) -> set[str]:
         same_generation = continuation.generation_of(state) == generation
         if ((completed or (same_generation and state_status in terminal))
                 and (state_status != "cancelled"
-                     or _cancel_settled(service, task_id, state))):
+                     or _cancel_settled(service, task_id, key, state))):
             terminal_status = ("completed" if result and result.get("accepted")
                                else "failed" if result else state_status)
-            service.store.replace("wave_dispatch", key,
-                                  {**record, "status": "terminal",
-                                   "terminal_status": terminal_status})
+            # A controller dispatch that adopted the reservation settles its own allocation;
+            # one that never did (a remote executor route) returns it here.
+            service.store.release_reservation(task_id, key)
+            _settle(service, key, record, {**record, "status": "terminal",
+                                           "terminal_status": terminal_status})
             reconciled.add(task_id)
             continue
-        launcher = process_status(record.get("launcher_identity") or {})
         worker = process_status(state.get("worker_identity") or {})
         if launcher == "alive" or worker == "alive":
             continue
         if launcher == "unknown" or worker == "unknown":
             continue
-        service.store.replace("wave_dispatch", key, {**record, "status": "uncertain",
-                              "error": "wave dispatch identity is not observably alive; reconcile before retry"})
-        reconciled.add(task_id)
+        updated = {**record, "status": "uncertain", "error": (
+            "wave dispatch identity is not observably alive; reconcile before retry")}
+        if _settle(service, key, record, updated):
+            reconciled.add(task_id)
+    if reconciled:
+        waves = service.store.records("wave")
+        for wave_id, state in service.store.records("wave_state").items():
+            task_ids = (waves.get(wave_id) or {}).get("task_ids") or ()
+            if state.get("status") == "blocked" and reconciled.intersection(task_ids):
+                service.store.replace("wave_state", wave_id, {**state, "status": "running"})
     return reconciled
 
 
-def progress(service) -> list[dict[str, Any]]:
-    """Advance admitted waves in code without blocking on a model worker."""
-    reconciled = _reconcile_dispatches(service)
+def progress(service, *, reconcile: bool = True) -> list[dict[str, Any]]:
+    """Advance one admitted wave in code without blocking on a model worker."""
+    if reconcile:
+        reconcile_dispatches(service)
     progressed = []
     runner = WaveRunner(service.controller, service.token)
     for wave_id, state in service.store.records("wave_state").items():
@@ -174,9 +277,7 @@ def progress(service) -> list[dict[str, Any]]:
         continuation_pending = any(
             continuation.pending_generation(service.store, task) is not None
             for task in task_ids)
-        if (state.get("status") != "running" and not continuation_pending
-                and not (state.get("status") == "blocked"
-                         and reconciled.intersection(task_ids))):
+        if state.get("status") != "running" and not continuation_pending:
             continue
         if not task_ids:
             continue
@@ -184,33 +285,22 @@ def progress(service) -> list[dict[str, Any]]:
         if len(hosts) != 1:
             raise PermissionError("automatic wave progression requires one explicit execution host")
         host = next(iter(hosts))
-        states = service.store.records("state")
-        service_running = []
-        from .service_specs import request_spec
-        for event in service.store.records("service_event").values():
-            if event.get("host") != host or event.get("status") not in {
-                    "dispatching", "uncertain"}:
-                continue
-            task_state = states.get(event.get("task_id"), {})
-            if task_state.get("status") not in {"running", "dispatching"}:
-                service_running.append(request_spec(service.store, event))
-        for reservation in running_resources(service, host):
-            task_state = states.get(reservation.get("task"), {})
-            if task_state.get("status") not in {"running", "dispatching"}:
-                service_running.append(reservation)
+        # Capacity in use is read from the store, the authority every dispatch reserves
+        # against: service admissions, launched wave tasks and running controller attempts.
         result = runner.step(
             wave_id, host, dispatcher=lambda w, task, h: _dispatch(service, w, task, h),
-            additional_running=service_running, dispatch_limit=service.max_dispatch)
+            running=service.store.active_allocations(host),
+            capacity=service.controller.capacity(host), dispatch_limit=service.max_dispatch)
         progressed.append(result)
         break
     return progressed
 
 
 def running_resources(service, host: str | None = None) -> list[dict[str, Any]]:
-    """Expose launching wave reservations to the shared service capacity scheduler."""
+    """Wave dispatches that still fence their workspace against service admission."""
     return [record for record in service.store.records("wave_dispatch").values()
             if (host is None or record.get("host") == host)
-            and record.get("status") in ("launching", "active", "uncertain")]
+            and record.get("status") in ACTIVE_DISPATCH]
 
 
 def pending(service) -> bool:

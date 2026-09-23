@@ -340,3 +340,120 @@ def test_wave_reconcile_recovers_dead_runner(wave_env, tmp_path):
     with controller.store.transaction() as db:
         owner = db.execute("SELECT status FROM owners WHERE resource=?", ("wave_runner:my_wave",)).fetchone()
         assert owner[0] == "released"
+
+
+def _cli_config(controller, tmp_path):
+    import json
+
+    config = tmp_path / "controller.json"
+    config.write_text(json.dumps({
+        "state": str(controller.store.path.parent), "token": "owner",
+        "hosts": controller.hosts, "default_host": "fixture",
+        "execution_host": "fixture", "profiles": [],
+    }))
+    return config
+
+
+def _cli(config, request, monkeypatch, capsys):
+    import io
+    import json
+
+    from corral.execution import cli
+
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(request)))
+    cli.main(["--config", str(config)])
+    return json.loads(capsys.readouterr().out)
+
+
+def _runner_owner(controller, wave_id):
+    return controller.store.ownership(f"wave_runner:{wave_id}")
+
+
+def test_run_wave_records_the_runner_birth_identity(wave_env, tmp_path, monkeypatch, capsys):
+    import os
+
+    from corral.execution.runtime_identity import process_start
+
+    controller = wave_env[0]
+    config = _cli_config(controller, tmp_path)
+    launched = []
+
+    class Runner:
+        pid = os.getpid()
+
+    from types import SimpleNamespace
+
+    from corral.execution import cli
+
+    # Only the runner launch is faked; process observation still runs the real ``ps``.
+    monkeypatch.setattr(cli, "subprocess", SimpleNamespace(
+        DEVNULL=subprocess.DEVNULL,
+        Popen=lambda command, **_kwargs: launched.append(command) or Runner()))
+
+    result = _cli(config, {"action": "run-wave", "wave_id": "identity-wave"}, monkeypatch, capsys)
+
+    assert result["dispatch"] == "launched"
+    assert "--execute-wave" in launched[0]
+    record = controller.store.get("wave_runner_pid", "identity-wave")
+    assert record["owner"] == result["runner_id"]
+    assert record["identity"]["pid"] == os.getpid()
+    assert record["identity"]["process_start"] == process_start(os.getpid())
+
+
+def test_wave_reconcile_treats_a_reused_runner_pid_as_dead(
+        wave_env, tmp_path, monkeypatch, capsys):
+    """A PID handed to another process after the runner exited must not hold the wave."""
+    import os
+
+    controller = wave_env[0]
+    config = _cli_config(controller, tmp_path)
+    epoch = controller.store.acquire("wave_runner:reused", "runner1")
+    # This PID is alive, but it belongs to a different process birth than the runner's.
+    controller.store.replace("wave_runner_pid", "reused", {
+        "owner": "runner1", "pid": os.getpid(),
+        "identity": {"pid": os.getpid(), "process_start": "Thu Jan  1 00:00:00 1970",
+                     "executable": sys.executable, "host": "fixture"}})
+
+    result = _cli(config, {"action": "reconcile-wave", "wave_id": "reused"}, monkeypatch, capsys)
+
+    assert result == {"wave_id": "reused", "reconciled": True, "reason": "proven dead"}
+    assert _runner_owner(controller, "reused") == ("runner1", epoch, "released")
+
+
+def test_wave_reconcile_keeps_a_runner_whose_birth_identity_matches(
+        wave_env, tmp_path, monkeypatch, capsys):
+    import os
+    import socket
+
+    from corral.execution.runtime_identity import launched
+
+    controller = wave_env[0]
+    config = _cli_config(controller, tmp_path)
+    epoch = controller.store.acquire("wave_runner:live", "runner1")
+    controller.store.replace("wave_runner_pid", "live", {
+        "owner": "runner1", "pid": os.getpid(),
+        "identity": launched(os.getpid(), sys.executable, socket.gethostname())})
+
+    result = _cli(config, {"action": "reconcile-wave", "wave_id": "live"}, monkeypatch, capsys)
+
+    assert result == {"wave_id": "live", "reconciled": False,
+                      "reason": "process is still alive"}
+    assert _runner_owner(controller, "live") == ("runner1", epoch, "active")
+
+
+def test_wave_reconcile_never_trusts_a_live_pid_without_birth_identity(
+        wave_env, tmp_path, monkeypatch, capsys):
+    """An older record holds only a PID: an existing process cannot prove the runner alive."""
+    import os
+
+    controller = wave_env[0]
+    config = _cli_config(controller, tmp_path)
+    epoch = controller.store.acquire("wave_runner:legacy", "runner1")
+    controller.store.replace("wave_runner_pid", "legacy", {"owner": "runner1",
+                                                           "pid": os.getpid()})
+
+    result = _cli(config, {"action": "reconcile-wave", "wave_id": "legacy"}, monkeypatch, capsys)
+
+    assert result == {"wave_id": "legacy", "reconciled": False,
+                      "reason": "cannot verify process identity"}
+    assert _runner_owner(controller, "legacy") == ("runner1", epoch, "uncertain")

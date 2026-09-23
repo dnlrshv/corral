@@ -467,6 +467,11 @@ class Controller:
                     seatbelt = containment.build_profile(boundary)
 
             update_context_and_usage()
+            # Durable before any worker can exist: an attempt whose dispatcher died without
+            # this mark provably never launched a worker, while one that died after it may
+            # have left a worker whose identity was never recorded.
+            state["worker_launch"] = "started"
+            self.store.replace("state", task_id, state)
             with (output / "stdout").open("wb") as out, (output / "stderr").open("wb") as err:
                 child = Process(command, run_cwd, out, err, env=run_env,
                                 seatbelt_profile=seatbelt, containment_label=label)

@@ -1,8 +1,11 @@
 """A launcher killed mid-attempt leaves a settleable attempt, never a permanent fence."""
 from __future__ import annotations
 
+import json
 import os
 import signal
+import subprocess
+import sys
 import time
 
 import pytest
@@ -150,3 +153,85 @@ def test_open_attempt_without_a_recorded_dispatcher_is_never_settled(setup):  # 
         assert controller.store.ownership(resource) == (task, epoch, "active")
         assert controller.store.get("allocation", task)["active"] is True
         assert controller.store.get("result", task) is None
+
+
+#: A real dispatcher process that stops at a chosen point of ``Controller.run`` until killed.
+BLOCKING_LAUNCHER = """
+import json, sys, time
+from pathlib import Path
+from corral.execution import controller as module
+
+config, task, gate, stage = sys.argv[1:5]
+
+def block(*_args, **_kwargs):
+    Path(gate).write_text(stage)
+    while True:
+        time.sleep(0.05)
+
+if stage == "preparation":
+    module.verifier.policy = block   # before any worker can exist
+else:
+    module.Process = block           # after the launch mark, before a worker PID is recorded
+raw = json.loads(Path(config).read_text())
+controller = module.Controller(raw["state"], raw["token"], raw["hosts"],
+                               default_host=raw["default_host"])
+controller.run(raw["token"], task, execution_host=raw["default_host"])
+"""
+
+
+def _killed_mid_dispatch(controller, repo, tmp_path, stage):
+    launcher = tmp_path / "blocking_launcher.py"
+    launcher.write_text(BLOCKING_LAUNCHER)
+    config = tmp_path / "controller.json"
+    config.write_text(json.dumps({"state": str(controller.store.path.parent), "token": "owner",
+                                  "hosts": controller.hosts, "default_host": "fixture"}))
+    task = controller.submit("owner", "killed-" + stage, spec(repo))
+    gate = tmp_path / ("gate-" + stage)
+    process = subprocess.Popen([sys.executable, str(launcher), str(config), task, str(gate), stage],
+                               stdin=subprocess.DEVNULL)
+    try:
+        _wait(gate.exists, "the dispatcher reached " + stage)
+        state = controller.store.get("state", task)
+        assert state["status"] == "dispatching"
+        assert state["dispatcher_identity"]["pid"] == process.pid
+        with pytest.raises(PermissionError, match="not proven dead"):
+            reconcile_local(controller, "owner", task)
+    finally:
+        process.kill()
+        process.wait()
+    _wait(lambda: process_status(state["dispatcher_identity"]) == "dead", "the dispatcher is dead")
+    resource = "workspace:" + str(repo.resolve())
+    assert controller.store.ownership(resource) == (task, state["epoch"], "active")
+    assert controller.store.get("allocation", task)["active"] is True
+    controller.cancel("owner", task)
+    return task, state, resource
+
+
+def test_dispatcher_killed_before_worker_launch_settles_as_never_launched(setup, tmp_path):  # noqa: F811
+    controller, repo = setup
+    task, state, resource = _killed_mid_dispatch(controller, repo, tmp_path, "preparation")
+    assert "worker_launch" not in state
+
+    result = reconcile_local(controller, "owner", task)
+    observation = result["receipt"]["observation"]
+    assert result["terminal_status"] == "cancelled" and result["accepted"] is False
+    assert observation["process"]["basis"] == "dispatcher-died-before-worker-launch"
+    assert observation["artifact"] == {
+        "status": "unavailable", "reason": "worker-never-launched", "attempt": state["attempt"],
+        "generation": 1, "directory": str(controller.artifacts / task)}
+    assert controller.store.ownership(resource) == (task, state["epoch"], "released")
+    assert controller.store.get("allocation", task)["active"] is False
+    follow = controller.submit("owner", "after-killed-preparation", spec(repo))
+    assert controller.run("owner", follow, execution_host="fixture")["result"]["accepted"]
+
+
+def test_dispatcher_killed_after_the_launch_mark_stays_fenced(setup, tmp_path):  # noqa: F811
+    controller, repo = setup
+    task, state, resource = _killed_mid_dispatch(controller, repo, tmp_path, "launch")
+    # A worker may exist without a recorded identity, so nothing can prove it stopped.
+    assert controller.store.get("state", task)["worker_launch"] == "started"
+    with pytest.raises(PermissionError, match="lacks a recorded process identity"):
+        reconcile_local(controller, "owner", task)
+    assert controller.store.ownership(resource) == (task, state["epoch"], "active")
+    assert controller.store.get("allocation", task)["active"] is True
+    assert controller.store.get("result", task) is None

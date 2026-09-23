@@ -274,11 +274,13 @@ or recording a result. That attempt, like any whose finalization was
 interrupted, is settled through the authenticated client's `reconcile`. So is
 an attempt whose dispatching process (a service launcher or a client dispatch)
 died before recording an outcome, for example killed or lost in a reboot: once
-that process's recorded birth identity is proven dead and the worker's process
-group is gone, `cancel` and then `reconcile` settle it as cancelled, releasing
-its workspace and capacity with the result in one transaction. While the
-dispatcher lives, or its identity cannot be observed on this host, reconciliation
-refuses.
+that process's recorded birth identity is proven dead and its worker's process
+group is gone (or it died before marking a worker launch, so none can exist),
+`cancel` and then `reconcile` settle it as cancelled, releasing its workspace
+and capacity with the result in one transaction. While the dispatcher lives,
+or its identity cannot be observed on this host, reconciliation refuses, as it
+does for a dispatcher that died between marking the launch and recording the
+worker's identity.
 Reconciliation collects process, artifact and delivery observations (a cancelled
 attempt without a completed adapter result reports its artifacts as
 unavailable), retains the original failure and usage, and releases only the

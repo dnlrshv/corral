@@ -55,6 +55,12 @@ def test_source_scanner_allows_github_workflow_references_not_literal_values():
     ("orchestrator.py", '# {"password": hunter2}\n'),
     # Fencing epochs are unquoted integers only.
     ("orchestrator.py", 'fencing_token = "42"\n'),
+    # A ':' inside an open bracket is a mapping separator, even on a compound-statement line.
+    ("test_env.py", f'with patch.dict(os.environ, {{"API_KEY":\n        "{FAKE}"}}):\n    pass\n'),
+    ("loader.py", f'if cfg: CONFIG = {{"password":\n    "{FAKE}"}}\n'),
+    ("loader.py", f'for s in x: settings.update({{"secret":\n    "{FAKE}"}})\n'),
+    ("loader.py", f'def f() -> dict: return {{"api_key":\n    "{FAKE}"}}\n'),
+    ("loader.py", f'if x: d = {{API_KEY:\n    "{FAKE}"}}\n'),
 ])
 def test_source_scanner_refuses_reference_lookalikes(source_name, text):
     assert check_file_text_safe(text, source_name=source_name)

@@ -87,6 +87,33 @@ def test_profile_denies_secret_file_names_but_keeps_templates_readable(tmp_path)
     assert '(allow file-read* (regex #"^/.*/\\.env\\.(example|sample|template)$"))' in profile
 
 
+def test_sandboxed_child_cannot_read_a_dot_prefixed_env_file(tmp_path):
+    """Named ``*_env`` secret files are denied by pattern, not by a list of project names."""
+    boundary = _boundary(tmp_path)
+    secret = Path(boundary.workspace) / ".service_env"
+    secret.write_text("SERVICE_TOKEN=fixture\n")
+    readable = Path(boundary.workspace) / "service.py"
+    readable.write_text("VALUE = 1\n")
+    child_script = (
+        "import errno,json\n"
+        "out={}\n"
+        "for label,target in (('secret',%r),('source',%r)):\n"
+        "    try:\n"
+        "        open(target).read(); out[label]='allowed'\n"
+        "    except OSError as e: out[label]=errno.errorcode.get(e.errno,str(e.errno))\n"
+        "print(json.dumps(out))\n"
+    ) % (str(secret.resolve()), str(readable.resolve()))
+    stdout = tmp_path / "out"
+    stderr = tmp_path / "err"
+    with stdout.open("wb") as out, stderr.open("wb") as err:
+        child = Process([sys.executable, "-c", child_script], boundary.workspace, out, err,
+                        env={"HOME": str(tmp_path)},
+                        seatbelt_profile=build_profile(boundary),
+                        containment_label="test-boundary")
+        assert child.child.wait() == 0, stderr.read_text()
+    assert json.loads(stdout.read_text()) == {"secret": "EPERM", "source": "allowed"}
+
+
 def test_profile_grant_is_read_only_reallow_inside_a_denied_parent(tmp_path):
     denied_home = tmp_path / "harness-home"
     denied_home.mkdir()
@@ -100,13 +127,14 @@ def test_profile_grant_is_read_only_reallow_inside_a_denied_parent(tmp_path):
     assert "(deny file-write*)" in profile
 
 
-def test_sensitive_account_stores_cover_the_denied_credential_set():
-    stores = containment.sensitive_account_stores(Path("/Users/fixture"))
+def test_sensitive_account_stores_cover_the_denied_credential_set(tmp_path):
+    home = (tmp_path / "home").resolve()
+    stores = containment.sensitive_account_stores(home)
     for entry in (".ssh", ".aws", ".gnupg", ".kube", ".docker", ".azure", ".aliyun", ".gemini",
                   ".antigravity", ".qwen", ".npmrc", ".netrc", ".git-credentials",
                   ".codex/auth.json", "Library/Keychains"):
-        assert f"/Users/fixture/{entry}" in stores, entry
-    assert all(item.startswith("/Users/fixture/") for item in stores)
+        assert f"{home}/{entry}" in stores, entry
+    assert all(item.startswith(f"{home}/") for item in stores)
 
 
 # --------------------------------------------------------------------------- overlap refusal

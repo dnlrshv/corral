@@ -48,7 +48,6 @@ SENSITIVE_HOME_ENTRIES: tuple[str, ...] = (
     ".gemini",
     ".antigravity",
     ".qwen",
-    ".alos_env",
     ".codex/auth.json",
     ".codex/sessions",
     ".codex/memories",
@@ -60,11 +59,12 @@ SENSITIVE_HOME_LIBRARY: tuple[str, ...] = (
     "Library/Application Support/Google/Antigravity",
 )
 
-# Repository-local secret files are denied by name pattern, wherever the workspace lives.
+# Secret files are denied by name pattern wherever they live, in the workspace or the home
+# directory: ``.env``, ``.env.<name>`` and dot-prefixed ``*_env`` files such as ``.service_env``.
 SECRET_FILE_DENY_REGEXES: tuple[str, ...] = (
     r"^/.*/\.env$",
     r"^/.*/\.env\.[^/]+$",
-    r"^/.*/\.aos_env$",
+    r"^/.*/\.[^/]+_env$",
     r"^/.*/[^/]+\.(pem|key|p12|pfx)$",
 )
 # Conventional non-secret templates stay usable by a coding worker.
@@ -235,7 +235,7 @@ def build_profile(boundary: Boundary) -> str:
         "(allow file-ioctl)",
         "(allow file-read-metadata)",
         # Read is allowed broadly, then narrowed by explicit denials below: a complete
-        # read allowlist is not demonstrable for third-party harness runtimes in M4 and
+        # read allowlist is not demonstrable for third-party harness runtimes and
         # remains an open gate. Credential/controller denials are the enforced contract.
         "(allow file-read*)",
     ]

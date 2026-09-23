@@ -1,5 +1,6 @@
 import json
 import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -15,6 +16,11 @@ def _wave_config(tmp_path, *, cpu=None):
     primary = git_repo(tmp_path / "primary")
     producer = git_repo(tmp_path / "producer")
     consumer = git_repo(tmp_path / "consumer")
+    # The artifact handoff commits the bound input in the consumer workspace, which needs a
+    # committer identity even on a host without a global git configuration.
+    for repo in (primary, producer, consumer):
+        for key, value in (("user.name", "Fixture"), ("user.email", "f@example.invalid")):
+            subprocess.run(["git", "config", key, value], cwd=repo, check=True)
     worker = (
         "import json; from pathlib import Path; "
         "value=Path('input.txt').read_text(); "

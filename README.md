@@ -159,8 +159,14 @@ test verifiers get no network, loopback included: their Seatbelt profile denies
 permission error before any candidate test runs. A host whose candidate tests
 need network opts in with `verifier_network: true`. Native coding workers keep
 network egress so a harness can reach its provider. The controller's provider
-secret file (`secret_env`) is denied to every worker and verifier boundary,
-wherever it is kept. Use isolated repositories for development.
+secret file (`secret_env`) is denied inside the native worker and native test
+verifier boundaries, wherever it is kept. Other paths are not contained yet:
+deterministic (non-native) verifiers run without a boundary, with the service
+user's full file and network access; the deterministic `use_sandbox` boundary
+re-opens the command's TMPDIR and workspace after its denials, so a protected
+path kept inside either stays readable to that command; and a verifier that
+`reconcile` re-runs after an interrupted attempt runs without a boundary. Use
+isolated repositories for development.
 
 `continue` is the only post-terminal action. It checkpoints a task's terminal
 attempt and schedules exactly one later generation under the same task id, with

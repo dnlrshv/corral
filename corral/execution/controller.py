@@ -2,7 +2,9 @@
 import hmac
 import json
 import os
+import socket
 import sqlite3
+import sys
 import time
 import uuid
 from pathlib import Path
@@ -15,9 +17,17 @@ from .atomic_io import write_json
 from .process import Process, boundary_for
 from .pr_fence import require_active_review_owner
 from .profiles import Profile, STANDARD_NATIVE_PROFILES, resolve
+from .recovery_store import DispatchFenceLost
 from .store import Store, canonical, digest
 from .usage import Spool
 from .workspace import apply_manifest, manifest, safe_path
+
+
+def _dispatcher_identity():
+    """Birth identity of the process running a dispatch, in the launcher-identity format."""
+    from .runtime_identity import launched
+
+    return launched(os.getpid(), str(Path(sys.executable).resolve()), socket.gethostname())
 
 
 class Controller:
@@ -37,6 +47,18 @@ class Controller:
             registered[prof.id] = prof
         self.profiles = list(registered.values())
 
+
+    def trusted_host(self, name):
+        """The host declaration with this controller's provider secret file protected.
+
+        Dispatch and reconciliation build worker and verifier boundaries from this one view,
+        so a verifier re-run after an interruption denies exactly what the dispatch denied.
+        """
+        host = self.hosts[name]
+        if self.secret_env_path:
+            host = {**host, "protected_paths": [*(host.get("protected_paths") or ()),
+                                                self.secret_env_path]}
+        return host
 
     def capacity(self, host):
         """Registered capacity that the store admits allocations against for one host."""
@@ -328,7 +350,11 @@ class Controller:
         state = {"status": "dispatching", "attempt": attempt, "epoch": None,
                  "host": execution_host, "profile": spec.get("selection"),
                  "process_status": None, "endpoint": "local", "generation": generation,
-                 "workspace_provenance": workspace_provenance}
+                 "workspace_provenance": workspace_provenance,
+                 # This process alone finishes the attempt. If it dies first (a killed
+                 # launcher, an OOM kill, a reboot), reconciliation settles the attempt only
+                 # after proving this identity dead.
+                 "dispatcher_identity": _dispatcher_identity()}
         # The generation claim (one worker per generation, even for concurrent identical
         # clients), workspace ownership, host allocation, state and invocation commit in one
         # transaction: a duplicate, busy, invalid or over-capacity dispatch acquires nothing.
@@ -344,6 +370,9 @@ class Controller:
             return self.status(token, task_id)
         epoch, newly_acquired = dispatched
         state["epoch"] = epoch
+        # The attempt state as last stored. Writes before launch compare against it, so a
+        # reconciliation that settles this attempt meanwhile is never overwritten.
+        stored = json.loads(canonical(state))
         # Every failure from here until a worker process exists is a refusal before launch:
         # it releases this dispatch's allocation and only an ownership epoch it newly acquired.
         launched = False
@@ -384,10 +413,7 @@ class Controller:
                             spool.append({**event, "invocation": attempt, "task": task_id})
                     except (ValueError, TypeError, KeyError, OSError, sqlite3.Error) as error:
                         telemetry_errors.append(type(error).__name__)
-            host = self.hosts[execution_host]
-            if self.secret_env_path:
-                host = {**host, "protected_paths": [*(host.get("protected_paths") or ()),
-                                                    self.secret_env_path]}
+            host = self.trusted_host(execution_host)
             verifier_roots = tuple(str(item) for item in (host.get("verifier_roots") or ()))
             protected_paths = [str(self.store.path.parent.resolve()), str(self.artifacts.resolve()),
                                *verifier_roots, *(host.get("protected_paths") or [])]
@@ -445,6 +471,16 @@ class Controller:
                     seatbelt = containment.build_profile(boundary)
 
             update_context_and_usage()
+            # Durable before any worker can exist: an attempt whose dispatcher died without
+            # this mark provably never launched a worker, while one that died after it may
+            # have left a worker whose identity was never recorded. The mark is a
+            # compare-and-swap on this attempt's ownership and stored state. If a
+            # reconciliation settled the attempt first (a live dispatcher misread as dead),
+            # the mark refuses and no worker starts in the released workspace.
+            state["worker_launch"] = "started"
+            self.store.mark_worker_launch(task=task_id, resource=resource, epoch=epoch,
+                                          expected_state=stored, state=state)
+            stored = json.loads(canonical(state))
             with (output / "stdout").open("wb") as out, (output / "stderr").open("wb") as err:
                 child = Process(command, run_cwd, out, err, env=run_env,
                                 seatbelt_profile=seatbelt, containment_label=label)
@@ -576,10 +612,15 @@ class Controller:
                                       result=result, owner_status="released",
                                       release_allocation=True)
         except BaseException as error:
+            if isinstance(error, DispatchFenceLost):
+                # Another authority settled this attempt before any worker existed. Its
+                # record stands; this dispatcher started nothing and writes nothing.
+                raise
             # Post-launch failures keep ownership uncertain: a worker may have touched the
             # workspace and its descendants may be unknown. A pre-launch refusal proved no
             # process was created, so the refusal is recorded, the allocation released, and a
             # workspace epoch this dispatch newly acquired is released for reconciliation.
+            # That record is fenced on the stored state, so it never replaces a settlement.
             state.update(status="uncertain" if launched else "refused-before-launch",
                          error=type(error).__name__)
             if launched:
@@ -588,7 +629,8 @@ class Controller:
             else:
                 self.store.finish_attempt(task=task_id, resource=resource, epoch=epoch,
                                           state=state, release_allocation=True,
-                                          owner_status="released" if newly_acquired else None)
+                                          owner_status="released" if newly_acquired else None,
+                                          expected_state=stored)
             raise
         # If it succeeded but an amendment is pending, automatically schedule the next generation.
         if accepted and amendment_pending and not self.store.get("cancel", task_id):

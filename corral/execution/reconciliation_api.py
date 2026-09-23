@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import socket
 
 from . import continuation
 from .github_advisory import GitHubAdvisoryTransport
@@ -12,9 +13,33 @@ from .policy import _get_auth_token
 from .recovery import reconcile
 
 
+def _never_launched(state: dict) -> dict | None:
+    """Evidence that a dispatch died before it could start any worker, or None.
+
+    A dispatcher that records its identity also marks ``worker_launch`` durably before it
+    spawns a worker, so a ``dispatching`` attempt without that mark, whose dispatcher is
+    proven dead on this host, cannot have left a worker behind. The mark is fenced on the
+    attempt's ownership and state: if this settlement commits first, the dispatcher's mark
+    refuses and it never spawns, even if it was misread as dead.
+    """
+    from .runtime_identity import process_status
+
+    dispatcher = state.get("dispatcher_identity")
+    if (state.get("status") != "dispatching" or state.get("worker_launch") is not None
+            or any(state.get(name) is not None for name in ("pid", "pgid", "worker_identity"))
+            or not isinstance(dispatcher, dict) or dispatcher.get("host") != socket.gethostname()
+            or not state.get("attempt") or process_status(dispatcher) != "dead"):
+        return None
+    return {"identity": {"attempt": state["attempt"], "dispatcher": dispatcher},
+            "status": "absent", "basis": "dispatcher-died-before-worker-launch"}
+
+
 def _local_process(state: dict) -> dict:
     identity = {name: state.get(name) for name in ("pid", "pgid", "attempt") if state.get(name) is not None}
     if not all(name in identity for name in ("pid", "pgid", "attempt")):
+        never = _never_launched(state)
+        if never is not None:
+            return never
         raise PermissionError("reconciliation lacks a recorded process identity")
     try:
         os.kill(int(identity["pid"]), 0)
@@ -87,18 +112,24 @@ def _github_readback(reader: dict, task_id: str, state: dict) -> dict:
             "review_count": len(reviews), "matching_review_ids": matching}
 
 
-def _artifact_observation(controller, task_id: str, state: dict, *, cancelled: bool = False) -> dict:
+def _artifact_observation(controller, task_id: str, state: dict, *, cancelled: bool = False,
+                          never_launched: bool = False) -> dict:
     """Observe the interrupted attempt's preserved artifacts.
 
     Every artifact present must bind the interrupted attempt. A cancelled attempt may settle
     without a completed adapter result: a deterministic dispatch never writes one and a native
     worker stopped mid-run has not. That absence is reported as ``unavailable`` evidence (with
-    whatever adapter status was observed), never as a preserved result.
+    whatever adapter status was observed), never as a preserved result. A cancelled attempt
+    whose dispatcher provably died before launching a worker may not have written its context
+    yet either; that is reported as unavailable too.
     """
     generation = int(state.get("generation") or 1)
     directory = continuation.artifact_dir(controller.artifacts, task_id, generation)
     paths = {"context": directory / "context.json", "adapter": directory / "adapter-result.json"}
     present = {name: path for name, path in paths.items() if path.is_file()}
+    if cancelled and never_launched and not present:
+        return {"status": "unavailable", "directory": str(directory), "attempt": state.get("attempt"),
+                "generation": generation, "reason": "worker-never-launched"}
     if "context" not in present or ("adapter" not in present and not cancelled):
         raise PermissionError("reconciliation requires preserved context and adapter result artifacts")
     try:
@@ -138,9 +169,11 @@ def controller_only_observation(controller, task_id: str, state: dict) -> dict:
     delivery = (_github_readback(reader, task_id, state) if isinstance(reader, dict) else
                  {"searched": True, "status": "absent", "reader": "controller-records-only",
                  "task": task_id, "attempt": state.get("attempt"), "generation": generation})
-    return {"process": _local_process(state),
+    process = _local_process(state)
+    return {"process": process,
             "artifact": _artifact_observation(
-                controller, task_id, state, cancelled=controller.store.get("cancel", task_id) is not None),
+                controller, task_id, state, cancelled=controller.store.get("cancel", task_id) is not None,
+                never_launched=process.get("basis") == "dispatcher-died-before-worker-launch"),
             "delivery": delivery}
 
 

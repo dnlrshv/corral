@@ -2,12 +2,115 @@
 import base64
 import hashlib
 import os
+import stat
 import subprocess
 from pathlib import Path
 
 from corral.redaction import check_file_text_safe
 
+from .repair_objects import (_HARDENING, _METADATA_LIMIT, LOCAL_TIMEOUT_SECONDS, _read_regular,
+                             git_environment)
 from .store import digest
+
+#: Overrides for every Git call in a worker-writable checkout: the repair hardening (no hooks,
+#: fsmonitor, external diff, user-level attributes or maintenance), never sign, and never start
+#: a transport (a repository could otherwise lazily fetch objects through a command it names).
+CHECKOUT_GIT_HARDENING = (*_HARDENING, "-c", "commit.gpgSign=false", "-c", "protocol.allow=never")
+
+
+def _run_checkout_git(root: Path, git_dir: Path, args, *, input=None, env=None,
+                      what: str = "checkout") -> str:
+    command = ["git", *CHECKOUT_GIT_HARDENING, "--git-dir=" + str(git_dir),
+               "--work-tree=" + str(root), *args]
+    try:
+        result = subprocess.run(command, input=input, capture_output=True, check=False, cwd=root,
+                                env=git_environment(env), timeout=LOCAL_TIMEOUT_SECONDS,
+                                **({"stdin": subprocess.DEVNULL} if input is None else {}))
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"{what} Git operation timed out: {args[0]}") from None
+    if result.returncode:
+        raise RuntimeError(f"{what} Git operation failed: {args[0]}")
+    return result.stdout.decode()
+
+
+def checkout_git_dir(root) -> Path:
+    """The checkout's own repository directory, never a redirect to another repository.
+
+    ``<root>/.git`` is worker-writable, and Git follows a gitfile, a symlink or a
+    ``commondir`` file there to any repository. The directory is resolved with hardened
+    ``rev-parse --absolute-git-dir``, which reads configuration but runs nothing it names, and
+    is accepted only as one of two things:
+
+    * the checkout's own ``.git`` directory, not a symlink and with no separate common
+      directory;
+    * the linked-worktree directory ``<common>/worktrees/<name>`` named by a ``.git`` gitfile,
+      where that directory's ``gitdir`` file names this checkout's ``.git``. That back-link is
+      how the repository registered the checkout as its worktree, and a worker cannot plant it
+      in a repository outside its reach.
+
+    In either case no symlink may stand in for ``HEAD``, ``packed-refs``, the index or the
+    object store, or anywhere under the refs and reflogs, so Git cannot read or write another
+    repository's refs through one. Anything else raises ``PermissionError``.
+    """
+    root = Path(root).resolve()
+    dot_git = root / ".git"
+    try:
+        mode = os.lstat(dot_git).st_mode
+    except OSError:
+        raise PermissionError("checkout has no Git metadata of its own") from None
+    if not (stat.S_ISDIR(mode) or stat.S_ISREG(mode)):
+        raise PermissionError("checkout .git is a symlink or special file; refusing a redirect")
+    try:
+        lines = _run_checkout_git(root, dot_git, ("rev-parse", "--absolute-git-dir",
+                                                  "--path-format=absolute", "--git-common-dir")
+                                  ).splitlines()
+    except RuntimeError as error:
+        raise PermissionError("checkout Git directory is unreadable") from error
+    if len(lines) != 2:
+        raise PermissionError("checkout Git directory is unreadable")
+    git_dir, common = (Path(os.path.realpath(line)) for line in lines)
+    if stat.S_ISDIR(mode):
+        if git_dir != dot_git or common != dot_git:
+            raise PermissionError("checkout .git redirects to another repository")
+    else:
+        back = _read_regular(git_dir / "gitdir", _METADATA_LIMIT)
+        named = back.decode(errors="replace").strip() if back is not None else ""
+        # Git may record the back-link relative to the worktree directory itself.
+        if (git_dir.parent != common / "worktrees" or not named
+                or Path(os.path.realpath(os.path.join(git_dir, named))) != dot_git):
+            raise PermissionError("checkout .git redirects to a repository that did not "
+                                  "register this checkout as its worktree")
+    for base in dict.fromkeys((git_dir, common)):
+        if any(os.path.islink(base / name) for name in ("HEAD", "packed-refs", "index", "objects")):
+            raise PermissionError("checkout Git metadata holds a symlink; refusing a redirect")
+        for name in ("refs", "logs"):
+            if _holds_symlink(base / name):
+                raise PermissionError("checkout Git metadata holds a symlink; refusing a redirect")
+    return git_dir
+
+
+def _holds_symlink(path: Path) -> bool:
+    """Whether ``path`` or anything beneath it is a symlink; a missing path holds none."""
+    if os.path.islink(path):
+        return True
+    try:
+        entries = list(os.scandir(path))
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    return any(entry.is_symlink() or (entry.is_dir(follow_symlinks=False)
+                                      and _holds_symlink(Path(entry.path)))
+               for entry in entries)
+
+
+def checkout_git(root, *args, input=None, env=None, what: str = "checkout") -> str:
+    """Run one hardened Git command against the checkout's own repository (see above)."""
+    root = Path(root).resolve()
+    return _run_checkout_git(root, checkout_git_dir(root), args, input=input, env=env, what=what)
+
+
+def checkout_head(root) -> str:
+    """The commit the checkout at ``root`` has checked out, read with hardened Git."""
+    return checkout_git(root, "rev-parse", "--verify", "--end-of-options", "HEAD^{commit}").strip()
 
 
 def file_digest(path):
@@ -34,7 +137,7 @@ def manifest(root, paths, workspace_provenance=None):
     if workspace_provenance and workspace_provenance.get("kind") == "immutable_snapshot":
         base = workspace_provenance["head"]
     else:
-        base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+        base = checkout_head(root)
     files = {}
     for name in paths:
         path = safe_path(root, name)

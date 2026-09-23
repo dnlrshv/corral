@@ -152,8 +152,12 @@ def prepare(*, spec: dict, host: dict, profile, task_dir: Path, workspace: str, 
     route = declared.get(profile.route)
     if route is None:
         raise PermissionError(f"no trusted native route declaration for {profile.route!r}")
+    # Every root the worker can write: its workspace, the trusted task and state directories
+    # (scratch lives in state) and the route's own writable grants.
     forbidden = (str(Path(workspace).resolve()), str(Path(task_dir).resolve()),
-                 str(Path(state_dir).resolve()), str(Path(artifacts).resolve()))
+                 str(Path(state_dir).resolve()), str(Path(artifacts).resolve()),
+                 *(str(Path(item).expanduser().resolve())
+                   for item in (*route.runtime_write, *route.runtime_write_files) if item))
     plan = routes.plan(route, profile, host_routes=tuple(host.get("routes") or ()),
                        forbidden_roots=forbidden)
     boundary, scratch, auth_read_granted = build_boundary(

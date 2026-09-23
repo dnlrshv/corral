@@ -154,27 +154,87 @@ def declared_routes(host: dict) -> dict[str, NativeRoute]:
     return {route_id: declare(route_id, raw) for route_id, raw in raw_routes.items()}
 
 
-def resolve_binary(route: NativeRoute, *, forbidden_roots: tuple[str, ...] = ()) -> str:
-    """Resolve the harness executable and refuse worker-writable or missing locations."""
+#: Symlinks followed while resolving a route binary before the declaration is refused.
+_SYMLINK_LIMIT = 40
+
+
+def _symlink_walk(path: Path) -> tuple[list[Path], list[Path], Path]:
+    """Resolve ``path`` as the kernel will at exec time, recording what it traverses.
+
+    Returns the symlinks crossed, every location traversed (each with its parent directory
+    already resolved) and the final resolved path. A worker that can write any traversed
+    location (a symlink it could retarget, or a directory it could replace with one before a
+    later ``..``) could change what is executed after validation, so each one is checked, not
+    just the final file.
+    """
+    hops: list[Path] = []
+    visited: list[Path] = []
+    current = Path(path.anchor)
+    pending = list(path.parts[1:])
+    while pending:
+        part = pending.pop(0)
+        if part in ("", "."):
+            continue
+        if part == "..":
+            current = current.parent
+            continue
+        candidate = current / part
+        visited.append(candidate)
+        if not candidate.is_symlink():
+            current = candidate
+            continue
+        if len(hops) >= _SYMLINK_LIMIT:
+            raise PermissionError(f"too many symbolic links resolving {path}")
+        hops.append(candidate)
+        target = Path(os.readlink(candidate))
+        if target.is_absolute():
+            current = Path(target.anchor)
+            pending = list(target.parts[1:]) + pending
+        else:
+            pending = list(target.parts) + pending
+    return hops, visited, current
+
+
+def _resolve(route: NativeRoute, forbidden_roots: tuple[str, ...]) -> tuple[Path, Path, list[Path]]:
     candidate = Path(route.binary).expanduser()
     if candidate.is_absolute():
-        resolved = candidate
+        declared = candidate
     else:
         found = shutil.which(route.binary)
         # `str(Path(""))` is ".", so an `or ""` fallback silently resolves to the cwd and the
         # not-installed refusal never fires. A missing harness is a refusal, not a guess.
         if not found:
             raise PermissionError(f"native route {route.id} binary is not installed: {route.binary}")
-        resolved = Path(found)
-    real = Path(os.path.realpath(str(resolved)))
+        declared = Path(os.path.abspath(found))
+    try:
+        hops, visited, real = _symlink_walk(declared)
+    except OSError as error:
+        raise PermissionError(f"native route {route.id} binary cannot be resolved: {declared}") from error
+    if str(real) != os.path.realpath(str(declared)):
+        raise PermissionError(f"native route {route.id} binary changed while it was resolved: {declared}")
     if not real.is_file():
         raise PermissionError(f"native route {route.id} binary is not a regular file: {real}")
-    for root in forbidden_roots:
-        root_path = Path(root).resolve()
-        if real == root_path or root_path in real.parents:
-            raise PermissionError(
-                f"native route {route.id} binary must not live in a worker-writable path: {real} under {root_path}")
-    return str(real)
+    roots = [Path(root).resolve() for root in forbidden_roots]
+    for location in (*visited, real):
+        for root_path in roots:
+            if location == root_path or root_path in location.parents:
+                raise PermissionError(
+                    f"native route {route.id} binary must not live in a worker-writable path: "
+                    f"{location} under {root_path}")
+    return declared, real, hops
+
+
+def resolve_binary(route: NativeRoute, *, forbidden_roots: tuple[str, ...] = ()) -> str:
+    """Return the declared harness path after validating everything it resolves through.
+
+    The declared path, not its resolved target, is what the adapter executes. A virtual
+    environment interpreter is a symlink to its base interpreter, and the environment is
+    found next to the link (``pyvenv.cfg``): executing the target would run the base
+    interpreter without the environment's packages. The final regular file and every
+    symlink on the way to it are refused when they sit under a worker-writable root, so
+    nothing a worker can retarget lies on the executed path.
+    """
+    return str(_resolve(route, forbidden_roots)[0])
 
 
 def authorize(route: NativeRoute, profile, *, host_routes: tuple[str, ...]) -> None:
@@ -213,9 +273,12 @@ class LaunchPlan:
     credential_env: tuple[str, ...]
     home: str | None = None
     evidence: dict = field(default_factory=dict)
+    #: The regular file ``binary`` resolves to, recorded for audit; ``binary`` is executed.
+    binary_realpath: str | None = None
 
     def as_dict(self) -> dict:
-        return {"route": self.route.as_dict(), "binary": self.binary, "argv": list(self.argv),
+        return {"route": self.route.as_dict(), "binary": self.binary,
+                "binary_realpath": self.binary_realpath, "argv": list(self.argv),
                 "model": self.model, "effort": self.effort, "home": self.home,
                 "credential_env": list(self.credential_env), "evidence": self.evidence}
 
@@ -223,7 +286,7 @@ class LaunchPlan:
 def plan(route: NativeRoute, profile, *, host_routes: tuple[str, ...],
          forbidden_roots: tuple[str, ...] = ()) -> LaunchPlan:
     authorize(route, profile, host_routes=host_routes)
-    binary = resolve_binary(route, forbidden_roots=forbidden_roots)
+    declared, real, hops = _resolve(route, forbidden_roots)
     evidence = {
         "route": route.id,
         "harness": route.harness,
@@ -245,7 +308,9 @@ def plan(route: NativeRoute, profile, *, host_routes: tuple[str, ...],
         "runtime_write_files": list(route.runtime_write_files),
         "notes": route.notes,
         "inspection_only": route.inspection_only,
+        "binary_realpath": str(real),
+        "binary_symlinks": [str(item) for item in hops],
     }
-    return LaunchPlan(route=route, binary=binary, argv=route.argv, model=profile.model,
+    return LaunchPlan(route=route, binary=str(declared), argv=route.argv, model=profile.model,
                       effort=profile.effort, credential_env=route.credential_env,
-                      home=route.runtime_home, evidence=evidence)
+                      home=route.runtime_home, evidence=evidence, binary_realpath=str(real))

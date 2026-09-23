@@ -2,8 +2,32 @@
 import json
 
 
+class DispatchFenceLost(PermissionError):
+    """The dispatcher no longer holds its attempt, so it must not start a worker for it."""
+
+
 def _result_record(task, generation):
     return ("result", task) if generation <= 1 else ("generation_result", f"{task}:{generation}")
+
+
+def mark_worker_launch(store, *, task, resource, epoch, expected_state, state):
+    """Record ``worker_launch`` only while this dispatch still holds its attempt.
+
+    One transaction checks that the workspace owner is still ``(task, epoch, active)`` and
+    that the stored attempt state is exactly ``expected_state``, then writes ``state``. If a
+    reconciliation settled the attempt first, or anything else moved its ownership or state,
+    this raises :class:`DispatchFenceLost` and writes nothing.
+    """
+    from .store import canonical
+
+    with store.transaction() as db:
+        row = db.execute("SELECT owner,epoch,status FROM owners WHERE resource=?", (resource,)).fetchone()
+        if row is None or tuple(row) != (task, epoch, "active"):
+            raise DispatchFenceLost("dispatch lost its workspace ownership before worker launch")
+        current = db.execute("SELECT value FROM records WHERE kind='state' AND key=?", (task,)).fetchone()
+        if not current or current[0] != canonical(expected_state):
+            raise DispatchFenceLost("attempt state changed before worker launch")
+        db.execute("INSERT OR REPLACE INTO records VALUES('state',?,?)", (task, canonical(state)))
 
 
 def finish_attempt(store, *, task, resource, epoch, state, owner_status=None, owner_from=("active",),
@@ -44,14 +68,20 @@ def finish_attempt(store, *, task, resource, epoch, state, owner_status=None, ow
                            (task, canonical({**json.loads(allocation[0]), "active": False})))
 
 
-def settle_cancelled(store, *, resource, owner, epoch, task, generation, result, audit, expected_state, state):
-    """Atomically persist a cancelled result and release exactly its fenced resources."""
+def settle_cancelled(store, *, resource, owner, epoch, task, generation, result, audit, expected_state, state,
+                     owner_from=("uncertain",)):
+    """Atomically persist a cancelled result and release exactly its fenced resources.
+
+    ``owner_from`` is the set of ownership states this settlement may release. It is
+    ``("uncertain",)`` for an attempt its dispatcher handed over; the caller widens it to
+    include ``active`` only after proving that the dispatcher of a still-open attempt is dead.
+    """
     from .store import canonical
 
     result_kind, result_key = _result_record(task, generation)
     with store.transaction() as db:
         owner_row = db.execute("SELECT owner,epoch,status FROM owners WHERE resource=?", (resource,)).fetchone()
-        if owner_row != (owner, epoch, "uncertain"):
+        if owner_row is None or owner_row[:2] != (owner, epoch) or owner_row[2] not in owner_from:
             raise PermissionError("cancelled reconciliation has a stale ownership fence")
         current = db.execute("SELECT value FROM records WHERE kind='state' AND key=?", (task,)).fetchone()
         if not current or current[0] != canonical(expected_state):

@@ -101,6 +101,9 @@ def test_source_scanner_keeps_workflow_context_and_type_references():
     f'password: Annotated[str, Field(min_length=3)] = "{FAKE}"',
     f'api_key: Annotated[str, Field(pattern="^(ab)+$")] = "{FAKE}"',
     f'secret: Annotated[str, Field(default_factory=lambda: env.get("X"))] = "{FAKE}"',
+    f'password: dict[str, dict[str, list[str]]] = "{FAKE}"',
+    f'api_key: Optional[dict[str, tuple[int, list[str]]]] = "{FAKE}"',
+    f'token: "Optional[str]" | None = "{FAKE}"',
 ])
 def test_prefixed_and_annotated_literals_are_redacted_and_refused(line):
     text = line + "\n"
@@ -108,6 +111,29 @@ def test_prefixed_and_annotated_literals_are_redacted_and_refused(line):
     assert FAKE not in sanitize_text(text)
     assert check_outbound_safe(text)
     assert check_file_text_safe(text, source_name="candidate.py")
+
+
+@pytest.mark.parametrize("line", [
+    f"password: {FAKE}, user=bob",
+    f"api_key: {FAKE}, region=us-east-1",
+    f"secret: {FAKE} status=401",
+    f"secret_key: {FAKE}\tretries=3",
+    f'api_key: "{FAKE}", region=x',
+    f"api_key: {FAKE}(len=16) = x",
+    f"auth token: {FAKE} expires in=300",
+])
+def test_a_colon_value_before_a_later_assignment_is_redacted(line):
+    # Only a name, optionally subscripted and '|'-joined, is an annotation.
+    assert FAKE not in redact_text(line)
+
+
+@pytest.mark.parametrize("text", [
+    f"# api_key: {FAKE}, region=us_east\n",
+    f"# auth_token: {FAKE}, retries=3\n",
+    f"x = 1  # password: {FAKE}, user=bob\n",
+])
+def test_comment_colon_values_cannot_pass_as_annotations(text):
+    assert check_file_text_safe(text, source_name="settings.py")
 
 
 def test_blank_run_after_a_credential_key_is_scanned_in_linear_time():

@@ -51,6 +51,8 @@ class GitHubAdvisoryTransport:
         self.policy_inputs = policy_inputs
         # A failed POST is proven absent only after this many consecutive readbacks,
         # and only once GitHub can no longer be processing a request sent that long ago.
+        # The quiet period is the guard against a delayed write: the readbacks run back
+        # to back, so they only rule out an inconsistent review listing.
         self.absence_reads = absence_reads
         self.absence_quiet_seconds = absence_quiet_seconds
         self.authorized_bridge_actors = (frozenset({"github-actions[bot]"})

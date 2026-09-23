@@ -329,7 +329,8 @@ def _finish(task_dir: Path, result: dict, usage_path: Path, started: float, atte
     result["detail"]["raw_stdout_preserved"] = (task_dir / "harness.stdout").exists()
     result["detail"]["raw_stderr_preserved"] = (task_dir / "harness.stderr").exists()
     # Harness errors, warnings and stdout/stderr tails can echo credentials (tracebacks,
-    # request dumps); only redacted diagnostics leave the raw harness streams.
+    # request dumps); only redacted diagnostics leave the raw harness streams. The raw
+    # streams and the narrative/structured output stay verbatim as task-local evidence.
     for field in ("errors", "warnings", "detail"):
         result[field] = redact_nested_text(result[field])
     _write_result(task_dir, result)

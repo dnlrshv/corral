@@ -174,6 +174,10 @@ without budget admission caps. Model/effort, harness, billing identities and
 observations remain separate; unknown telemetry stays unknown. Native provider
 routes require explicit controller-owned executable, model, effort, account and
 capability declarations. A same-user process is not an OS security boundary.
+Adapter errors, warnings and diagnostic tails are redacted before they are
+persisted, but the raw `harness.stdout`/`harness.stderr` streams and the
+worker's narrative and structured output are kept verbatim as task-local
+evidence; treat a task directory as sensitive.
 Validate installed routes and effective permissions before admitting real work;
 fixture verdicts do not establish native isolation.
 
@@ -195,6 +199,9 @@ authorization, ownership fencing, authenticated receipt readback and duplicate
 prevention. A POST with an unknown outcome stays unresolved until readback
 finds the review, or proves it absent after a quiet period and repeated
 consistent readbacks of the unchanged candidate; only then is the same intent
-sent again. Repository policy sources and runner declarations are explicit
-`policy_inputs`; the core has no repository-specific filename or host defaults
-for policy capture. Advisory comments confer no merge authority.
+sent again. The quiet period is what excludes a delayed write; the back-to-back
+readbacks only exclude an inconsistent listing. `reconcile` exits 0 once the
+review is delivered, 3 once it is proven absent, and 2 while it is unresolved.
+Repository policy sources and runner declarations are explicit `policy_inputs`;
+the core has no repository-specific filename or host defaults for policy
+capture. Advisory comments confer no merge authority.

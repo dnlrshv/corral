@@ -319,3 +319,23 @@ def test_usable_agent_return_artifact(setup, tmp_path):
     (art_dir / "out.txt").write_text("corrupted archive bytes")
     with pytest.raises(RuntimeError, match="artifact data corruption in archive"):
         agent_inst.return_artifact(task_id, "out.txt", tmp_path / "corrupt.txt", generation=1)
+
+
+def test_agent_without_a_host_defers_to_the_controller_default(setup, tmp_path):
+    controller, repo = setup
+    controller_config = tmp_path / "controller.json"
+    controller_config.write_text(json.dumps({
+        "state": str(controller.store.path.parent),
+        "token": "owner",
+        "hosts": controller.hosts,
+        "default_host": "fixture",
+        "execution_host": "fixture",
+    }))
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps({"controller_config": str(controller_config)}))
+
+    agent_inst = CorralAgent(config_path)
+    # The client ships no host of its own; the controller's configured default applies.
+    assert agent_inst.config.default_host is None
+    task = agent_inst.submit(repo, "objective without a host")
+    assert controller.store.get("request", task)["host"] == "fixture"

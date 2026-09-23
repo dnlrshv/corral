@@ -306,17 +306,31 @@ def test_agent_submit_builds_bound_inspection_spec_without_pilot_json(tmp_path):
             return {"task": "inspection-task"}
 
     agent = CorralAgent(AgentConfig(controller_config=tmp_path / "controller.json",
-                                    default_host="mini2"))
+                                    default_host="primary"))
     agent.client = FakeClient()
     task = agent.submit_export("c" * 64, "Inspect the supplied change",
                                profile_id="inspection-medium")
     assert task == "inspection-task"
     spec = captured["spec"]
-    assert spec["host"] == "mini2"
+    assert spec["host"] == "primary"
     assert spec == {"trusted_export_id": "c" * 64,
-                    "objective": "Inspect the supplied change", "host": "mini2",
+                    "objective": "Inspect the supplied change", "host": "primary",
                     "role": "review", "tools": ["inspect-packet", "report"],
                     "profile_id": "inspection-medium"}
+
+
+def test_agent_submit_export_without_a_host_leaves_the_controller_default(tmp_path):
+    captured = {}
+
+    class FakeClient:
+        def call(self, action, **payload):
+            captured.update({"action": action, **payload})
+            return {"task": "inspection-task"}
+
+    agent = CorralAgent(AgentConfig(controller_config=tmp_path / "controller.json"))
+    agent.client = FakeClient()
+    agent.submit_export("c" * 64, "Inspect the supplied change")
+    assert "host" not in captured["spec"]
 
 
 def test_inspection_route_rejects_broad_tools_and_runtime_hooks(tmp_path):

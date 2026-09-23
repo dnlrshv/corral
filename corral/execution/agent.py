@@ -2,7 +2,8 @@
 
 Eliminates per-run hand-authored controller JSON and raw evidence directory paths.
 Supports independent host, repository, model, and effort profiles with configurable
-defaults (Mini2 default when configured, never silently substituted).
+defaults. Without an explicit or configured host the controller's own configured
+``default_host`` applies; the client never substitutes a host of its own.
 """
 from __future__ import annotations
 
@@ -26,7 +27,7 @@ class AgentConfig:
     transport: str = "local"
     ssh_host: str | None = None
     ssh_options: list[str] | None = None
-    default_host: str = "mini2"
+    default_host: str | None = None
     profiles: dict[str, dict[str, Any]] | None = None
 
     @classmethod
@@ -39,7 +40,7 @@ class AgentConfig:
             transport=data.get("transport", "local"),
             ssh_host=data.get("ssh_host"),
             ssh_options=data.get("ssh_options"),
-            default_host=data.get("default_host", "mini2"),
+            default_host=data.get("default_host"),
             profiles=data.get("profiles", {}),
         )
 
@@ -103,7 +104,6 @@ class CorralAgent:
             "repo": repo_path,
             "workspace": repo_path,
             "objective": objective,
-            "host": target_host,
             "role": role,
             "candidate_paths": candidate_paths or [],
             "verifier_paths": verifier_paths or [],
@@ -111,6 +111,8 @@ class CorralAgent:
             "result_file": result_file,
             "usage_file": usage_file,
         }
+        if target_host:
+            spec["host"] = target_host
         if profile_id and self.config.profiles and profile_id in self.config.profiles:
             profile = self.config.profiles[profile_id]
             if "workspace" in profile:
@@ -175,9 +177,10 @@ class CorralAgent:
             f"{trusted_export_id}:{objective}:{time.time()}".encode()).hexdigest()[:16]
         spec: dict[str, Any] = {
             "trusted_export_id": trusted_export_id, "objective": objective,
-            "host": host or self.config.default_host, "role": "review",
-            "tools": ["inspect-packet", "report"],
+            "role": "review", "tools": ["inspect-packet", "report"],
         }
+        if host or self.config.default_host:
+            spec["host"] = host or self.config.default_host
         if profile_id:
             spec["profile_id"] = profile_id
         if model:

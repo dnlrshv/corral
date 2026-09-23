@@ -177,3 +177,23 @@ def test_null_body_reviews_from_others_do_not_block_publication(tmp_path):
     receipt = transport.advisory(PR, "candidate", intent, payload)
     assert receipt["review_id"] == 901 and len(http.posts) == 1
     assert transport.reconcile(PR, intent, payload)["review_id"] == 901
+
+
+def test_ownership_epoch_change_before_the_lease_releases_it(tmp_path):
+    store, http, transport, intent, payload = environment(tmp_path)
+    verify = transport._verify_approval_and_ownership
+
+    def verify_then_reacquire(*args):
+        verified = verify(*args)
+        # Ownership is released and re-acquired after verification, before the lease.
+        store.transition_owner("pr:" + PR, "corral", 1, "released")
+        assert store.acquire("pr:" + PR, "corral") == 2
+        return verified
+
+    transport._verify_approval_and_ownership = verify_then_reacquire
+    with pytest.raises(PermissionError, match="epoch"):
+        transport.advisory(PR, "candidate", intent, payload)
+    assert not http.posts
+    with store.transaction() as db:
+        assert db.execute("SELECT * FROM leases").fetchall() == []
+    assert store.acquire_lease("pr:" + PR, "corral", HEAD, 123, "next")[:2] == (True, "acquired")

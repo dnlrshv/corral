@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from . import continuation
 from .store import digest
 from .wave import WaveRunner
 
@@ -89,25 +90,28 @@ def _dispatch(service, wave_id: str, task_id: str, host: str) -> str:
     from .service_dispatch import launch
     from .store import canonical
 
+    generation = continuation.current_generation(service.store, task_id)
+    key = continuation.claim_key(task_id, generation)
     spec = service.controller.context(task_id)
     claim = {"wave_id": wave_id, "task": task_id, "host": host,
              "workspace": spec.get("workspace"), "cpu": spec.get("cpu", 1),
-             "memory_mb": spec.get("memory_mb", 0), "status": "launching"}
+             "memory_mb": spec.get("memory_mb", 0), "generation": generation,
+             "status": "launching"}
     with service.store.transaction() as db:
         row = db.execute(
-            "SELECT value FROM records WHERE kind='wave_dispatch' AND key=?", (task_id,)).fetchone()
+            "SELECT value FROM records WHERE kind='wave_dispatch' AND key=?", (key,)).fetchone()
         if row:
             return __import__("json").loads(row[0]).get("status", "unknown")
         db.execute("INSERT INTO records VALUES('wave_dispatch',?,?)",
-                   (task_id, canonical(claim)))
+                   (key, canonical(claim)))
     try:
         identity = launch(service.controller_path, service.store.path.parent, task_id, host,
                           development_mode=service.development_mode)
     except Exception as error:
-        service.store.replace("wave_dispatch", task_id,
+        service.store.replace("wave_dispatch", key,
                               {**claim, "status": "uncertain", "error": str(error)})
         return "uncertain"
-    service.store.replace("wave_dispatch", task_id,
+    service.store.replace("wave_dispatch", key,
                           {**claim, "status": "active", "launcher_identity": identity})
     return "active"
 
@@ -122,20 +126,30 @@ def _cancel_settled(service, task_id: str, state: dict[str, Any]) -> bool:
             and (allocation is None or allocation.get("active") is False))
 
 
-def _reconcile_dispatches(service) -> None:
+def _reconcile_dispatches(service) -> set[str]:
     from .runtime_identity import process_status
 
     terminal = {"completed", "failed", "refused-before-launch", "cancelled", "reconciled"}
-    for task_id, record in service.store.records("wave_dispatch").items():
-        if record.get("status") not in ("launching", "active"):
+    reconciled = set()
+    for key, record in service.store.records("wave_dispatch").items():
+        if record.get("status") not in ("launching", "active", "uncertain"):
             continue
+        task_id = record.get("task") or key
+        generation = int(record.get("generation") or 1)
         state = (service.controller.status(service.token, task_id).get("state") or {})
         state_status = state.get("status")
-        if state_status in terminal and (state_status != "cancelled"
-                                         or _cancel_settled(service, task_id, state)):
-            service.store.replace("wave_dispatch", task_id,
+        result = continuation.results(service.store, task_id).get(generation)
+        completed = result is not None and result.get("accepted") is not None
+        same_generation = continuation.generation_of(state) == generation
+        if ((completed or (same_generation and state_status in terminal))
+                and (state_status != "cancelled"
+                     or _cancel_settled(service, task_id, state))):
+            terminal_status = ("completed" if result and result.get("accepted")
+                               else "failed" if result else state_status)
+            service.store.replace("wave_dispatch", key,
                                   {**record, "status": "terminal",
-                                   "terminal_status": state.get("status")})
+                                   "terminal_status": terminal_status})
+            reconciled.add(task_id)
             continue
         launcher = process_status(record.get("launcher_identity") or {})
         worker = process_status(state.get("worker_identity") or {})
@@ -143,20 +157,27 @@ def _reconcile_dispatches(service) -> None:
             continue
         if launcher == "unknown" or worker == "unknown":
             continue
-        service.store.replace("wave_dispatch", task_id, {**record, "status": "uncertain",
+        service.store.replace("wave_dispatch", key, {**record, "status": "uncertain",
                               "error": "wave dispatch identity is not observably alive; reconcile before retry"})
+        reconciled.add(task_id)
+    return reconciled
 
 
 def progress(service) -> list[dict[str, Any]]:
     """Advance admitted waves in code without blocking on a model worker."""
-    _reconcile_dispatches(service)
+    reconciled = _reconcile_dispatches(service)
     progressed = []
     runner = WaveRunner(service.controller, service.token)
     for wave_id, state in service.store.records("wave_state").items():
-        if state.get("status") != "running":
-            continue
         wave = service.store.get("wave", wave_id) or {}
         task_ids = wave.get("task_ids") or []
+        continuation_pending = any(
+            continuation.pending_generation(service.store, task) is not None
+            for task in task_ids)
+        if (state.get("status") != "running" and not continuation_pending
+                and not (state.get("status") == "blocked"
+                         and reconciled.intersection(task_ids))):
+            continue
         if not task_ids:
             continue
         hosts = {service.controller.context(task)["host"] for task in task_ids}
@@ -193,8 +214,14 @@ def running_resources(service, host: str | None = None) -> list[dict[str, Any]]:
 
 
 def pending(service) -> bool:
-    return any(value.get("status") == "running"
-               for value in service.store.records("wave_state").values())
+    waves = service.store.records("wave")
+    for wave_id, value in service.store.records("wave_state").items():
+        if value.get("status") == "running":
+            return True
+        if any(continuation.pending_generation(service.store, task) is not None
+               for task in (waves.get(wave_id) or {}).get("task_ids", ())):
+            return True
+    return False
 
 
 def select_lane(store, *, service_ready: bool, wave_ready: bool) -> str:

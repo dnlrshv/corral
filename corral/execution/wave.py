@@ -74,6 +74,16 @@ def _detect_cycle(tasks: list[dict[str, Any]]) -> list[str] | None:
     return None
 
 
+def _latest_dispatches(store) -> dict[str, dict[str, Any]]:
+    latest = {}
+    for key, record in store.records("wave_dispatch").items():
+        task = record.get("task") or key
+        generation = int(record.get("generation") or 1)
+        if generation >= int((latest.get(task) or {}).get("generation") or 0):
+            latest[task] = record
+    return latest
+
+
 class WaveRunner:
     """Manages progression of a finite approved wave through deterministic code."""
 
@@ -178,9 +188,18 @@ class WaveRunner:
             return True
 
         completed_tasks = [t for t in task_ids if is_task_complete(t)]
-        wave_dispatches = self.controller.store.records("wave_dispatch")
-        blocked_tasks = {t for t in task_ids if (blocked_records.get(t) or {}).get("status") == "blocked"
-                         or (wave_dispatches.get(t) or {}).get("status") == "uncertain"}
+        wave_dispatches = {
+            task: record for task, record in _latest_dispatches(self.controller.store).items()
+            if int(record.get("generation") or 1)
+            == continuation.current_generation(self.controller.store, task)
+        }
+        blocked_tasks = {
+            t for t in task_ids
+            if (blocked_records.get(t) or {}).get("status") == "blocked"
+            or (wave_dispatches.get(t) or {}).get("status") == "uncertain"
+            or ((wave_dispatches.get(t) or {}).get("status") == "terminal"
+                and (wave_dispatches.get(t) or {}).get("terminal_status") != "completed")
+        }
 
         # Find ready candidates
         candidates = []
@@ -243,7 +262,8 @@ class WaveRunner:
                            or states.get(t, {}).get("status", "submitted")),
                 "blocked": t in blocked_tasks,
                 "blocker": ((blocked_records.get(t) or {}).get("reason")
-                            or (wave_dispatches.get(t) or {}).get("error"))
+                            or (wave_dispatches.get(t) or {}).get("error")
+                            or (wave_dispatches.get(t) or {}).get("terminal_status"))
                            if t in blocked_tasks else None,
             }
             for t in task_ids

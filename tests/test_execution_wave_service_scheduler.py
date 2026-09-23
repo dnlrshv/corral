@@ -2,7 +2,7 @@ import json
 import os
 import time
 
-from corral.execution import service_wave
+from corral.execution import continuation, service_wave
 from corral.execution.service import Service
 from corral.execution.store import Store
 from .test_execution_service_cli import configs, git_repo
@@ -38,6 +38,16 @@ def _wave_config(tmp_path):
     }}
     path.write_text(json.dumps(raw))
     return path, primary
+
+
+def _complete_wave(service, wave_id):
+    for _index in range(100):
+        service.tick()
+        state = service.store.get("wave_state", wave_id)
+        if state.get("status") == "completed":
+            return
+        time.sleep(0.02)
+    raise AssertionError(service.store.get("wave_state", wave_id))
 
 
 def test_wave_reservation_blocks_interactive_host_oversubscription(tmp_path, monkeypatch):
@@ -138,6 +148,55 @@ def test_continuous_interactive_admissions_do_not_starve_dependency_wave(tmp_pat
     results = [service.store.get("result", task) for task in wave["task_ids"]]
     assert all(result and result.get("accepted") for result in results)
     assert len(service.store.records("invocation")) >= 2
+
+
+def test_wave_continuation_uses_new_generation_dispatch_without_erasing_history(
+        tmp_path, monkeypatch):
+    config, _workspace = _wave_config(tmp_path)
+    service = Service(config)
+    wave = service.submit_wave_plan("usage", "wave-continuation")["wave"]
+    _complete_wave(service, "wave-continuation")
+    producer = wave["tasks"]["producer"]
+    first_key = continuation.claim_key(producer, 1)
+    assert service.store.get("wave_dispatch", first_key)["status"] == "terminal"
+    service.controller.continue_task(
+        service.token, producer, "amended-output", {"objective": "produce amended output"})
+    launches = []
+    monkeypatch.setattr("corral.execution.service_dispatch.launch",
+                        lambda *_args, **_kwargs: launches.append(True)
+                        or {"pid": os.getpid(), "process_start": "fixture"})
+
+    result = service.tick()
+
+    second_key = continuation.claim_key(producer, 2)
+    assert result["waves"][0]["status"] == "running"
+    assert service.store.get("wave_dispatch", first_key)["status"] == "terminal"
+    assert service.store.get("wave_dispatch", second_key)["generation"] == 2
+    assert launches == [True]
+
+
+def test_uncertain_wave_dispatch_converges_from_late_terminal_without_relaunch(
+        tmp_path, monkeypatch):
+    config, _workspace = _wave_config(tmp_path)
+    service = Service(config)
+    wave = service.submit_wave_plan("usage", "wave-late-result")["wave"]
+    _complete_wave(service, "wave-late-result")
+    consumer = wave["tasks"]["consumer"]
+    key = continuation.claim_key(consumer, 1)
+    record = service.store.get("wave_dispatch", key)
+    service.store.replace("wave_dispatch", key, {**record, "status": "uncertain"})
+    service.store.replace("wave_state", "wave-late-result", {
+        "wave_id": "wave-late-result", "status": "blocked",
+    })
+    monkeypatch.setattr("corral.execution.service_dispatch.launch",
+                        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                            AssertionError("terminal reconciliation must not relaunch")))
+
+    progressed = service_wave.progress(service)
+
+    assert progressed[0]["status"] == "completed"
+    assert service.store.get("wave_dispatch", key)["status"] == "terminal"
+    assert service.store.get("wave_state", "wave-late-result")["status"] == "completed"
 
 
 def test_tick_lease_serializes_service_and_wave_lane_cursor(tmp_path, monkeypatch):

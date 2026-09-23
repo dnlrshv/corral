@@ -232,9 +232,12 @@ def _github_workflow_script_reference(value: str, source_name: str | None,
     return bool(_WORKFLOW_LOOKUP_CHAIN.fullmatch(value.strip()))
 
 
+# The closing line of a multi-line signature is ``...) -> Name:``: the ``->`` follows a
+# ``)`` outside any string or comment.
 _PYTHON_BLOCK_OPENER = re.compile(
     r"[ \t]*(?:(?:async[ \t]+)?(?:def|class|if|elif|else|for|while|with|try|except|finally"
-    r"|match|case)\b|.*->)")
+    r"|match|case)\b|[^\"'#]*\)[ \t]*->)")
+_LINE_STRING = re.compile(r"\"(?:[^\"\\\n]|\\.)*\"|'(?:[^'\\\n]|\\.)*'")
 
 
 def _opens_python_block(text: str, position: int) -> bool:
@@ -242,9 +245,10 @@ def _opens_python_block(text: str, position: int) -> bool:
 
     A block-opening ``:`` is never inside an open bracket, so a key after an unclosed
     ``(``, ``[`` or ``{`` is a mapping key (``if x: d = {API_KEY:``). Counting with
-    ``<=`` keeps the closing line of a multi-line signature (``) -> Token:``).
+    ``<=`` keeps the closing line of a multi-line signature (``) -> Token:``). Brackets
+    and ``->`` inside a one-line string are data, so strings are dropped first.
     """
-    prefix = text[text.rfind("\n", 0, position) + 1:position]
+    prefix = _LINE_STRING.sub("", text[text.rfind("\n", 0, position) + 1:position])
     return (sum(map(prefix.count, "([{")) <= sum(map(prefix.count, ")]}"))
             and bool(_PYTHON_BLOCK_OPENER.match(prefix)))
 

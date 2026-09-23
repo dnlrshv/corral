@@ -46,9 +46,9 @@ def main(argv: list[str] | None = None) -> int:
         # ``wave`` is the earlier name of this action, kept as an alias. Both only admit the
         # wave (idempotently, by wave id) and return its record; the service tick then
         # dispatches and advances it, so neither blocks on or launches a wave runner.
-        from .wave import WaveRunner
-        result = WaveRunner(service.controller, service.token).submit_wave(
-            request["wave_id"], request["tasks"], request.get("handoffs"))
+        from .service_wave import submit_advanced
+        result = submit_advanced(service, request["wave_id"], request["tasks"],
+                                 request.get("handoffs"))
     elif action == "fetch":
         event = service.store.get("service_event", request["event_id"])
         if not event or not event.get("task_id"):

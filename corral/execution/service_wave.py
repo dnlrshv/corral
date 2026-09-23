@@ -77,14 +77,36 @@ def resolve(service, name: str, wave_id: str, *, objective: str | None = None,
     return resolved, handoffs
 
 
+SPLIT_HOST = "a service wave runs all of its tasks on one execution host"
+
+
+def _single_host(service, tasks: list[dict[str, Any]]) -> None:
+    """Refuse at admission a wave the service lane could never advance."""
+    hosts = set()
+    for item in tasks:
+        spec = item.get("spec") if isinstance(item, dict) else None
+        requested = spec.get("host") if isinstance(spec, dict) else None
+        hosts.add(requested or service.controller.default_host)
+    if len(hosts) > 1:
+        raise PermissionError(f"{SPLIT_HOST}; requested {sorted(hosts)}")
+
+
 def submit(service, name: str, wave_id: str, *, objective: str | None = None,
            host: str | None = None) -> dict[str, Any]:
     tasks, handoffs = resolve(service, name, wave_id, objective=objective, host=host)
+    _single_host(service, tasks)
     record = WaveRunner(service.controller, service.token).submit_wave(wave_id, tasks, handoffs)
     binding = {"plan": name, "wave_id": wave_id, "tasks": tasks, "handoffs": handoffs,
                "resolved_digest": digest({"tasks": tasks, "handoffs": handoffs})}
     service.store.put_once("service_wave_plan", wave_id, binding)
     return {"plan": binding, "wave": record}
+
+
+def submit_advanced(service, wave_id: str, tasks: list[dict[str, Any]],
+                    handoffs: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """Admit caller-supplied controller task specifications as one service wave."""
+    _single_host(service, tasks)
+    return WaveRunner(service.controller, service.token).submit_wave(wave_id, tasks, handoffs)
 
 
 ACTIVE_DISPATCH = ("launching", "active", "uncertain")
@@ -283,7 +305,14 @@ def progress(service, *, reconcile: bool = True) -> list[dict[str, Any]]:
             continue
         hosts = {service.controller.context(task)["host"] for task in task_ids}
         if len(hosts) != 1:
-            raise PermissionError("automatic wave progression requires one explicit execution host")
+            # Admission refuses these; one stored by another path (the controller's own wave
+            # submission) is blocked with its reason instead of failing every service tick.
+            blocked = {**state, "wave_id": wave_id, "status": "blocked", "error": SPLIT_HOST}
+            if state != blocked:
+                service.store.replace("wave_state", wave_id, blocked)
+                progressed.append({"wave_id": wave_id, "status": "blocked",
+                                   "is_terminal": True, "error": SPLIT_HOST})
+            continue
         host = next(iter(hosts))
         # Capacity in use is read from the store, the authority every dispatch reserves
         # against: service admissions, launched wave tasks and running controller attempts.

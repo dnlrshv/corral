@@ -133,3 +133,13 @@ def test_busy_interactive_lane_cannot_starve_wave_lane(tmp_path):
     lanes = [service_wave.select_lane(store, service_ready=True, wave_ready=True)
              for _ in range(6)]
     assert lanes == ["service", "wave", "service", "wave", "service", "wave"]
+
+
+def test_named_plan_spanning_two_hosts_is_refused_before_admission():
+    service = FakeService()
+    service.config = json.loads(json.dumps(service.config))
+    service.config["wave_plans"]["usage"]["handoffs"] = []
+    service.config["wave_plans"]["usage"]["tasks"][1]["host"] = "dev"
+    service.controller = None  # admission must refuse before touching the controller
+    with pytest.raises(PermissionError, match="one execution host"):
+        service_wave.submit(service, "usage", "wave-split")

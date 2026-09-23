@@ -187,7 +187,8 @@ Finite waves run through the maintained service. The service endpoint's
 into the repository's `wave_workspaces`), role and defaults come from
 registered profiles, and a plan may allow an objective or host override only
 if it says so. `wave-advanced` admits caller-supplied controller task
-specifications. `wave` is kept as an alias of `wave-advanced`: it used to
+specifications. Both refuse a wave whose tasks span more than one execution
+host. `wave` is kept as an alias of `wave-advanced`: it used to
 start a detached wave runner through the controller, and now, like
 `wave-advanced`, only admits the wave (idempotently by wave id) and returns
 its record. The service tick then advances admitted waves alongside

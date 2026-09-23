@@ -396,3 +396,56 @@ def test_legacy_wave_action_is_an_alias_of_the_async_submit(tmp_path, monkeypatc
 
     _complete_wave(service, "legacy")
     assert service.store.get("result", legacy["tasks"]["solo"])["accepted"] is True
+
+
+def _two_host_config(tmp_path):
+    config, primary = _wave_config(tmp_path)
+    controller_path = Path(json.loads(config.read_text())["controller_config"])
+    controller = json.loads(controller_path.read_text())
+    controller["hosts"]["secondary"] = {"routes": ["deterministic"], "harnesses": [],
+                                        "cpu": 1, "memory_mb": 0}
+    controller_path.write_text(json.dumps(controller))
+    defaults = json.loads(config.read_text())["repositories"]["demo"]["task_defaults"]
+    tasks = [{"name": name, "request_id": f"split:{name}", "spec": {
+        **defaults, "repo": "demo", "workspace": str(primary), "host": host, "mode": "wave"}}
+        for name, host in (("here", "primary"), ("there", "secondary"))]
+    return config, tasks
+
+
+def test_advanced_wave_spanning_two_hosts_is_refused_before_admission(
+        tmp_path, monkeypatch, capsys):
+    import io
+
+    import pytest
+
+    from corral.execution import service_endpoint
+
+    config, tasks = _two_host_config(tmp_path)
+    for action in ("wave-advanced", "wave"):
+        request = {"action": action, "wave_id": "split", "tasks": tasks}
+        monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(request)))
+        with pytest.raises(PermissionError, match="one execution host"):
+            service_endpoint.main(["--config", str(config)])
+    service = Service(config)
+    assert service.store.get("wave", "split") is None
+    assert service.store.records("request") == {}
+
+
+def test_stored_split_host_wave_blocks_without_failing_service_ticks(tmp_path, monkeypatch):
+    from corral.execution.wave import WaveRunner
+
+    config, tasks = _two_host_config(tmp_path)
+    service = Service(config)
+    # Admitted through the controller's own wave submission, which the service does not gate.
+    WaveRunner(service.controller, service.token).submit_wave("split", tasks)
+    service.submit("interactive", "demo", "interactive work")
+    monkeypatch.setattr("corral.execution.service_dispatch.launch", _live_launcher)
+
+    ticks = [service.tick(now=10 + index) for index in range(3)]
+
+    blocked = [step for tick in ticks for step in tick["waves"]]
+    assert blocked == [{"wave_id": "split", "status": "blocked", "is_terminal": True,
+                        "error": service_wave.SPLIT_HOST}]
+    assert service.store.get("wave_state", "split")["status"] == "blocked"
+    assert [event for tick in ticks for event in tick["dispatched"]] == ["interactive"]
+    assert service.store.records("wave_dispatch") == {}

@@ -171,6 +171,22 @@ def test_operator_recovers_a_dead_holder_lease_but_never_a_live_one(tmp_path):
     assert store.acquire_lease(RESOURCE, "corral", HEAD, os.getpid(), "next")[0]
 
 
+@pytest.mark.skipif(not (hasattr(os, "waitid") and hasattr(os, "WNOWAIT")),
+                    reason="needs waitid(WNOWAIT) to keep an exited child unreaped")
+def test_operator_recovers_a_lease_whose_exited_holder_is_not_yet_reaped(tmp_path):
+    store, _http, _transport, _intent, _payload = environment(tmp_path)
+    holder = subprocess.Popen([sys.executable, "-c", "pass"])
+    try:
+        # The holder has exited, but its parent has not reaped it: the pid still
+        # answers signal 0 as a zombie, and a zombie holds nothing.
+        os.waitid(os.P_PID, holder.pid, os.WEXITED | os.WNOWAIT)
+        assert store.acquire_lease(RESOURCE, "corral", HEAD, holder.pid, "exited")[0]
+        assert store.recover_lease_operator(RESOURCE, authorized_by="operator") is True
+    finally:
+        holder.wait()
+    assert store.acquire_lease(RESOURCE, "corral", HEAD, os.getpid(), "next")[0]
+
+
 def test_migrated_ambiguous_intent_without_attempt_identity_can_settle(tmp_path):
     store, http, transport, intent, payload = environment(tmp_path)
     transport.absence_quiet_seconds = 0

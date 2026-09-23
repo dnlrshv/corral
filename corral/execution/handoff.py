@@ -6,23 +6,23 @@ run whatever they name (hooks, a clean filter, an fsmonitor or signing program) 
 controller's authority. The binding commit still has to land in that repository, so Git runs
 there only as plumbing that reads no checkout file: the blob is hashed from the verified bytes
 held in memory, with no filters, the tree comes from the index and the commit is written and
-moved onto ``HEAD`` directly. Every invocation names the repository explicitly and carries
-command-line overrides (no hooks, no fsmonitor, no signing, no transports), which outrank any
-repository or included config; system and global config and inherited ``GIT_*`` variables are
-not used.
+moved onto ``HEAD`` directly. Every invocation carries command-line overrides (no hooks, no
+fsmonitor, no signing, no transports), which outrank any repository or included config;
+system and global config and inherited ``GIT_*`` variables are not used. Before each one the
+repository is resolved again and must be the checkout's own (see
+:func:`~corral.execution.workspace.checkout_git_dir`): a ``.git`` gitfile, symlink or
+``commondir`` that points at another repository refuses the handoff.
 """
 import base64
 import hashlib
 import json
-import subprocess
 import time
 from pathlib import Path
 from typing import Any
 
 from . import continuation
-from .repair_objects import _HARDENING, LOCAL_TIMEOUT_SECONDS, git_environment
 from .scheduler import digest
-from .workspace import apply_manifest, manifest, safe_path
+from .workspace import apply_manifest, checkout_git, manifest, safe_path
 
 HANDOFF_KIND = "artifact_handoff"
 HANDOFF_INTENT_KIND = "handoff_intent"
@@ -30,25 +30,12 @@ BLOCKED_KIND = "task_blocked"
 
 #: Author and committer of a binding commit; the checkout's own identity config is not used.
 BINDING_IDENTITY = {"name": "Corral", "email": "corral@localhost"}
-#: Overrides on top of the repair hardening: never sign, and never start a transport (a
-#: repository could otherwise lazily fetch missing objects through a command it configures).
-_BINDING_HARDENING = (*_HARDENING, "-c", "commit.gpgSign=false", "-c", "protocol.allow=never")
 
 
 def _consumer_git(root: Path, *args: str, input: bytes | None = None,
                   env: dict[str, str] | None = None) -> str:
-    """Run one hardened plumbing command against the consumer checkout's repository."""
-    command = ["git", *_BINDING_HARDENING, "--git-dir=" + str(root / ".git"),
-               "--work-tree=" + str(root), *args]
-    try:
-        result = subprocess.run(command, input=input, capture_output=True, check=False, cwd=root,
-                                env=git_environment(env), timeout=LOCAL_TIMEOUT_SECONDS,
-                                **({"stdin": subprocess.DEVNULL} if input is None else {}))
-    except subprocess.TimeoutExpired:
-        raise RuntimeError(f"consumer binding Git operation timed out: {args[0]}") from None
-    if result.returncode:
-        raise RuntimeError(f"consumer binding Git operation failed: {args[0]}")
-    return result.stdout.decode()
+    """Run one hardened plumbing command against the consumer checkout's own repository."""
+    return checkout_git(root, *args, input=input, env=env, what="consumer binding")
 
 
 def _staged(root: Path) -> list[str]:

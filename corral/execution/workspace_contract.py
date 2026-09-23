@@ -2,11 +2,10 @@
 from __future__ import annotations
 
 import re
-import subprocess
 from pathlib import Path
 
 from .store import digest
-from .workspace import file_digest, safe_path
+from .workspace import checkout_head, file_digest, safe_path
 
 SHA = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -104,10 +103,13 @@ def preflight(spec: dict, workspace: str | Path, *, store=None) -> dict:
     if kind == "checkout":
         if not (root / ".git").exists():
             raise PermissionError("checkout workspace requires Git metadata before inference")
-        completed = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"],
-                                   capture_output=True, text=True, check=False)
-        head = completed.stdout.strip()
-        if completed.returncode or not head:
+        # Hardened, and only from the checkout's own repository: a worker-planted gitfile,
+        # symlink or commondir redirect refuses here, before any worker starts.
+        try:
+            head = checkout_head(root)
+        except (PermissionError, RuntimeError) as error:
+            raise PermissionError(f"checkout workspace has no readable Git HEAD: {error}") from None
+        if not head:
             raise PermissionError("checkout workspace has no readable Git HEAD")
         value = {"kind": kind, "head": head, "files": _candidate_files(root, paths)}
     elif kind == "immutable_snapshot" and spec.get("trusted_export_id") is not None:

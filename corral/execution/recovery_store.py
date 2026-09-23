@@ -2,8 +2,32 @@
 import json
 
 
+class DispatchFenceLost(PermissionError):
+    """The dispatcher no longer holds its attempt, so it must not start a worker for it."""
+
+
 def _result_record(task, generation):
     return ("result", task) if generation <= 1 else ("generation_result", f"{task}:{generation}")
+
+
+def mark_worker_launch(store, *, task, resource, epoch, expected_state, state):
+    """Record ``worker_launch`` only while this dispatch still holds its attempt.
+
+    One transaction checks that the workspace owner is still ``(task, epoch, active)`` and
+    that the stored attempt state is exactly ``expected_state``, then writes ``state``. If a
+    reconciliation settled the attempt first, or anything else moved its ownership or state,
+    this raises :class:`DispatchFenceLost` and writes nothing.
+    """
+    from .store import canonical
+
+    with store.transaction() as db:
+        row = db.execute("SELECT owner,epoch,status FROM owners WHERE resource=?", (resource,)).fetchone()
+        if row is None or tuple(row) != (task, epoch, "active"):
+            raise DispatchFenceLost("dispatch lost its workspace ownership before worker launch")
+        current = db.execute("SELECT value FROM records WHERE kind='state' AND key=?", (task,)).fetchone()
+        if not current or current[0] != canonical(expected_state):
+            raise DispatchFenceLost("attempt state changed before worker launch")
+        db.execute("INSERT OR REPLACE INTO records VALUES('state',?,?)", (task, canonical(state)))
 
 
 def finish_attempt(store, *, task, resource, epoch, state, owner_status=None, owner_from=("active",),

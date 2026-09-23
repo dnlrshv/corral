@@ -17,6 +17,7 @@ from .atomic_io import write_json
 from .process import Process, boundary_for
 from .pr_fence import require_active_review_owner
 from .profiles import Profile, STANDARD_NATIVE_PROFILES, resolve
+from .recovery_store import DispatchFenceLost
 from .store import Store, canonical, digest
 from .usage import Spool
 from .workspace import apply_manifest, manifest, safe_path
@@ -369,6 +370,9 @@ class Controller:
             return self.status(token, task_id)
         epoch, newly_acquired = dispatched
         state["epoch"] = epoch
+        # The attempt state as last stored. Writes before launch compare against it, so a
+        # reconciliation that settles this attempt meanwhile is never overwritten.
+        stored = json.loads(canonical(state))
         # Every failure from here until a worker process exists is a refusal before launch:
         # it releases this dispatch's allocation and only an ownership epoch it newly acquired.
         launched = False
@@ -469,9 +473,14 @@ class Controller:
             update_context_and_usage()
             # Durable before any worker can exist: an attempt whose dispatcher died without
             # this mark provably never launched a worker, while one that died after it may
-            # have left a worker whose identity was never recorded.
+            # have left a worker whose identity was never recorded. The mark is a
+            # compare-and-swap on this attempt's ownership and stored state. If a
+            # reconciliation settled the attempt first (a live dispatcher misread as dead),
+            # the mark refuses and no worker starts in the released workspace.
             state["worker_launch"] = "started"
-            self.store.replace("state", task_id, state)
+            self.store.mark_worker_launch(task=task_id, resource=resource, epoch=epoch,
+                                          expected_state=stored, state=state)
+            stored = json.loads(canonical(state))
             with (output / "stdout").open("wb") as out, (output / "stderr").open("wb") as err:
                 child = Process(command, run_cwd, out, err, env=run_env,
                                 seatbelt_profile=seatbelt, containment_label=label)
@@ -603,10 +612,15 @@ class Controller:
                                       result=result, owner_status="released",
                                       release_allocation=True)
         except BaseException as error:
+            if isinstance(error, DispatchFenceLost):
+                # Another authority settled this attempt before any worker existed. Its
+                # record stands; this dispatcher started nothing and writes nothing.
+                raise
             # Post-launch failures keep ownership uncertain: a worker may have touched the
             # workspace and its descendants may be unknown. A pre-launch refusal proved no
             # process was created, so the refusal is recorded, the allocation released, and a
             # workspace epoch this dispatch newly acquired is released for reconciliation.
+            # That record is fenced on the stored state, so it never replaces a settlement.
             state.update(status="uncertain" if launched else "refused-before-launch",
                          error=type(error).__name__)
             if launched:
@@ -615,7 +629,8 @@ class Controller:
             else:
                 self.store.finish_attempt(task=task_id, resource=resource, epoch=epoch,
                                           state=state, release_allocation=True,
-                                          owner_status="released" if newly_acquired else None)
+                                          owner_status="released" if newly_acquired else None,
+                                          expected_state=stored)
             raise
         # If it succeeded but an amendment is pending, automatically schedule the next generation.
         if accepted and amendment_pending and not self.store.get("cancel", task_id):

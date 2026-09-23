@@ -18,7 +18,9 @@ def _never_launched(state: dict) -> dict | None:
 
     A dispatcher that records its identity also marks ``worker_launch`` durably before it
     spawns a worker, so a ``dispatching`` attempt without that mark, whose dispatcher is
-    proven dead on this host, cannot have left a worker behind.
+    proven dead on this host, cannot have left a worker behind. The mark is fenced on the
+    attempt's ownership and state: if this settlement commits first, the dispatcher's mark
+    refuses and it never spawns, even if it was misread as dead.
     """
     from .runtime_identity import process_status
 

@@ -224,7 +224,11 @@ on its own. The consumer checkout's `.git` is worker-writable, so the binding
 commit is built with Git plumbing from the verified bytes, authored as
 `Corral <corral@localhost>`: none of that repository's hooks, filters,
 fsmonitor or signing programs run, and system and global Git config are not
-read.
+read. Every Git call goes to the checkout's own repository: its real `.git`
+directory, or the linked-worktree directory of a repository that registered the
+checkout as its worktree. A `.git` gitfile, symlink or `commondir` that points
+at another repository, or a symlink among its refs, reflogs or object store,
+refuses the handoff.
 
 `wave-status` returns a wave's record, state (each task's status and blocker)
 and dispatch records; `wave-resume` returns a blocked wave to the wave lane
@@ -265,9 +269,12 @@ evidence; treat a task directory as sensitive.
 Validate installed routes and effective permissions before admitting real work;
 fixture verdicts do not establish native isolation.
 
-Checkout workspaces require readable Git metadata before inference. An immutable
-snapshot instead declares its source revisions and export digest; the controller
-checks its candidate bytes without inventing Git history. Cancelling a running
+Checkout workspaces require readable Git metadata of their own before
+inference. Corral reads it with hardened Git, which runs none of the
+repository's hooks or configured programs, and refuses a `.git` that redirects
+to another repository. An immutable snapshot instead declares its source
+revisions and export digest; the controller checks its candidate bytes without
+inventing Git history. Cancelling a running
 attempt stops its worker's process group and leaves the attempt fenced as
 `uncertain`, with its workspace and capacity held, without running the verifier
 or recording a result. That attempt, like any whose finalization was
@@ -280,7 +287,9 @@ group is gone (or it died before marking a worker launch, so none can exist),
 and capacity with the result in one transaction. While the dispatcher lives,
 or its identity cannot be observed on this host, reconciliation refuses, as it
 does for a dispatcher that died between marking the launch and recording the
-worker's identity.
+worker's identity. The launch mark is a compare-and-swap on the attempt's
+ownership and state, so a dispatcher settled while it still runs (its liveness
+misread) starts no worker.
 Reconciliation collects process, artifact and delivery observations (a cancelled
 attempt without a completed adapter result reports its artifacts as
 unavailable), retains the original failure and usage, and releases only the

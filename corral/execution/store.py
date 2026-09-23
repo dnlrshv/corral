@@ -224,6 +224,11 @@ class Store:
 
         return finish_attempt(self, **kwargs)
 
+    def mark_worker_launch(self, **kwargs):
+        from .recovery_store import mark_worker_launch
+
+        return mark_worker_launch(self, **kwargs)
+
     def settle_cancelled(self, *, resource, owner, epoch, task, generation, result, audit, expected_state, state,
                          owner_from=("uncertain",)):
         from .recovery_store import settle_cancelled

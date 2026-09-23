@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
+import socket
 import subprocess
 import sys
 import time
+import traceback
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -365,6 +368,66 @@ def test_admission_judges_cleanliness_from_trusted_objects(tmp_path, monkeypatch
     assert service.store.records("service_event") == {}
 
 
+@pytest.mark.parametrize("planted", ["include-fifo", "packed-refs", "linked-worktree",
+                                     "head-fifo", "ref-fifo", "detached"])
+def test_admission_reads_the_checkout_head_as_data(tmp_path, monkeypatch, planted):
+    workspace, remote, base, head = git_fixture(tmp_path)
+    checkout, dotgit = workspace, workspace / ".git"
+    if planted == "include-fifo":
+        # Any Git process that read this checkout's configuration would wait on the FIFO.
+        os.mkfifo(dotgit / "stall.fifo")
+        with (dotgit / "config").open("a") as config:
+            config.write(f"[include]\n\tpath = {dotgit / 'stall.fifo'}\n")
+    elif planted == "packed-refs":
+        git("pack-refs", "--all", cwd=workspace)
+        assert not (dotgit / "refs" / "heads" / "repair-7").exists()
+    elif planted == "linked-worktree":
+        git("checkout", "-q", "main", cwd=workspace)
+        checkout = tmp_path / "linked"
+        git("worktree", "add", "-q", str(checkout), "repair-7", cwd=workspace)
+    elif planted == "head-fifo":
+        (dotgit / "HEAD").unlink()
+        os.mkfifo(dotgit / "HEAD")
+    elif planted == "ref-fifo":
+        (dotgit / "refs" / "heads" / "repair-7").unlink()
+        os.mkfifo(dotgit / "refs" / "heads" / "repair-7")
+    else:
+        git("checkout", "-q", "--detach", cwd=workspace)
+    service = service_fixture(tmp_path, checkout, remote, fake_gh(tmp_path))
+    service.store.acquire("pr:fixture/repo#7", "corral")
+    receipt = trusted_review(service, tmp_path, head, base)
+    stub_submission(service, monkeypatch)
+    monkeypatch.setattr(repair_objects, "LOCAL_TIMEOUT_SECONDS", 5)
+    calls, original = [], subprocess.run
+
+    def record(command, *args, **kwargs):
+        calls.append((list(map(str, command)), kwargs))
+        return original(command, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", record)
+    started = time.monotonic()
+    if planted in ("include-fifo", "packed-refs", "linked-worktree"):
+        admitted_event = service.submit_pr_repair(
+            "demo", 7, receipt["receipt_id"], expected_head=head, expected_base=base)["event"]
+        assert admitted_event["role"] == "repair"
+    else:
+        with pytest.raises(PermissionError, match="must be clean at the exact"):
+            service.submit_pr_repair(
+                "demo", 7, receipt["receipt_id"], expected_head=head, expected_base=base)
+    assert time.monotonic() - started < repair_objects.LOCAL_TIMEOUT_SECONDS
+    # Git reaches the checkout only as the work tree of Corral's own repository, and never
+    # inherits the service's standard input.
+    roots = {str(checkout), str(checkout.resolve())}
+    git_calls = [(command, kwargs) for command, kwargs in calls if command[0] == "git"]
+    assert any("fetch" in command for command, _kwargs in git_calls)
+    for command, kwargs in git_calls:
+        assert "-C" not in command and str(kwargs.get("cwd")) not in roots
+        for argument in command:
+            if any(root in argument for root in roots):
+                assert argument in {"--work-tree=" + root for root in roots}, command
+        assert kwargs.get("stdin") is subprocess.DEVNULL or kwargs.get("input") is not None
+
+
 def test_branch_publication_pushes_exact_accepted_commit_once(tmp_path, monkeypatch):
     case = admitted(tmp_path, monkeypatch)
     service, event = case.service, case.event
@@ -668,7 +731,7 @@ def test_timed_out_push_is_resolved_by_remote_readback(tmp_path, monkeypatch):
         if args and args[0] == "push":
             bounds.append(kwargs.get("timeout"))
             original(self, *args, **kwargs)
-            raise subprocess.TimeoutExpired(["git", "push"], kwargs.get("timeout"))
+            raise repair_objects.GitTimeout("push", kwargs.get("timeout"))
         return original(self, *args, **kwargs)
 
     monkeypatch.setattr(RepairObjects, "run", push_lands_then_times_out)
@@ -676,6 +739,58 @@ def test_timed_out_push_is_resolved_by_remote_readback(tmp_path, monkeypatch):
     assert bounds == [github_branch.PUSH_TIMEOUT_SECONDS]
     assert published["published"] is True
     assert remote_head(case.remote) == published["new_head"]
+
+
+def test_git_timeouts_never_expose_the_remote_url_or_credential_helper(
+        tmp_path, monkeypatch, caplog, capfd):
+    # A remote that accepts the connection and never answers, behind a URL that carries a
+    # credential, with a credential helper whose argv names an account.
+    listener = socket.create_server(("127.0.0.1", 0))
+    userinfo, helper_argument = "fixture-user:fixture-password-4c1d", "--account=fixture-9e27"
+    url = f"http://{userinfo}@127.0.0.1:{listener.getsockname()[1]}/fixture/repo.git"
+    for name in ("http_proxy", "HTTP_PROXY", "all_proxy", "ALL_PROXY"):
+        monkeypatch.delenv(name, raising=False)
+    helper = fake_credential_helper(tmp_path)
+    workspace, remote, base, head = git_fixture(tmp_path)
+    service = service_fixture(tmp_path, workspace, remote, fake_gh(tmp_path), repository={
+        "remote_url": url, "github": {"executable": str(tmp_path / "gh-fixture"),
+                                      "git_credential_helper": [str(helper), helper_argument]}})
+    service.store.acquire("pr:fixture/repo#7", "corral")
+    receipt = trusted_review(service, tmp_path, head, base)
+    stub_submission(service, monkeypatch)
+    monkeypatch.setattr(repair_objects, "FETCH_TIMEOUT_SECONDS", 1)
+    commands, original = [], subprocess.run
+
+    def record(command, *args, **kwargs):
+        commands.append(list(map(str, command)))
+        return original(command, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", record)
+    caplog.set_level(logging.DEBUG)
+    try:
+        with pytest.raises(repair_objects.GitTimeout, match="fetch") as fetch_timeout:
+            service.submit_pr_repair(
+                "demo", 7, receipt["receipt_id"], expected_head=head, expected_base=base)
+        objects = RepairObjects.for_repository(service.store, service.repositories["demo"])
+        with pytest.raises(repair_objects.GitTimeout, match="push") as push_timeout:
+            objects.push(head, "repair-7", timeout=1)
+    finally:
+        listener.close()
+    # Both commands carried the credential, so its absence below is not vacuous.
+    for operation in ("fetch", "push"):
+        assert any(operation in command and url in command
+                   and any(helper_argument in argument for argument in command)
+                   for command in commands)
+    captured = capfd.readouterr()
+    observed = [caplog.text, captured.out, captured.err]
+    for error in (fetch_timeout.value, push_timeout.value):
+        assert error.__cause__ is None and error.__context__ is None
+        observed += ["".join(traceback.format_exception(type(error), error, error.__traceback__)),
+                     repr(error), repr(vars(error))]
+    for text in observed:
+        for secret in (userinfo, helper_argument, str(helper)):
+            assert secret not in text
+    assert service.store.records("service_event") == {}
 
 
 def test_repair_objects_refuse_file_remotes_outside_development_fixtures(tmp_path):

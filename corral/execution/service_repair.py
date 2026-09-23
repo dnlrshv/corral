@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 from pathlib import Path
@@ -10,7 +11,7 @@ from typing import Any
 from .github_branch import publication_snapshot
 from .internal_review import load as load_review
 from .internal_review import report_body
-from .repair_objects import RepairObjects, checkout_ref, validate_branch
+from .repair_objects import RepairObjects, checkout_head, validate_branch
 from .store import canonical, digest
 from .workspace import safe_path
 
@@ -65,22 +66,21 @@ def _policy(repo: dict[str, Any], policy_id: str) -> dict[str, Any]:
 
 def _checkout(objects: RepairObjects, workspace: str, head: str, branch: str,
               pr_number: int, candidate_paths: list[str]) -> None:
-    """Require a checkout on ``branch`` whose files match the trusted ``head`` exactly.
+    """Require a checkout on ``branch`` at the trusted ``head`` with no detected differences.
 
-    The checkout may be reused after an earlier worker, so its ``.git`` is untrusted: only
-    hardened ref queries run there, and cleanliness is judged against objects fetched from the
-    remote into Corral's own repository, never by the checkout's index, config or hooks.
+    The checkout may be reused after an earlier worker, so its ``.git`` is untrusted: Git never
+    runs there. Its branch and commit are read as data, and cleanliness is judged against
+    objects fetched from the remote into Corral's own repository, never by the checkout's
+    index, config or hooks. See :meth:`RepairObjects.worktree_differences` for what that
+    comparison cannot see.
     """
     root = Path(workspace)
     validate_branch(branch)
-    if checkout_ref(root, "rev-parse", "--is-inside-work-tree") != "true":
+    if not os.path.lexists(root / ".git"):
         raise PermissionError("repair workspace must be a real isolated Git checkout")
     if objects.fetch_branch(branch, pr_number) != head:
         raise PermissionError("remote repair branch head differs from the reviewed candidate")
-    actual = checkout_ref(root, "rev-parse", "--verify", "HEAD")
-    current_branch = checkout_ref(root, "symbolic-ref", "--short", "HEAD")
-    if (actual != head or current_branch != branch
-            or objects.worktree_differences(root, head)):
+    if checkout_head(root, branch) != head or objects.worktree_differences(root, head):
         raise PermissionError("repair workspace must be clean at the exact authorized PR branch head")
     for name in candidate_paths:
         safe_path(root, name)

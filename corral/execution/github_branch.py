@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from . import continuation
-from .repair_objects import RepairObjects, validate_branch
+from .repair_objects import GitTimeout, RepairObjects, validate_branch
 from .store import digest
 
 _SHA = re.compile(r"^[0-9a-f]{40}$")
@@ -265,7 +265,7 @@ class BranchPublisher:
         try:
             push = objects.push(commit["new_head"], branch, timeout=PUSH_TIMEOUT_SECONDS)
             outcome = f"exit={push.returncode}"
-        except subprocess.TimeoutExpired:
+        except GitTimeout:
             outcome = f"timed out after {PUSH_TIMEOUT_SECONDS} s"
         observed = self.reconcile(intent)
         if observed.get("published") is not True:

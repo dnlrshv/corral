@@ -224,12 +224,13 @@ class Store:
 
         return finish_attempt(self, **kwargs)
 
-    def settle_cancelled(self, *, resource, owner, epoch, task, generation, result, audit, expected_state, state):
+    def settle_cancelled(self, *, resource, owner, epoch, task, generation, result, audit, expected_state, state,
+                         owner_from=("uncertain",)):
         from .recovery_store import settle_cancelled
 
         return settle_cancelled(self, resource=resource, owner=owner, epoch=epoch, task=task,
                                 generation=generation, result=result, audit=audit,
-                                expected_state=expected_state, state=state)
+                                expected_state=expected_state, state=state, owner_from=owner_from)
 
     def owned_operation(self, resource, owner, epoch, kind, key, value):
         with self.transaction() as db:

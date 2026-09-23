@@ -2,7 +2,9 @@
 import hmac
 import json
 import os
+import socket
 import sqlite3
+import sys
 import time
 import uuid
 from pathlib import Path
@@ -18,6 +20,13 @@ from .profiles import Profile, STANDARD_NATIVE_PROFILES, resolve
 from .store import Store, canonical, digest
 from .usage import Spool
 from .workspace import apply_manifest, manifest, safe_path
+
+
+def _dispatcher_identity():
+    """Birth identity of the process running a dispatch, in the launcher-identity format."""
+    from .runtime_identity import launched
+
+    return launched(os.getpid(), str(Path(sys.executable).resolve()), socket.gethostname())
 
 
 class Controller:
@@ -37,6 +46,18 @@ class Controller:
             registered[prof.id] = prof
         self.profiles = list(registered.values())
 
+
+    def trusted_host(self, name):
+        """The host declaration with this controller's provider secret file protected.
+
+        Dispatch and reconciliation build worker and verifier boundaries from this one view,
+        so a verifier re-run after an interruption denies exactly what the dispatch denied.
+        """
+        host = self.hosts[name]
+        if self.secret_env_path:
+            host = {**host, "protected_paths": [*(host.get("protected_paths") or ()),
+                                                self.secret_env_path]}
+        return host
 
     def capacity(self, host):
         """Registered capacity that the store admits allocations against for one host."""
@@ -328,7 +349,11 @@ class Controller:
         state = {"status": "dispatching", "attempt": attempt, "epoch": None,
                  "host": execution_host, "profile": spec.get("selection"),
                  "process_status": None, "endpoint": "local", "generation": generation,
-                 "workspace_provenance": workspace_provenance}
+                 "workspace_provenance": workspace_provenance,
+                 # This process alone finishes the attempt. If it dies first (a killed
+                 # launcher, an OOM kill, a reboot), reconciliation settles the attempt only
+                 # after proving this identity dead.
+                 "dispatcher_identity": _dispatcher_identity()}
         # The generation claim (one worker per generation, even for concurrent identical
         # clients), workspace ownership, host allocation, state and invocation commit in one
         # transaction: a duplicate, busy, invalid or over-capacity dispatch acquires nothing.
@@ -384,10 +409,7 @@ class Controller:
                             spool.append({**event, "invocation": attempt, "task": task_id})
                     except (ValueError, TypeError, KeyError, OSError, sqlite3.Error) as error:
                         telemetry_errors.append(type(error).__name__)
-            host = self.hosts[execution_host]
-            if self.secret_env_path:
-                host = {**host, "protected_paths": [*(host.get("protected_paths") or ()),
-                                                    self.secret_env_path]}
+            host = self.trusted_host(execution_host)
             verifier_roots = tuple(str(item) for item in (host.get("verifier_roots") or ()))
             protected_paths = [str(self.store.path.parent.resolve()), str(self.artifacts.resolve()),
                                *verifier_roots, *(host.get("protected_paths") or [])]

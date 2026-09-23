@@ -1,3 +1,16 @@
+"""Digest-bound artifact handoff into a consumer checkout.
+
+The consumer checkout is worker-writable, and so is its ``.git``: the repository's config,
+hooks, attributes and replace refs are untrusted, and ``git add``/``git commit`` there would
+run whatever they name (hooks, a clean filter, an fsmonitor or signing program) with the
+controller's authority. The binding commit still has to land in that repository, so Git runs
+there only as plumbing that reads no checkout file: the blob is hashed from the verified bytes
+held in memory, with no filters, the tree comes from the index and the commit is written and
+moved onto ``HEAD`` directly. Every invocation names the repository explicitly and carries
+command-line overrides (no hooks, no fsmonitor, no signing, no transports), which outrank any
+repository or included config; system and global config and inherited ``GIT_*`` variables are
+not used.
+"""
 import base64
 import hashlib
 import json
@@ -7,12 +20,65 @@ from pathlib import Path
 from typing import Any
 
 from . import continuation
+from .repair_objects import _HARDENING, LOCAL_TIMEOUT_SECONDS, git_environment
 from .scheduler import digest
 from .workspace import apply_manifest, manifest, safe_path
 
 HANDOFF_KIND = "artifact_handoff"
 HANDOFF_INTENT_KIND = "handoff_intent"
 BLOCKED_KIND = "task_blocked"
+
+#: Author and committer of a binding commit; the checkout's own identity config is not used.
+BINDING_IDENTITY = {"name": "Corral", "email": "corral@localhost"}
+#: Overrides on top of the repair hardening: never sign, and never start a transport (a
+#: repository could otherwise lazily fetch missing objects through a command it configures).
+_BINDING_HARDENING = (*_HARDENING, "-c", "commit.gpgSign=false", "-c", "protocol.allow=never")
+
+
+def _consumer_git(root: Path, *args: str, input: bytes | None = None,
+                  env: dict[str, str] | None = None) -> str:
+    """Run one hardened plumbing command against the consumer checkout's repository."""
+    command = ["git", *_BINDING_HARDENING, "--git-dir=" + str(root / ".git"),
+               "--work-tree=" + str(root), *args]
+    try:
+        result = subprocess.run(command, input=input, capture_output=True, check=False, cwd=root,
+                                env=git_environment(env), timeout=LOCAL_TIMEOUT_SECONDS,
+                                **({"stdin": subprocess.DEVNULL} if input is None else {}))
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"consumer binding Git operation timed out: {args[0]}") from None
+    if result.returncode:
+        raise RuntimeError(f"consumer binding Git operation failed: {args[0]}")
+    return result.stdout.decode()
+
+
+def _staged(root: Path) -> list[str]:
+    """Index entries that differ from ``HEAD``, read without touching the checkout's files."""
+    raw = _consumer_git(root, "diff-index", "--cached", "--name-only", "-z", "HEAD", "--")
+    return sorted(name for name in raw.split("\0") if name)
+
+
+def _bind_commit(root: Path, path: str, data: bytes, mode: int, parent: str, message: str) -> str:
+    """Commit exactly ``path`` = ``data`` on top of ``parent`` and move ``HEAD`` to it."""
+    head = _consumer_git(root, "rev-parse", "--verify", "--end-of-options", "HEAD^{commit}").strip()
+    if head != parent:
+        raise PermissionError("consumer HEAD moved during handoff")
+    blob = _consumer_git(root, "hash-object", "-w", "--no-filters", "--stdin", input=data).strip()
+    entry = f"{'100755' if mode & 0o100 else '100644'},{blob},{path}"
+    _consumer_git(root, "update-index", "--add", "--cacheinfo", entry)
+    if _staged(root) != [path]:
+        _consumer_git(root, "read-tree", "HEAD")
+        raise PermissionError("git staging contaminated during handoff")
+    tree = _consumer_git(root, "write-tree").strip()
+    identity = {"GIT_AUTHOR_NAME": BINDING_IDENTITY["name"],
+                "GIT_AUTHOR_EMAIL": BINDING_IDENTITY["email"],
+                "GIT_COMMITTER_NAME": BINDING_IDENTITY["name"],
+                "GIT_COMMITTER_EMAIL": BINDING_IDENTITY["email"]}
+    commit = _consumer_git(root, "commit-tree", "--no-gpg-sign", "-p", head, "-m", message, tree,
+                           env=identity).strip()
+    # Compare-and-swap: a HEAD that moved meanwhile refuses instead of being overwritten.
+    _consumer_git(root, "update-ref", "-m", "corral: " + message, "HEAD", commit, head)
+    return commit
+
 
 def execute_handoff(controller, token: str, spec: dict[str, Any]) -> dict[str, Any]:
     """Transfer and bind a verified artifact to a consumer workspace.
@@ -189,11 +255,7 @@ def execute_handoff(controller, token: str, spec: dict[str, Any]) -> dict[str, A
 
     # Refusals before anything is written release the lock: the workspace is unchanged.
     try:
-        staged = []
-        if (consumer_root / ".git").exists():
-            staged = subprocess.check_output(
-                ["git", "diff", "--cached", "--name-only"], cwd=consumer_root, text=True
-            ).strip().splitlines()
+        staged = _staged(consumer_root) if (consumer_root / ".git").exists() else []
     except BaseException:
         controller.store.transition_owner(lock_resource, owner, epoch, "released")
         raise
@@ -220,16 +282,9 @@ def execute_handoff(controller, token: str, spec: dict[str, Any]) -> dict[str, A
         # Versioned preparation git commit
         consumer_base = current_manifest["base"]
         if spec.get("commit_binding", True) and (consumer_root / ".git").exists():
-            subprocess.run(["git", "add", "--", consumer_path_rel], cwd=consumer_root, check=True, capture_output=True)
-            staged = subprocess.check_output(["git", "diff", "--cached", "--name-only"], cwd=consumer_root, text=True).strip().splitlines()
-            if set(staged) != {consumer_path_rel}:
-                subprocess.run(["git", "reset", "HEAD"], cwd=consumer_root, capture_output=True)
-                raise PermissionError("git staging contaminated during handoff")
-            subprocess.run(
-                ["git", "commit", "-m", f"Bind accepted {producer_path_rel} from {producer_task[:12]}"],
-                cwd=consumer_root, check=True, capture_output=True,
-            )
-            consumer_base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=consumer_root, text=True).strip()
+            consumer_base = _bind_commit(
+                consumer_root, consumer_path_rel, data, file_mode, consumer_base,
+                f"Bind accepted {producer_path_rel} from {producer_task[:12]}")
 
         record = {
             "status": "bound", "key": key, "producer": producer_task,

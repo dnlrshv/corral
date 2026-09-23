@@ -160,13 +160,16 @@ permission error before any candidate test runs. A host whose candidate tests
 need network opts in with `verifier_network: true`. Native coding workers keep
 network egress so a harness can reach its provider. The controller's provider
 secret file (`secret_env`) is denied inside the native worker and native test
-verifier boundaries, wherever it is kept. Other paths are not contained yet:
-deterministic (non-native) verifiers run without a boundary, with the service
-user's full file and network access; the deterministic `use_sandbox` boundary
-re-opens the command's TMPDIR and workspace after its denials, so a protected
-path kept inside either stays readable to that command; and a verifier that
-`reconcile` re-runs after an interrupted attempt runs without a boundary. Use
-isolated repositories for development.
+verifier boundaries, wherever it is kept. A verifier that `reconcile` re-runs
+after an interrupted native attempt gets the same test verifier boundary, and
+reconciliation refuses to run it where that boundary is unavailable; an
+inspection-only task never executes candidate code, so its reconciliation never
+re-runs a verifier. Other paths are not contained yet: deterministic
+(non-native) verifiers, including their `reconcile` re-runs, run without a
+boundary, with the service user's full file and network access; and the
+deterministic `use_sandbox` boundary re-opens the command's TMPDIR and
+workspace after its denials, so a protected path kept inside either stays
+readable to that command. Use isolated repositories for development.
 
 `continue` is the only post-terminal action. It checkpoints a task's terminal
 attempt and schedules exactly one later generation under the same task id, with
@@ -217,7 +220,11 @@ it wrote anything (for example, unrelated staged changes in the consumer
 workspace) blocks its consumer with the reason and leaves the workspace
 unlocked; one that failed after it started writing blocks its consumer and
 keeps the workspace `uncertain` until it is reconciled, and is never retried
-on its own.
+on its own. The consumer checkout's `.git` is worker-writable, so the binding
+commit is built with Git plumbing from the verified bytes, authored as
+`Corral <corral@localhost>`: none of that repository's hooks, filters,
+fsmonitor or signing programs run, and system and global Git config are not
+read.
 
 `wave-status` returns a wave's record, state (each task's status and blocker)
 and dispatch records; `wave-resume` returns a blocked wave to the wave lane
@@ -245,7 +252,12 @@ The execution package defaults to observation, with soft thresholds recorded
 without budget admission caps. Model/effort, harness, billing identities and
 observations remain separate; unknown telemetry stays unknown. Native provider
 routes require explicit controller-owned executable, model, effort, account and
-capability declarations. A same-user process is not an OS security boundary.
+capability declarations. A route's executable runs by its declared path, so a
+virtual-environment interpreter (a symlink to its base interpreter) keeps its
+environment; the route is refused when the file it resolves to, or any symlink
+on the way, lies in the worker's workspace, the controller's state or artifacts,
+or the route's own writable grants. A same-user process is not an OS security
+boundary.
 Adapter errors, warnings and diagnostic tails are redacted before they are
 persisted, but the raw `harness.stdout`/`harness.stderr` streams and the
 worker's narrative and structured output are kept verbatim as task-local
@@ -259,7 +271,14 @@ checks its candidate bytes without inventing Git history. Cancelling a running
 attempt stops its worker's process group and leaves the attempt fenced as
 `uncertain`, with its workspace and capacity held, without running the verifier
 or recording a result. That attempt, like any whose finalization was
-interrupted, is settled through the authenticated client's `reconcile`.
+interrupted, is settled through the authenticated client's `reconcile`. So is
+an attempt whose dispatching process (a service launcher or a client dispatch)
+died before recording an outcome, for example killed or lost in a reboot: once
+that process's recorded birth identity is proven dead and the worker's process
+group is gone, `cancel` and then `reconcile` settle it as cancelled, releasing
+its workspace and capacity with the result in one transaction. While the
+dispatcher lives, or its identity cannot be observed on this host, reconciliation
+refuses.
 Reconciliation collects process, artifact and delivery observations (a cancelled
 attempt without a completed adapter result reports its artifacts as
 unavailable), retains the original failure and usage, and releases only the

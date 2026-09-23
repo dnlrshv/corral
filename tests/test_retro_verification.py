@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from collections import defaultdict
-
 from corral.retro.doc_verification import verify as verify_doc
 from corral.retro.cli import probe_verifier_status
 from corral.retro.providers.base import Availability, SeatResult, SeatStatus
@@ -46,7 +44,8 @@ def test_provider_distinctness_enforced_and_bypassable() -> None:
         "v1": FakeRunner(['{"verdict":"confirm","reasoning":"first"}']),
         "v2": FakeRunner(['{"verdict":"confirm","reasoning":"second"}']),
     }
-    factory = lambda seat: runners[seat.name]
+    def factory(seat):
+        return runners[seat.name]
 
     distinct = verify_candidate(
         candidate(), {12: "evidence"}, registry=registry, drafter_seat="draft",

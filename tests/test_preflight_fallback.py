@@ -15,7 +15,8 @@ import pytest
 from corral.cli import main
 from corral.preflight import brief as preflight_brief
 
-from .preflight_support import build_preflight_repo, clean_preflight_env, parse_brief_output
+# clean_preflight_env is a fixture: importing it registers it for usefixtures below.
+from .preflight_support import build_preflight_repo, clean_preflight_env, parse_brief_output  # noqa: F401
 
 pytestmark = pytest.mark.usefixtures("clean_preflight_env")
 

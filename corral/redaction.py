@@ -223,6 +223,18 @@ _PYTHON_BLOCK_OPENER = re.compile(
     r"|match|case)\b|.*->)")
 
 
+def _opens_python_block(text: str, position: int) -> bool:
+    """Whether the line before ``position`` is a compound-statement header.
+
+    A block-opening ``:`` is never inside an open bracket, so a key after an unclosed
+    ``(``, ``[`` or ``{`` is a mapping key (``if x: d = {API_KEY:``). Counting with
+    ``<=`` keeps the closing line of a multi-line signature (``) -> Token:``).
+    """
+    prefix = text[text.rfind("\n", 0, position) + 1:position]
+    return (sum(map(prefix.count, "([{")) <= sum(map(prefix.count, ")]}"))
+            and bool(_PYTHON_BLOCK_OPENER.match(prefix)))
+
+
 def _in_comment(text: str, position: int) -> bool:
     """Whether ``position`` follows a ``#`` on its line (a full-line or trailing comment)."""
     line_start = text.rfind("\n", 0, position) + 1
@@ -301,10 +313,11 @@ def check_source_text_safe(text: str, *, source_name: str | None = None) -> list
         if python_source and not quoted and value in type_names:
             continue
         # A ``:`` that ends a compound-statement line opens a block (``if not token:``,
-        # ``def load() -> Snapshot:``); the next line is not its value.
+        # ``def load() -> Snapshot:``); the next line is not its value. A quoted key is
+        # always a mapping key, whatever starts the line.
         if (python_source and match.group("sep") == ":" and "\n" in match.group("sep_space")
-                and _PYTHON_BLOCK_OPENER.match(
-                    text, text.rfind("\n", 0, match.start()) + 1, match.start())):
+                and match.group("key")[:1] not in "\"'"
+                and _opens_python_block(text, match.start())):
             continue
         offenders.append(assignment.pattern)
     return offenders

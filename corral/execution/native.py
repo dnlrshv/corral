@@ -175,7 +175,8 @@ def prepare(*, spec: dict, host: dict, profile, task_dir: Path, workspace: str, 
             workspace=workspace, state_dir=state_dir, artifacts=artifacts, task_dir=task_dir,
             task_id=task_id, attempt=attempt,
             protected_paths=tuple(host.get("protected_paths") or ()),
-            probe_sentinels=tuple(host.get("verifier_probe_sentinels") or ()))
+            probe_sentinels=tuple(host.get("verifier_probe_sentinels") or ()),
+            network=verifier_containment.network_opt_in(host))
     packet_record = None
     if route.inspection_only:
         context = json.loads(Path(context_path).read_text())

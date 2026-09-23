@@ -2,7 +2,9 @@
 
 Verifiers retain workspace read/write and controller-owned verifier bundles, but never
 inherit publisher or provider account stores merely because they share a macOS user.
-This is a scoped file boundary, not hostile-same-UID isolation.
+Candidate tests also get no network, loopback included, unless the host declares
+``verifier_network: true``; the launch probe demonstrates the denial before they run.
+This is a scoped file and network boundary, not hostile-same-UID isolation.
 """
 from __future__ import annotations
 
@@ -25,13 +27,22 @@ def _inside(path: Path, roots: tuple[Path, ...]) -> bool:
     return any(path == root or root in path.parents for root in roots)
 
 
+def network_opt_in(host: dict | None) -> bool:
+    """A host's explicit ``verifier_network`` opt-in. Without it, candidate tests get no network."""
+    value = (host or {}).get("verifier_network", False)
+    if not isinstance(value, bool):
+        raise ValueError("verifier_network must be true or false")
+    return value
+
+
 def prepare(*, workspace: str | Path, state_dir: str | Path, artifacts: str | Path,
             task_dir: str | Path, task_id: str, attempt: str, protected_paths: tuple[str, ...] = (),
-            probe_sentinels: tuple[str, ...] = ()) -> Prepared:
+            probe_sentinels: tuple[str, ...] = (), network: bool = False) -> Prepared:
     """Build and prove the verifier boundary before candidate tests execute.
 
     ``probe_sentinels`` are controller host configuration for disposable fixture files.
     They must already be regular files under a protected root and are never task input.
+    ``network`` is the host's opt-in (see ``network_opt_in``); network is denied by default.
     """
     root, state = Path(workspace).resolve(), Path(state_dir).resolve()
     artifact_root, output = Path(artifacts).resolve(), Path(task_dir).resolve()
@@ -57,7 +68,7 @@ def prepare(*, workspace: str | Path, state_dir: str | Path, artifacts: str | Pa
     boundary = containment.Boundary(
         workspace=str(root), scratch=str(scratch), tmpdir=str(scratch), deny=tuple(sorted(denied)),
         sentinels=tuple(sorted({*generated, *(str(item) for item in supplied)})),
-        label="seatbelt-test-verifier-boundary",
+        network=network, label="seatbelt-test-verifier-boundary",
     )
     overlaps = containment.refuse_overlaps(boundary, scratch_root=str(scratch_root))
     if overlaps:

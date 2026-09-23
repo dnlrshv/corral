@@ -153,8 +153,14 @@ reservation, and a refused dispatch acquires no ownership or capacity.
 Input/result manifests bind the Git base and explicitly selected file digests;
 changed destinations fail closed. Verifiers run in their own process group under
 a wall-clock bound (`verifier_timeout_seconds` per host, default 3600 s); one
-that exceeds it is killed and receipted as timed out with exit code 124. Use
-isolated repositories for development.
+that exceeds it is killed and receipted as timed out with exit code 124. Native
+test verifiers get no network, loopback included: their Seatbelt profile denies
+`network*`, and the launch probe must see a loopback connect fail with a
+permission error before any candidate test runs. A host whose candidate tests
+need network opts in with `verifier_network: true`. Native coding workers keep
+network egress so a harness can reach its provider. The controller's provider
+secret file (`secret_env`) is denied to every worker and verifier boundary,
+wherever it is kept. Use isolated repositories for development.
 
 `continue` is the only post-terminal action. It checkpoints a task's terminal
 attempt and schedules exactly one later generation under the same task id, with

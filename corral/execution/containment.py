@@ -13,8 +13,9 @@ Proof discipline, required because a missing path proves nothing:
 * denial targets are controller-created disposable sentinels that already exist, so no
   real credential file is ever opened and no probe file is planted in trusted state;
 * sentinel digests are compared before/after the probe, so a mutated sentinel fails;
-* the receipt states exactly which operations are contained (file read/write) and which
-  are not (same-UID signals, Mach IPC, detached descendants, host reboot).
+* the receipt states exactly which operations are contained (file read/write, plus network
+  for a boundary that denies it) and which are not (same-UID signals, Mach IPC, detached
+  descendants, host reboot, and network egress where the boundary allows it).
 """
 from __future__ import annotations
 
@@ -74,13 +75,20 @@ SECRET_FILE_ALLOW_REGEXES: tuple[str, ...] = (
 
 PROBE_NAME = ".corral-containment-probe"
 CONTAINED_OPERATIONS: tuple[str, ...] = ("file-read*", "file-write*")
+NETWORK_OPERATION = "network*"
+NETWORK_NOT_CONTAINED = ("network egress (allowed by policy: a native harness reaches its provider; "
+                         "a test verifier only with the host's verifier_network opt-in)")
 NOT_CONTAINED: tuple[str, ...] = (
     "signal delivery to same-UID processes (controller included)",
     "mach IPC and shared memory with same-UID processes",
     "detached descendants that outlive the process group",
     "host reboot / persistent host state",
-    "network egress (allowed by policy so the harness can reach its provider)",
+    NETWORK_NOT_CONTAINED,
 )
+# A boundary without network proves the denial by connecting to the loopback discard port:
+# the kernel must refuse the connect with EPERM/EACCES. A missing denial shows up as a refused
+# or accepted connection, and no packet can leave the host either way.
+NETWORK_PROBE_TARGET = "127.0.0.1:9"
 ISOLATION_CLAIM = ("scoped per-task file boundary enforced by ephemeral macOS Seatbelt; "
                    "not full OS isolation and not a hostile-same-UID kernel boundary")
 
@@ -135,6 +143,14 @@ def append_or_create(target):
         os.unlink(target)
 
 
+def connect(target):
+    import socket
+    host, port = target.rsplit(":", 1)
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as handle:
+        handle.settimeout(2)
+        handle.connect((host, int(port)))
+
+
 for target in checks.get("write_allowed_dirs", []):
     attempt(lambda t=target: create_and_remove(t), "write:" + target, "allowed")
 for target in checks.get("write_allowed_files", []):
@@ -142,6 +158,8 @@ for target in checks.get("write_allowed_files", []):
 for target in checks.get("sentinels", []):
     attempt(lambda t=target: read_one_byte(t), "read-file:" + target, "denied")
     attempt(lambda t=target: open_for_write(t), "write-file:" + target, "denied")
+for target in checks.get("network_denied", []):
+    attempt(lambda t=target: connect(t), "network-connect:" + target, "denied")
 
 print(json.dumps(report))
 """ % PROBE_NAME
@@ -179,6 +197,14 @@ class Boundary:
 
     def writable_roots(self) -> tuple[str, ...]:
         return tuple(dict.fromkeys((self.workspace, self.scratch, self.tmpdir, *self.write_allow)))
+
+
+def scope(boundary: Boundary) -> tuple[list[str], list[str]]:
+    """The operations a boundary contains, and the ones it states it does not contain."""
+    if boundary.network:
+        return list(CONTAINED_OPERATIONS), list(NOT_CONTAINED)
+    return ([*CONTAINED_OPERATIONS, NETWORK_OPERATION],
+            [item for item in NOT_CONTAINED if item != NETWORK_NOT_CONTAINED])
 
 
 def sensitive_account_stores(home: Path | None = None) -> list[str]:
@@ -241,6 +267,10 @@ def build_profile(boundary: Boundary) -> str:
     ]
     if boundary.network:
         rules.append("(allow network*)")
+    else:
+        # `(deny default)` already implies this; it is stated so the audited profile text
+        # carries the denial that the launch probe demonstrates.
+        rules.append("(deny network*)")
     for denied in deny:
         rules.append(f"(deny file-read* file-write* (subpath {_quote(denied)}))")
         rules.append(f"(deny file-read* file-write* (literal {_quote(denied)}))")
@@ -318,10 +348,11 @@ def demonstrate(boundary: Boundary) -> dict:
     """
     binary = sandbox_exec()
     profile = build_profile(boundary)
+    contained, not_contained = scope(boundary)
     receipt: dict = {"available": binary is not None, "passed": False, "sandbox_exec": binary,
                      "checks": [], "blocker": None, "profile_digest": profile_digest(profile),
-                     "contained_operations": list(CONTAINED_OPERATIONS),
-                     "not_contained": list(NOT_CONTAINED), "isolation_claim": ISOLATION_CLAIM,
+                     "contained_operations": contained, "network": boundary.network,
+                     "not_contained": not_contained, "isolation_claim": ISOLATION_CLAIM,
                      "configured_denials": sorted(set(boundary.deny) | set(boundary.deny_write)),
                      "sentinels": sorted({str(Path(item).resolve()) for item in boundary.sentinels})}
     if binary is None:
@@ -350,9 +381,10 @@ def demonstrate(boundary: Boundary) -> dict:
                               + ", ".join(missing))
         return receipt
     before = {item: _digest_file(item) for item in sentinels}
+    network_denied = [] if boundary.network else [NETWORK_PROBE_TARGET]
     payload = {"write_allowed_dirs": [str(item.resolve()) for item in writable],
                "write_allowed_files": [str(item.resolve()) for item in writable_files],
-               "sentinels": sentinels}
+               "sentinels": sentinels, "network_denied": network_denied}
     command = wrapped(profile, [sys.executable, "-I", "-", json.dumps(payload)])
     receipt["probe_command_digest"] = hashlib.sha256(json.dumps(command).encode()).hexdigest()
     try:
@@ -380,6 +412,7 @@ def demonstrate(boundary: Boundary) -> dict:
     required = {f"write:{Path(item).resolve()}" for item in writable}
     required |= {f"append-or-create:{Path(item).resolve()}" for item in writable_files}
     required |= {f"{kind}:{item}" for item in sentinels for kind in ("read-file", "write-file")}
+    required |= {f"network-connect:{item}" for item in network_denied}
     missing_checks = sorted(required - observed)
     if mutated:
         receipt["blocker"] = "containment sentinel changed during probe: " + ", ".join(mutated)

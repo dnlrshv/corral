@@ -3,6 +3,7 @@ import subprocess
 
 import pytest
 
+from corral.execution.agent import AgentConfig
 from corral.execution.client import Client
 
 
@@ -28,3 +29,16 @@ def test_source_executor_requires_explicit_development_mode():
     with pytest.raises(ValueError, match="development_mode"):
         Client({"python": "python3", "transport": "local", "source": "/checkout",
                 "controller_config": "/private/controller.json"}).call("status", task_id="task")
+
+
+def test_agent_config_defaults_to_installed_runtime_without_checkout_source(tmp_path):
+    production = AgentConfig(controller_config=tmp_path / "controller.json")
+    assert production.as_client_config() == {
+        "python": production.python,
+        "controller_config": str(tmp_path / "controller.json"),
+        "transport": "local",
+    }
+    development = AgentConfig(controller_config=tmp_path / "controller.json",
+                              development_mode=True)
+    assert development.as_client_config()["development_mode"] is True
+    assert "source" in development.as_client_config()

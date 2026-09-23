@@ -64,6 +64,10 @@ def _parser() -> argparse.ArgumentParser:
     source.add_argument("--spec", type=Path)
     wave.add_argument("--objective")
     wave.add_argument("--host")
+    wave_status = sub.add_parser("wave-status")
+    wave_status.add_argument("--wave-id", required=True)
+    wave_resume = sub.add_parser("wave-resume")
+    wave_resume.add_argument("--wave-id", required=True)
     sub.add_parser("tick")
     returned = sub.add_parser("return")
     returned.add_argument("--event-id", required=True)
@@ -127,6 +131,8 @@ def main(argv: list[str] | None = None) -> int:
             spec = json.loads(args.spec.read_text())
             result = client.call("wave-advanced", wave_id=args.wave_id, tasks=spec["tasks"],
                                  handoffs=spec.get("handoffs"))
+    elif args.command in ("wave-status", "wave-resume"):
+        result = client.call(args.command, wave_id=args.wave_id)
     elif args.command == "tick":
         result = client.call("tick")
     else:

@@ -164,17 +164,50 @@ def execute_handoff(controller, token: str, spec: dict[str, Any]) -> dict[str, A
     # 4. Acquire exclusive workspace lock for atomic versioned preparation transition
     lock_resource = "workspace:" + str(consumer_root)
     owner = "wave-handoff:" + key
-    epoch = controller.store.acquire(lock_resource, owner)
-
     try:
-        # Check git clean staging state: no unrelated files staged
+        epoch = controller.store.acquire(lock_resource, owner)
+    except PermissionError:
+        held = controller.store.ownership(lock_resource)
+        if held is not None and held[0] == owner:
+            # This handoff's own earlier transfer stopped part way; what it wrote is unknown.
+            # A recorded failure of that transfer is its more precise reason, so it is kept.
+            prior = controller.store.get(BLOCKED_KIND, consumer_task) or {}
+            if prior.get("status") == "blocked" and prior.get("key") == key:
+                return prior
+            blocker = {
+                "status": "blocked",
+                "reason": (f"artifact handoff into {consumer_path_rel} has an uncertain "
+                           "outcome; reconcile the consumer workspace before retry"),
+                "key": key, "producer": producer_task, "consumer": consumer_task,
+            }
+            controller.store.replace(BLOCKED_KIND, consumer_task, blocker)
+            return blocker
+        # Another owner (a running task, another handoff) holds the consumer workspace. That
+        # is a wait, not a failure: the handoff is retried once the owner lets go.
+        return {"status": "waiting", "reason": "consumer workspace is held by another owner",
+                "key": key, "producer": producer_task, "consumer": consumer_task}
+
+    # Refusals before anything is written release the lock: the workspace is unchanged.
+    try:
+        staged = []
         if (consumer_root / ".git").exists():
             staged = subprocess.check_output(
                 ["git", "diff", "--cached", "--name-only"], cwd=consumer_root, text=True
             ).strip().splitlines()
-            if staged:
-                raise PermissionError(f"unrelated staged changes in consumer workspace: {staged}")
+    except BaseException:
+        controller.store.transition_owner(lock_resource, owner, epoch, "released")
+        raise
+    if staged:
+        controller.store.transition_owner(lock_resource, owner, epoch, "released")
+        blocker = {
+            "status": "blocked",
+            "reason": f"unrelated staged changes in consumer workspace: {staged}",
+            "key": key, "producer": producer_task, "consumer": consumer_task,
+        }
+        controller.store.replace(BLOCKED_KIND, consumer_task, blocker)
+        return blocker
 
+    try:
         intent = {"epoch": epoch, "status": "transferring", "key": key, "digest": artifact_digest}
         controller.store.replace(HANDOFF_INTENT_KIND, key, intent)
 

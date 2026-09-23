@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from corral.redaction import redact_text
+
 from . import continuation
 from .store import canonical, digest
 from .wave import WaveRunner
@@ -80,13 +82,25 @@ def resolve(service, name: str, wave_id: str, *, objective: str | None = None,
 SPLIT_HOST = "a service wave runs all of its tasks on one execution host"
 
 
-def _single_host(service, tasks: list[dict[str, Any]]) -> None:
-    """Refuse at admission a wave the service lane could never advance."""
+def _admissible(service, tasks: list[dict[str, Any]]) -> None:
+    """Refuse at admission a wave the service lane could never advance.
+
+    Its tasks must share one execution host, and each resource request must pass the
+    same check service admission applies to an interactive event: a positive integer CPU
+    count and a non-negative integer memory size.
+    """
     hosts = set()
     for item in tasks:
         spec = item.get("spec") if isinstance(item, dict) else None
-        requested = spec.get("host") if isinstance(spec, dict) else None
-        hosts.add(requested or service.controller.default_host)
+        if not isinstance(spec, dict):
+            raise ValueError("wave task requires a spec object")
+        hosts.add(spec.get("host") or service.controller.default_host)
+        cpu, memory = spec.get("cpu", 1), spec.get("memory_mb", 0)
+        name = item.get("name") or item.get("request_id")
+        if not isinstance(cpu, int) or isinstance(cpu, bool) or cpu <= 0:
+            raise ValueError(f"invalid wave task CPU request: {name}")
+        if not isinstance(memory, int) or isinstance(memory, bool) or memory < 0:
+            raise ValueError(f"invalid wave task memory request: {name}")
     if len(hosts) > 1:
         raise PermissionError(f"{SPLIT_HOST}; requested {sorted(hosts)}")
 
@@ -94,7 +108,7 @@ def _single_host(service, tasks: list[dict[str, Any]]) -> None:
 def submit(service, name: str, wave_id: str, *, objective: str | None = None,
            host: str | None = None) -> dict[str, Any]:
     tasks, handoffs = resolve(service, name, wave_id, objective=objective, host=host)
-    _single_host(service, tasks)
+    _admissible(service, tasks)
     record = WaveRunner(service.controller, service.token).submit_wave(wave_id, tasks, handoffs)
     binding = {"plan": name, "wave_id": wave_id, "tasks": tasks, "handoffs": handoffs,
                "resolved_digest": digest({"tasks": tasks, "handoffs": handoffs})}
@@ -105,7 +119,7 @@ def submit(service, name: str, wave_id: str, *, objective: str | None = None,
 def submit_advanced(service, wave_id: str, tasks: list[dict[str, Any]],
                     handoffs: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """Admit caller-supplied controller task specifications as one service wave."""
-    _single_host(service, tasks)
+    _admissible(service, tasks)
     return WaveRunner(service.controller, service.token).submit_wave(wave_id, tasks, handoffs)
 
 
@@ -260,8 +274,11 @@ def reconcile_dispatches(service) -> set[str]:
         if ((completed or (same_generation and state_status in terminal))
                 and (state_status != "cancelled"
                      or _cancel_settled(service, task_id, key, state))):
+            # A result names its own terminal status (a cancelled attempt's result is not
+            # accepted, yet it did not fail); only an unnamed rejection reads as failed.
             terminal_status = ("completed" if result and result.get("accepted")
-                               else "failed" if result else state_status)
+                               else (result.get("terminal_status") or "failed") if result
+                               else state_status)
             # A controller dispatch that adopted the reservation settles its own allocation;
             # one that never did (a remote executor route) returns it here.
             service.store.release_reservation(task_id, key)
@@ -287,41 +304,105 @@ def reconcile_dispatches(service) -> set[str]:
     return reconciled
 
 
+WAVE_CURSOR = "wave-rotation"
+
+
+def _controller_runner_holds(service, wave_id: str) -> bool:
+    """True while the controller's own ``run-wave`` runner owns (or may own) this wave.
+
+    That runner advances the wave itself; the service leaves it alone until the runner's
+    ownership is released, so the two never race on the wave's state.
+    """
+    owner = service.store.ownership(f"wave_runner:{wave_id}")
+    return owner is not None and owner[2] != "released"
+
+
+def _eligible(service, wave_id: str, state: dict[str, Any],
+              waves: dict[str, dict[str, Any]]) -> bool:
+    task_ids = (waves.get(wave_id) or {}).get("task_ids") or ()
+    if not task_ids:
+        return False
+    if state.get("status") != "running" and not any(
+            continuation.pending_generation(service.store, task) is not None
+            for task in task_ids):
+        return False
+    return not _controller_runner_holds(service, wave_id)
+
+
+def _rotation(service, eligible: list[str]) -> list[str]:
+    """Eligible waves starting from the rotation cursor, which then moves one wave on.
+
+    Every wave lane tick steps every eligible wave; the rotation only decides which wave
+    is offered the tick's dispatch budget first, so no wave can hold it indefinitely.
+    """
+    cursor = (service.store.get("scheduler_cursor", WAVE_CURSOR) or {}).get("next")
+    start = next((index for index, wave_id in enumerate(eligible)
+                  if cursor is not None and wave_id >= cursor), 0)
+    order = eligible[start:] + eligible[:start]
+    following = order[1] if len(order) > 1 else order[0]
+    if following != cursor:
+        service.store.replace("scheduler_cursor", WAVE_CURSOR, {"next": following})
+    return order
+
+
+def _launched(result: dict[str, Any]) -> int:
+    """Dispatches that used the tick's budget: a launch was attempted, not refused."""
+    return sum(1 for item in result.get("dispatched") or ()
+               if item.get("status") in ("active", "uncertain"))
+
+
+def _block(service, wave_id: str, reason: str) -> dict[str, Any] | None:
+    state = service.store.get("wave_state", wave_id) or {}
+    blocked = {**state, "wave_id": wave_id, "status": "blocked", "error": reason}
+    if state == blocked:
+        return None
+    service.store.replace("wave_state", wave_id, blocked)
+    return {"wave_id": wave_id, "status": "blocked", "is_terminal": True, "error": reason}
+
+
+def _step(service, runner: WaveRunner, wave_id: str, task_ids: list[str],
+          budget: int) -> dict[str, Any] | None:
+    hosts = {service.controller.context(task)["host"] for task in task_ids}
+    if len(hosts) != 1:
+        # Admission refuses these; one stored by another path (the controller's own wave
+        # submission) is blocked with its reason instead of failing every service tick.
+        return _block(service, wave_id, SPLIT_HOST)
+    host = next(iter(hosts))
+    # Capacity in use is read from the store, the authority every dispatch reserves
+    # against: service admissions, launched wave tasks and running controller attempts.
+    # It is re-read for each wave, so an earlier wave's launch this tick is counted.
+    return runner.step(
+        wave_id, host, dispatcher=lambda w, task, h: _dispatch(service, w, task, h),
+        running=service.store.active_allocations(host),
+        capacity=service.controller.capacity(host), dispatch_limit=budget)
+
+
 def progress(service, *, reconcile: bool = True) -> list[dict[str, Any]]:
-    """Advance one admitted wave in code without blocking on a model worker."""
+    """Advance every admitted wave in code without blocking on a model worker.
+
+    Each eligible wave is stepped once per wave lane tick, sharing the tick's dispatch
+    budget in rotating order. A wave whose step fails is blocked with the reason, so one
+    broken wave can neither fail the service tick nor hold back the others.
+    """
     if reconcile:
         reconcile_dispatches(service)
+    waves = service.store.records("wave")
+    eligible = sorted(wave_id for wave_id, state in service.store.records("wave_state").items()
+                      if _eligible(service, wave_id, state, waves))
+    if not eligible:
+        return []
     progressed = []
     runner = WaveRunner(service.controller, service.token)
-    for wave_id, state in service.store.records("wave_state").items():
-        wave = service.store.get("wave", wave_id) or {}
-        task_ids = wave.get("task_ids") or []
-        continuation_pending = any(
-            continuation.pending_generation(service.store, task) is not None
-            for task in task_ids)
-        if state.get("status") != "running" and not continuation_pending:
-            continue
-        if not task_ids:
-            continue
-        hosts = {service.controller.context(task)["host"] for task in task_ids}
-        if len(hosts) != 1:
-            # Admission refuses these; one stored by another path (the controller's own wave
-            # submission) is blocked with its reason instead of failing every service tick.
-            blocked = {**state, "wave_id": wave_id, "status": "blocked", "error": SPLIT_HOST}
-            if state != blocked:
-                service.store.replace("wave_state", wave_id, blocked)
-                progressed.append({"wave_id": wave_id, "status": "blocked",
-                                   "is_terminal": True, "error": SPLIT_HOST})
-            continue
-        host = next(iter(hosts))
-        # Capacity in use is read from the store, the authority every dispatch reserves
-        # against: service admissions, launched wave tasks and running controller attempts.
-        result = runner.step(
-            wave_id, host, dispatcher=lambda w, task, h: _dispatch(service, w, task, h),
-            running=service.store.active_allocations(host),
-            capacity=service.controller.capacity(host), dispatch_limit=service.max_dispatch)
-        progressed.append(result)
-        break
+    budget = service.max_dispatch
+    for wave_id in _rotation(service, eligible):
+        try:
+            result = _step(service, runner, wave_id, waves[wave_id]["task_ids"], budget)
+        except Exception as error:
+            result = _block(service, wave_id, redact_text(
+                f"wave step failed: {type(error).__name__}: {error}"))
+        if result is not None:
+            progressed.append(result)
+            budget = max(0, budget - _launched(result))
     return progressed
 
 
@@ -333,14 +414,40 @@ def running_resources(service, host: str | None = None) -> list[dict[str, Any]]:
 
 
 def pending(service) -> bool:
+    """True while some wave is one the wave lane would step."""
     waves = service.store.records("wave")
-    for wave_id, value in service.store.records("wave_state").items():
-        if value.get("status") == "running":
-            return True
-        if any(continuation.pending_generation(service.store, task) is not None
-               for task in (waves.get(wave_id) or {}).get("task_ids", ())):
-            return True
-    return False
+    return any(_eligible(service, wave_id, state, waves)
+               for wave_id, state in service.store.records("wave_state").items())
+
+
+def status(service, wave_id: str) -> dict[str, Any]:
+    """Read-only wave status: the admitted record, its state and its dispatch records."""
+    wave = service.store.get("wave", wave_id)
+    if wave is None:
+        raise KeyError(wave_id)
+    task_ids = set(wave.get("task_ids") or ())
+    dispatches = {key: record for key, record in service.store.records("wave_dispatch").items()
+                  if (record.get("task") or key) in task_ids}
+    return {"wave_id": wave_id, "wave": wave, "state": service.store.get("wave_state", wave_id),
+            "plan": service.store.get("service_wave_plan", wave_id),
+            "dispatches": dispatches,
+            "controller_runner": _controller_runner_holds(service, wave_id)}
+
+
+def resume(service, wave_id: str) -> dict[str, Any]:
+    """Return a blocked wave to the wave lane once its cause has been dealt with.
+
+    This only makes the next wave lane tick step the wave again; every fence still
+    applies. A cause that persists blocks it again with the same reason, and a dispatch
+    left uncertain keeps its task blocked until it is reconciled.
+    """
+    state = service.store.get("wave_state", wave_id)
+    if state is None:
+        raise KeyError(wave_id)
+    if state.get("status") == "blocked":
+        reopened = {key: value for key, value in state.items() if key != "error"}
+        service.store.replace("wave_state", wave_id, {**reopened, "status": "running"})
+    return status(service, wave_id)
 
 
 def select_lane(store, *, service_ready: bool, wave_ready: bool) -> str:

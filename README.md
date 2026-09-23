@@ -186,24 +186,51 @@ Finite waves run through the maintained service. The service endpoint's
 (`wave_plans`): every task's repository, host, workspace (a `workspace_key`
 into the repository's `wave_workspaces`), role and defaults come from
 registered profiles, and a plan may allow an objective or host override only
-if it says so. `wave-advanced` admits caller-supplied controller task
+if it says so. A plan task's resources (`cpu`, `memory_mb`) and `command`
+always come from its repository's `task_defaults`; a plan cannot set them per
+task. `wave-advanced` admits caller-supplied controller task
 specifications. Both refuse a wave whose tasks span more than one execution
-host. `wave` is kept as an alias of `wave-advanced`: it used to
+host, and a task whose `cpu` is not a positive integer or whose `memory_mb` is
+not a non-negative integer, the same resource check service admission applies.
+`wave` is kept as an alias of `wave-advanced`: it used to
 start a detached wave runner through the controller, and now, like
 `wave-advanced`, only admits the wave (idempotently by wave id) and returns
 its record. The service tick then advances admitted waves alongside
 interactive events, alternating lanes when both have work, and launches each
-ready wave task as a detached worker. A wave task reserves its capacity in the
+ready wave task as a detached worker. Every wave lane tick steps every running
+wave, and the tick's dispatch budget (`max_dispatch_per_tick`) is offered to
+the waves in rotating order, so a wave whose tasks wait (paused, or held back by
+capacity) never holds back another. A wave whose step fails is blocked with the
+reason instead of failing the tick. A wave the controller's own `run-wave`
+runner owns is left to that runner. A wave task reserves its capacity in the
 controller store in the same transaction as its dispatch claim, behind the
 same workspace fence as service admission; the controller dispatch adopts that
 reservation, and a refusal writes nothing and leaves the task ready. Dispatch
 records are bound to the task generation their launcher will claim and are
 reconciled on every tick: a launcher proven dead before claiming returns its
 reservation, and a dispatch that cannot be observed stays `uncertain` and
-blocks the wave until it is reconciled. A task larger than its whole host
-blocks instead of waiting forever. The controller's own `run-wave` runner
+blocks the wave until it is reconciled. A task that can never be admitted (an
+invalid resource request, one larger than its whole host, or a route its host
+does not serve) blocks instead of waiting forever. An artifact handoff whose
+consumer workspace is held by another owner waits for it; one refused before
+it wrote anything (for example, unrelated staged changes in the consumer
+workspace) blocks its consumer with the reason and leaves the workspace
+unlocked; one that failed after it started writing blocks its consumer and
+keeps the workspace `uncertain` until it is reconciled, and is never retried
+on its own.
+
+`wave-status` returns a wave's record, state (each task's status and blocker)
+and dispatch records; `wave-resume` returns a blocked wave to the wave lane
+once its cause is dealt with, and a cause that persists blocks it again. Both
+are service endpoint actions and `corral-agent` commands. A wave dispatch whose
+launcher died before claiming its generation stays `uncertain`; since no worker
+can have started, recover it by dispatching that task through the controller
+(`dispatch`), after which reconciliation settles the wave dispatch from the
+task's result and reopens the wave. The controller's own `run-wave` runner
 records its birth identity, so `reconcile-wave` never mistakes a reused PID
-for a live runner.
+for a live runner. Process birth identities read `ps` start times in a fixed
+locale and time zone, so an identity recorded in one environment is recognized
+in another.
 
 Clients run the installed package in isolated mode (`python -I`) from `/`; a
 source checkout is used only with an explicit `development_mode: true`.

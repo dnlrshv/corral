@@ -49,6 +49,12 @@ def main(argv: list[str] | None = None) -> int:
         from .service_wave import submit_advanced
         result = submit_advanced(service, request["wave_id"], request["tasks"],
                                  request.get("handoffs"))
+    elif action == "wave-status":
+        from .service_wave import status as wave_status
+        result = wave_status(service, request["wave_id"])
+    elif action == "wave-resume":
+        from .service_wave import resume
+        result = resume(service, request["wave_id"])
     elif action == "fetch":
         event = service.store.get("service_event", request["event_id"])
         if not event or not event.get("task_id"):

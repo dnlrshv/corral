@@ -133,3 +133,87 @@ Near-term roadmap: stabilize configuration and registry schemas, expand portable
 ## License
 
 Apache-2.0. See [`LICENSE`](LICENSE).
+
+### Optional managed execution
+
+`python -m corral.execution.demo /tmp/corral-example` runs one synthetic worker
+through explicit profile resolution, durable observation, and an exact-candidate
+verifier. `python -m corral.execution.pr_demo /tmp/corral-pr-example` exercises a
+fake GitHub lifecycle with a process-backed repair and guarded merge receipt.
+No provider calls, service installation, or GitHub writes occur in these demos.
+
+`corral-execution-client --config private-client.json --request request.json`
+(or `python -m corral.execution.client`) supports local and authenticated SSH
+channels. Requests use `submit`, `steer`, `status`, `dispatch`, `dispatch-wave`,
+`continue`, `cancel`, `snapshot`, and `transfer`; worker execution is detached
+from the client. Host capacity, enabled routes, profiles and controller paths
+are private config. The controller store is the only capacity authority: the
+service reserves capacity when it claims an event, the dispatch adopts that
+reservation, and a refused dispatch acquires no ownership or capacity.
+Input/result manifests bind the Git base and explicitly selected file digests;
+changed destinations fail closed. Verifiers run in their own process group under
+a wall-clock bound (`verifier_timeout_seconds` per host, default 3600 s); one
+that exceeds it is killed and receipted as timed out with exit code 124. Native
+test verifiers get no network, loopback included: their Seatbelt profile denies
+`network*`, and the launch probe must see a loopback connect fail with a
+permission error before any candidate test runs. A host whose candidate tests
+need network opts in with `verifier_network: true`. Native coding workers keep
+network egress so a harness can reach its provider. The controller's provider
+secret file (`secret_env`) is denied inside the native worker and native test
+verifier boundaries, wherever it is kept. Other paths are not contained yet:
+deterministic (non-native) verifiers run without a boundary, with the service
+user's full file and network access; the deterministic `use_sandbox` boundary
+re-opens the command's TMPDIR and workspace after its denials, so a protected
+path kept inside either stays readable to that command; and a verifier that
+`reconcile` re-runs after an interrupted attempt runs without a boundary. Use
+isolated repositories for development.
+
+`continue` is the only post-terminal action. It checkpoints a task's terminal
+attempt and schedules exactly one later generation under the same task id, with
+its own objective, verifier policy, candidate declaration, artifact directory,
+worker session and usage attribution. It rebinds nothing else: host, endpoint,
+workspace, profile/model/route, role, resources, dependencies, command and
+credentials stay bound to the immutable submitted request, and a payload naming
+any of them is refused rather than merged. It never dispatches, retries or caps
+on its own, a repeated continuation id deduplicates, and an active, unresolved
+or cancelled attempt must be reconciled first. `status` then reports the
+current result together with the immutable per-generation history and lineage,
+so an accepted earlier artifact stays addressable and its receipt is never
+re-derived or overwritten.
+
+The execution package defaults to observation, with soft thresholds recorded
+without budget admission caps. Model/effort, harness, billing identities and
+observations remain separate; unknown telemetry stays unknown. Native provider
+routes require explicit controller-owned executable, model, effort, account and
+capability declarations. A same-user process is not an OS security boundary.
+Adapter errors, warnings and diagnostic tails are redacted before they are
+persisted, but the raw `harness.stdout`/`harness.stderr` streams and the
+worker's narrative and structured output are kept verbatim as task-local
+evidence; treat a task directory as sensitive.
+Validate installed routes and effective permissions before admitting real work;
+fixture verdicts do not establish native isolation.
+
+Checkout workspaces require readable Git metadata before inference. An immutable
+snapshot instead declares its source revisions and export digest; the controller
+checks its candidate bytes without inventing Git history. Cancelling a running
+attempt stops its worker's process group and leaves the attempt fenced as
+`uncertain`, with its workspace and capacity held, without running the verifier
+or recording a result. That attempt, like any whose finalization was
+interrupted, is settled through the authenticated client's `reconcile`.
+Reconciliation collects process, artifact and delivery observations (a cancelled
+attempt without a completed adapter result reports its artifacts as
+unavailable), retains the original failure and usage, and releases only the
+matching ownership epoch and allocation. An unresolved external effect prevents
+settlement.
+
+GitHub advisory publication is a separate trusted transport with candidate-bound
+authorization, ownership fencing, authenticated receipt readback and duplicate
+prevention. A POST with an unknown outcome stays unresolved until readback
+finds the review, or proves it absent after a quiet period and repeated
+consistent readbacks of the unchanged candidate; only then is the same intent
+sent again. The quiet period is what excludes a delayed write; the back-to-back
+readbacks only exclude an inconsistent listing. `reconcile` exits 0 once the
+review is delivered, 3 once it is proven absent, and 2 while it is unresolved.
+Repository policy sources and runner declarations are explicit `policy_inputs`;
+the core has no repository-specific filename or host defaults for policy
+capture. Advisory comments confer no merge authority.

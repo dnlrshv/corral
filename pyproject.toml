@@ -35,6 +35,12 @@ corral-surface-check = "corral.hooks.surface_check:main"
 corral-surface-reminder = "corral.hooks.surface_reminder:main"
 corral-magic-numbers = "corral.hooks.magic_numbers:main"
 corral-telemetry-capture = "corral.telemetry.capture:main"
+corral-execution-client = "corral.execution.client:main"
+corral-inspection-packet = "corral.execution.inspection_transport:main"
+corral-service = "corral.execution.service_command:main"
+corral-service-install = "corral.execution.service_install:main"
+corral-agent = "corral.execution.agent_cli:main"
+corral-usage = "corral.execution.usage_api:main"
 
 [tool.setuptools.packages.find]
 include = ["corral*"]
@@ -46,3 +52,13 @@ exclude = ["tests*", "_import*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+
+[tool.ruff.lint.per-file-ignores]
+# networkx is optional: pytest.importorskip must run before the imports that need it.
+"tests/test_codemap_query.py" = ["E402"]

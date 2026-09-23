@@ -150,3 +150,94 @@ def test_discovery_skips_absent_roots(tmp_path: Path) -> None:
     roots = discovery.resolve_roots([present, tmp_path / "missing", str(tmp_path / "also-missing")])
     assert roots == [present]
     assert load_bridge_evidence(memory_roots=[tmp_path / "missing"]) == []
+
+def test_sanitize_text_preserves_token_counters() -> None:
+    from corral.retro.bridge.security import sanitize_text
+    message = 'error formatting {"total_tokens": 1500, "input_tokens": 1000, "token": "secret_abc"}'
+    sanitized = sanitize_text(message)
+    assert 'total_tokens": 1500' in sanitized
+    assert 'input_tokens": 1000' in sanitized
+    assert 'secret_abc' not in sanitized
+    assert '<redacted>' in sanitized
+
+
+def test_sanitize_text_redacts_disguised_token_counter_strings() -> None:
+    from corral.retro.bridge.security import sanitize_text
+    payload = '{"input_tokens": "secret_bearer_disguised_here", "total_tokens": "super_confidential_token"}'
+    sanitized = sanitize_text(payload)
+    assert "secret_bearer_disguised_here" not in sanitized
+    assert "super_confidential_token" not in sanitized
+    assert "<redacted>" in sanitized
+
+
+def test_assert_safe_record_allows_numeric_token_counters_and_blocks_disguised_secrets() -> None:
+    from corral.retro.bridge.security import assert_safe_record, sanitize_text, UnsafeBridgeRecordError
+    # 1. Valid numeric token counters pass outbound gate
+    safe_text = sanitize_text('diagnostic metrics: total_tokens=1500 input_tokens=1000 candidates_token_count=800')
+    safe_record = BridgeEvidence("s", "i", "a", "ar", "sum", safe_text)
+    assert_safe_record(safe_record)
+
+    # 2. Raw disguised credential string under token counter fails closed
+    unsafe_record = BridgeEvidence("s", "i", "a", "ar", "sum", '{"total_tokens": "super_confidential_token"}')
+    with pytest.raises(UnsafeBridgeRecordError):
+        assert_safe_record(unsafe_record)
+
+
+def test_sanitize_text_preserves_gemini_vertex_token_counters_and_camel_case() -> None:
+    import json
+    from corral.retro.bridge.security import sanitize_text
+    # Gemini snake_case and camelCase token counters
+    payload = json.dumps({
+        "candidates_token_count": 800,
+        "cached_content_token_count": 2500,
+        "token_count": 500,
+        "candidatesTokenCount": 800,
+        "cachedContentTokenCount": 2500,
+        "tokenCount": 500,
+        "thoughts_token_count": 200,
+        "thoughtsTokenCount": 200,
+        "promptTokenCount": 1200,
+        "totalTokenCount": 2200,
+        "token": "secret_abc",
+    })
+    sanitized = sanitize_text(payload)
+    parsed = json.loads(sanitized)
+    assert parsed["candidates_token_count"] == 800
+    assert parsed["cached_content_token_count"] == 2500
+    assert parsed["token_count"] == 500
+    assert parsed["candidatesTokenCount"] == 800
+    assert parsed["cachedContentTokenCount"] == 2500
+    assert parsed["tokenCount"] == 500
+    assert parsed["thoughts_token_count"] == 200
+    assert parsed["thoughtsTokenCount"] == 200
+    assert parsed["promptTokenCount"] == 1200
+    assert parsed["totalTokenCount"] == 2200
+    assert parsed["token"] == "<redacted>"
+
+    # Disguised secret strings under Gemini counter keys must be redacted
+    disguised = json.dumps({
+        "candidates_token_count": "sk-ant-api03-disguised",
+        "cached_content_token_count": "ghp_disguised",
+        "token_count": "AKIAIOSFODNN7EXAMPLE",
+    })
+    sanitized_disguised = sanitize_text(disguised)
+    assert "sk-ant-api03" not in sanitized_disguised
+    assert "ghp_" not in sanitized_disguised
+    assert "AKIA" not in sanitized_disguised
+    assert "<redacted>" in sanitized_disguised
+
+
+def test_assert_safe_record_blocks_standalone_credentials() -> None:
+    from corral.retro.bridge.security import assert_safe_record, UnsafeBridgeRecordError
+    standalone_creds = [
+        ("AKIA AWS key", "AKIAIOSFODNN7EXAMPLE"),
+        ("AIza Google key", "AIzaSyD-1234567890123456789012345678901"),
+        (
+            "JWT token",
+            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIn0.g3v81K4P0t3U8f_1234567890123456789012345678",
+        ),
+    ]
+    for label, cred in standalone_creds:
+        record = BridgeEvidence("s", "i", "a", "ar", "sum", f"leak of {label}: {cred}")
+        with pytest.raises(UnsafeBridgeRecordError, match="credential scrub failed"):
+            assert_safe_record(record)

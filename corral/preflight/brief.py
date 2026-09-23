@@ -17,7 +17,7 @@ from typing import Any
 
 import yaml
 
-from corral.preflight import gotcha_budget, quota
+from corral.preflight import gotcha_budget
 from corral.preflight.auth import (
     DEFAULT_PREFLIGHT_MODEL,
     PreflightLLMResponse,

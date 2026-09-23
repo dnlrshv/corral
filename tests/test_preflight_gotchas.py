@@ -16,7 +16,8 @@ from corral.preflight.gotcha_budget import (
     estimate_gotcha_tokens,
 )
 
-from .preflight_support import clean_preflight_env
+# clean_preflight_env is a fixture: importing it registers it for usefixtures below.
+from .preflight_support import clean_preflight_env  # noqa: F401
 
 pytestmark = pytest.mark.usefixtures("clean_preflight_env")
 

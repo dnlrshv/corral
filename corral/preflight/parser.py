@@ -8,6 +8,8 @@ from typing import Any
 
 import yaml
 
+from corral.redaction import redact_text
+
 # Keep in sync with corral.preflight.retry.BRIEF_FIELDS. Importing it here
 # would create a circular import because retry imports this parser module.
 BRIEF_FIELD_NAMES = (
@@ -24,14 +26,6 @@ BRIEF_FIELD_NAMES = (
 
 FENCE_RE = re.compile(r"```(?:ya?ml)?[ \t]*\r?\n(.*?)\r?\n```", re.DOTALL | re.IGNORECASE)
 TOP_LEVEL_FIELD_RE = re.compile(rf"^\s*({'|'.join(BRIEF_FIELD_NAMES)}):(?:\s|$)")
-SECRET_PATTERNS = (
-    re.compile(r"(sk-ant-[A-Za-z0-9_-]+|ghp_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+)"),
-    re.compile(
-        r"(?i)\b(api[_-]?key|auth[_-]?token|token|secret|password)"
-        r"(\s*[:=]\s*)([^\s,;]+)"
-    ),
-    re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._-]+"),
-)
 
 
 def parse_brief(raw_yaml: str) -> dict[str, Any]:
@@ -64,8 +58,7 @@ def sanitize_preflight_error(exc: Exception, max_length: int = 240) -> str:
     lines = [line.strip() for line in str(exc).splitlines() if line.strip()]
     summary = "; ".join(lines) if lines else repr(exc)
     message = f"{type(exc).__name__}: {summary}"
-    for pattern in SECRET_PATTERNS:
-        message = pattern.sub(_redact_match, message)
+    message = redact_text(message, marker="[REDACTED]")
     if len(message) > max_length:
         return f"{message[: max_length - 3]}..."
     return message
@@ -113,12 +106,3 @@ def _append_non_empty_block(blocks: list[str], lines: list[str]) -> None:
     block = textwrap.dedent("\n".join(lines)).strip()
     if block:
         blocks.append(block)
-
-
-def _redact_match(match: re.Match[str]) -> str:
-    if match.lastindex and match.lastindex >= 2:
-        return f"{match.group(1)}{match.group(2)}[REDACTED]"
-    text = match.group(0)
-    if text.lower().startswith("bearer"):
-        return "Bearer [REDACTED]"
-    return "[REDACTED]"

@@ -1,26 +1,40 @@
 # Gitleaks configuration for corral.
 # The redaction and bridge-security tests embed deliberately fake,
 # never-valid credential-shaped strings that exercise those code paths.
-# Allowlists below are scoped to the specific synthetic values / lines so
-# a real secret added to the same files would still be caught.
+# Allowlists below are scoped to the specific synthetic values so a real
+# secret added to the same files would still be caught. They name no paths:
+# a global allowlist path skips the whole file, whatever its condition.
 
 [extend]
 useDefault = true
 
 [[allowlists]]
-description = "Synthetic token-shaped fixtures (matched by captured value)"
-regexTarget = "match"
+description = "Synthetic token-shaped fixtures in the redaction and bridge tests (exact secret values)"
 regexes = [
-    '''sk-ant-AbC123_xYz''',
-    '''ghp_AbC123def''',
-    '''github_pat_Zz9''',
-    '''ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456''',
-    '''AKIAABCDEFGHIJKLMNOP''',
-    '''glpat-ABCDEFGHIJKLMNOPQRST''',
+    '''^sk-ant-AbC123_xYz$''',
+    '''^ghp_AbC123def$''',
+    '''^github_pat_Zz9$''',
+    '''^ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456$''',
+    '''^AKIAABCDEFGHIJKLMNOP$''',
+    '''^glpat-ABCDEFGHIJKLMNOPQRST$''',
 ]
 
 [[allowlists]]
-description = "Synthetic RSA private-key block in the scrubber test"
-paths = ['''tests/test_retro_run\.py''']
-regexTarget = "line"
-regexes = ['''-----BEGIN RSA PRIVATE KEY-----''']
+description = "Synthetic credentials in the execution and bridge-security tests (exact secret values)"
+regexes = [
+    '''^sk-proj-abcdefghijk12345$''',
+    '''^xoxb-12345678-abcdefgh$''',
+    '''^AIzaSyD-1234567890123456789012345678901$''',
+    # The public jwt.io sample header and payload with a placeholder signature.
+    '''^eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9\.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIn0\.g3v81K4P0t3U8f_1234567890123456789012345678$''',
+]
+
+[[allowlists]]
+description = "False positives: code that only looks like a credential"
+regexes = [
+    # generic-api-key on the keyword argument after `publisher_token=pub_token,`.
+    '''^lose_ack=True$''',
+    # private-key spanning from a bare RSA header string in the scrubber test's
+    # expected-secret list to the header in its payload; no key material between.
+    '''^-----BEGIN RSA PRIVATE KEY-----",\s+\]\s+secret_payload = ''',
+]

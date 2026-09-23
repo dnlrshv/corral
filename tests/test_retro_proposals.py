@@ -7,7 +7,6 @@ human-review-only contract end to end.
 from __future__ import annotations
 
 import json
-from datetime import timezone, datetime
 from pathlib import Path
 
 import pytest
@@ -85,8 +84,6 @@ def make_repo(tmp_path: Path, *, registry_text: str = "") -> Path:
 
 
 def make_group(*, key: str = "claude::src") -> EvidenceGroup:
-    merged = datetime(2026, 8, 3, tzinfo=timezone.utc)
-
     def pair(original: int, fixup: int) -> FixupPairContext:
         return FixupPairContext(
             original_pr=original,

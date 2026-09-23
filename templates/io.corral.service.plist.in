@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>@LABEL@</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>@CORRAL_SERVICE@</string><string>--config</string><string>@CONFIG@</string><string>tick</string>
+  </array>
+  <key>StartInterval</key><integer>@INTERVAL_SECONDS@</integer>
+  <key>RunAtLoad</key><true/>
+  <key>StandardOutPath</key><string>@LOG_DIR@/service.stdout.log</string>
+  <key>StandardErrorPath</key><string>@LOG_DIR@/service.stderr.log</string>
+</dict>
+</plist>

@@ -438,7 +438,6 @@ def run_staleness_command(args: Any) -> int:
     """
     from datetime import timezone, datetime
 
-    from corral.governance.staleness import report as staleness_report
     from corral.governance.staleness import sources
 
     try:

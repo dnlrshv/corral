@@ -1,0 +1,2 @@
+{"type":"thread_settings_applied","payload":{"thread_settings":{"model":"qwen3.8-max","reasoning_effort":"high","model_provider_id":"fixture-provider"}}}
+{"type":"turn.completed","usage":{"input_tokens":1250000,"cached_input_tokens":1100000,"output_tokens":34000,"reasoning_output_tokens":12000}}

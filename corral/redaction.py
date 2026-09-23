@@ -28,15 +28,22 @@ _COUNTER_VALUE = re.compile(r"^-?\d(?:_?\d){0,11}(?:\.\d+)?$")
 _STRING_PREFIX = r"(?:[rR][bBfF]?|[bBfF][rR]?|[uU])"
 _QUOTED_VALUE = re.compile(
     rf"(?P<prefix>{_STRING_PREFIX}?)(?P<q>\"\"\"|'''|[\"'])(?P<body>.*)(?P=q)", re.DOTALL)
-# ``key: Annotation = value`` binds ``value``; the annotation is never the value. Call
+# ``key: Annotation = value`` binds ``value``; the annotation is never the value. At
+# the top level an annotation is ``|``-joined dotted names, each optionally quoted and
+# subscripted, so ``password: value, user=bob`` binds ``value``. Commas, strings and
+# calls appear only inside a subscript, and blanks only there or around ``|``.
+# Subscripts nest four levels (``Optional[dict[str, tuple[int, list[str]]]]``); call
 # arguments nest two levels and may quote parentheses: ``Annotated[str, Field(
-# pattern="^(x)$", default_factory=lambda: env.get("X"))] = value``. The annotation
-# absorbs the blanks before ``=`` itself: a separate ``[ \t]*`` there would rescan a
-# run of blanks at every lazy step, which is quadratic in the run length.
+# pattern="^(x)$", default_factory=lambda: env.get("X"))] = value``.
 _ANNOTATION_STRING = r"\"[^\"\n]*\"|'[^'\n]*'"
 _ANNOTATION_CALL = (rf"\((?:[^()\"'\n]|{_ANNOTATION_STRING}"
                     rf"|\((?:[^()\"'\n]|{_ANNOTATION_STRING})*\))*\)")
-_ANNOTATION = rf"[\"']?[A-Za-z_](?:[\w.\[\], \t|\"']|{_ANNOTATION_CALL})*?"
+_ANNOTATION_ITEM = rf"[\w.,| \t]|{_ANNOTATION_STRING}|{_ANNOTATION_CALL}"
+_ANNOTATION_SUBSCRIPT = rf"\[(?:{_ANNOTATION_ITEM})*\]"
+for _ in range(3):
+    _ANNOTATION_SUBSCRIPT = rf"\[(?:{_ANNOTATION_ITEM}|{_ANNOTATION_SUBSCRIPT})*\]"
+_ANNOTATION_ATOM = rf"[\"']?[A-Za-z_][\w.]*(?:{_ANNOTATION_SUBSCRIPT})?[\"']?"
+_ANNOTATION = rf"{_ANNOTATION_ATOM}(?:[ \t]*\|[ \t]*{_ANNOTATION_ATOM})*[ \t]*"
 _ASSIGNMENT = (
     rf"(?i)(?<![A-Za-z0-9_])(?P<key>[\"']?{_CREDENTIAL_KEY}[\"']?)"
     rf"(?P<sep_space>\s*(?::[ \t]*{_ANNOTATION}(?==))?(?P<sep>[:=])\s*)"

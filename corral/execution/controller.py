@@ -28,6 +28,9 @@ class Controller:
         self.token, self.hosts, self.default_host = token, hosts, default_host
         from .secret_env import load
         self.provider_secrets = load(secret_env)
+        # The provider secret file is controller credential state: every worker and verifier
+        # boundary denies it, wherever the operator keeps it.
+        self.secret_env_path = str(Path(secret_env).resolve()) if secret_env else None
         registered = {p.id: (p if isinstance(p, Profile) else Profile(**p)) for p in STANDARD_NATIVE_PROFILES}
         for p in profiles:
             prof = p if isinstance(p, Profile) else Profile(**p)
@@ -382,6 +385,9 @@ class Controller:
                     except (ValueError, TypeError, KeyError, OSError, sqlite3.Error) as error:
                         telemetry_errors.append(type(error).__name__)
             host = self.hosts[execution_host]
+            if self.secret_env_path:
+                host = {**host, "protected_paths": [*(host.get("protected_paths") or ()),
+                                                    self.secret_env_path]}
             verifier_roots = tuple(str(item) for item in (host.get("verifier_roots") or ()))
             protected_paths = [str(self.store.path.parent.resolve()), str(self.artifacts.resolve()),
                                *verifier_roots, *(host.get("protected_paths") or [])]

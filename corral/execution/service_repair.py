@@ -3,13 +3,14 @@ from __future__ import annotations
 
 import json
 import re
-import subprocess
 import time
 from pathlib import Path
 from typing import Any
 
+from .github_branch import publication_snapshot
 from .internal_review import load as load_review
 from .internal_review import report_body
+from .repair_objects import RepairObjects, checkout_ref, validate_branch
 from .store import canonical, digest
 from .workspace import safe_path
 
@@ -50,26 +51,36 @@ def _policy(repo: dict[str, Any], policy_id: str) -> dict[str, Any]:
             or not identity["name"] or not isinstance(identity.get("email"), str)
             or "@" not in identity["email"]):
         raise PermissionError("repair policy commit identity is invalid")
+    for key in ("verifier_paths", "allowed_hosts"):
+        items = value.get(key)
+        if items is not None and (not isinstance(items, list) or any(
+                not isinstance(item, str) or not item for item in items)):
+            raise PermissionError(f"repair policy {key} must be a list of names")
+    actor_id = value.get("publisher_actor_id")
+    if actor_id is not None and (isinstance(actor_id, bool) or not isinstance(actor_id, int)
+                                 or actor_id <= 0):
+        raise PermissionError("repair policy publisher_actor_id is invalid")
     return json.loads(json.dumps(value))
 
 
-def _checkout(workspace: str, head: str, branch: str, candidate_paths: list[str]) -> None:
+def _checkout(objects: RepairObjects, workspace: str, head: str, branch: str,
+              pr_number: int, candidate_paths: list[str]) -> None:
+    """Require a checkout on ``branch`` whose files match the trusted ``head`` exactly.
+
+    The checkout may be reused after an earlier worker, so its ``.git`` is untrusted: only
+    hardened ref queries run there, and cleanliness is judged against objects fetched from the
+    remote into Corral's own repository, never by the checkout's index, config or hooks.
+    """
     root = Path(workspace)
-    inside = subprocess.run(
-        ["git", "-C", str(root), "rev-parse", "--is-inside-work-tree"],
-        text=True, capture_output=True, check=True).stdout.strip()
-    if inside != "true":
+    validate_branch(branch)
+    if checkout_ref(root, "rev-parse", "--is-inside-work-tree") != "true":
         raise PermissionError("repair workspace must be a real isolated Git checkout")
-    subprocess.run(["git", "check-ref-format", "--branch", branch],
-                   text=True, capture_output=True, check=True)
-    actual = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"],
-                            text=True, capture_output=True, check=True).stdout.strip()
-    current_branch = subprocess.run(
-        ["git", "-C", str(root), "symbolic-ref", "--short", "HEAD"],
-        text=True, capture_output=True, check=True).stdout.strip()
-    dirty = subprocess.run(["git", "-C", str(root), "status", "--porcelain=v1", "-z"],
-                           capture_output=True, check=True).stdout
-    if actual != head or current_branch != branch or dirty:
+    if objects.fetch_branch(branch, pr_number) != head:
+        raise PermissionError("remote repair branch head differs from the reviewed candidate")
+    actual = checkout_ref(root, "rev-parse", "--verify", "HEAD")
+    current_branch = checkout_ref(root, "symbolic-ref", "--short", "HEAD")
+    if (actual != head or current_branch != branch
+            or objects.worktree_differences(root, head)):
         raise PermissionError("repair workspace must be clean at the exact authorized PR branch head")
     for name in candidate_paths:
         safe_path(root, name)
@@ -82,6 +93,8 @@ def submit_pr_repair(service, repository: str, pr_number: int, review_receipt_id
     if not _SHA.fullmatch(str(expected_head)) or not _SHA.fullmatch(str(expected_base)):
         raise ValueError("repair admission requires exact 40-character head and base SHAs")
     repo = service._repository(repository)
+    if "repair" not in set(repo.get("allowed_roles", ("implementation", "review", "repair"))):
+        raise PermissionError("role is not allowed by repository profile")
     github_repository = repo.get("github_repository")
     if not isinstance(github_repository, str) or "/" not in github_repository:
         raise PermissionError("repository profile requires github_repository")
@@ -100,7 +113,8 @@ def submit_pr_repair(service, repository: str, pr_number: int, review_receipt_id
     selected_host, workspace = service._host_workspace(repo, host)
     if selected_host not in set(policy.get("allowed_hosts") or repo.get("allowed_hosts") or ()):
         raise PermissionError("repair host is not authorized by the repair policy")
-    _checkout(workspace, expected_head, policy["branch"], policy["candidate_paths"])
+    _checkout(RepairObjects.for_repository(service.store, repo), workspace, expected_head,
+              policy["branch"], pr_number, policy["candidate_paths"])
     objective = policy["objective_template"].replace("{repository}", github_repository).replace(
         "{pr}", str(pr_number)).replace("{review_report}", report_body(service.store, review))
     candidate_paths = list(policy["candidate_paths"])
@@ -117,7 +131,8 @@ def submit_pr_repair(service, repository: str, pr_number: int, review_receipt_id
             "service_event_id": event_id, "github_repository": github_repository,
             "pr_number": pr_number,
             "expected_head": expected_head, "expected_base": expected_base,
-            "repair_policy_id": review["policy_id"]}
+            "repair_policy_id": review["policy_id"],
+            "repair_publication": publication_snapshot(policy)}
     for key in ("cpu", "memory_mb", "result_file", "usage_file", "external_verifier"):
         if key in policy:
             spec[key] = policy[key]

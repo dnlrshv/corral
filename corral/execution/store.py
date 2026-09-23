@@ -246,9 +246,10 @@ class Store:
             return False
 
     def owned_once(self, resource, owner, epoch, kind, key, identity, first):
-        """Persist ``{**identity, **first}`` once under an owner fence; return the stored record.
+        """Persist ``{**first, **identity}`` once under an owner fence; return the stored record.
 
-        ``first`` carries fields fixed by the first write, such as an admission time. A retry
+        ``first`` carries fields fixed by the first write, such as a first-build time; an
+        ``identity`` field of the same name takes precedence over it. A retry
         with the same ``identity`` gets the stored record back unchanged, so values derived from
         it stay reproducible; a different identity under the same key is refused.
         """

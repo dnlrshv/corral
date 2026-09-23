@@ -7,12 +7,15 @@ the fake GitHub HTTP fixture; no network is contacted.
 import os
 import subprocess
 import sys
+import time
+from types import SimpleNamespace
 
 import pytest
 
 from tests.advisory_http_fixture import ACTOR, HEAD, PR, REPO, environment
 from corral.execution import advisory_cli
 from corral.execution.publication_store import record_absence
+from corral.execution.store import lease_holder_alive
 
 RESOURCE = "pr:" + PR
 
@@ -186,6 +189,28 @@ def test_operator_recovers_a_lease_whose_exited_holder_is_not_yet_reaped(tmp_pat
     finally:
         holder.wait()
     assert store.acquire_lease(RESOURCE, "corral", HEAD, os.getpid(), "next")[0]
+
+
+@pytest.mark.parametrize("ps_output", ["Z\n", "Z+ -\n"])
+def test_a_zombie_holder_is_dead_even_when_ps_reports_no_elapsed_time(monkeypatch, ps_output):
+    def ps(command, **kwargs):
+        return subprocess.CompletedProcess(command, 0, stdout=ps_output, stderr="")
+
+    monkeypatch.setattr("corral.execution.store.subprocess.run", ps)
+    assert lease_holder_alive(os.getpid(), time.time()) is False
+
+
+def test_a_slow_ps_does_not_age_a_live_holder_into_a_reused_pid(monkeypatch):
+    clock = [1_000.0]
+
+    def stalled_ps(pid):
+        clock[0] += 30  # ``ps`` sampled the elapsed time, then stalled before returning
+        return "S", 5
+
+    monkeypatch.setattr("corral.execution.store._process_state", stalled_ps)
+    monkeypatch.setattr("corral.execution.store.time", SimpleNamespace(time=lambda: clock[0]))
+    # Started at 995 and leased at 997: the original holder, however long ``ps`` took.
+    assert lease_holder_alive(os.getpid(), 997.0) is True
 
 
 def test_migrated_ambiguous_intent_without_attempt_identity_can_settle(tmp_path):

@@ -26,6 +26,9 @@ def lease_holder_alive(pid, acquired_at: float | None = None) -> bool:
         return False
     except OSError:
         pass  # The process exists but belongs to another user.
+    # Read the clock before ``ps``: a slow ``ps`` must not age a live holder into a
+    # process that started after its lease.
+    now = time.time()
     observed = _process_state(pid)
     if observed is None:
         return True
@@ -33,22 +36,29 @@ def lease_holder_alive(pid, acquired_at: float | None = None) -> bool:
     if state.startswith("Z"):
         return False
     # ``ps`` reports whole seconds; allow that rounding before calling the pid reused.
-    return acquired_at is None or elapsed + 2 >= time.time() - acquired_at
+    # An unreported age fails closed.
+    return acquired_at is None or elapsed is None or elapsed + 2 >= now - acquired_at
 
 
-def _process_state(pid: int) -> tuple[str, int] | None:
-    """The ``ps`` state code and elapsed seconds of ``pid``, or None when unobservable."""
+def _process_state(pid: int) -> tuple[str, int | None] | None:
+    """The ``ps`` state code of ``pid`` and its elapsed seconds when ``ps`` reports them.
+
+    None means the process state is unobservable.
+    """
     try:
         raw = subprocess.run(["ps", "-o", "stat=", "-o", "etime=", "-p", str(pid)],
                              capture_output=True, text=True, timeout=10,
                              check=True).stdout.strip()
     except (OSError, subprocess.SubprocessError):
         return None
-    match = re.fullmatch(r"(\S+)\s+(?:(?:(\d+)-)?(\d+):)?(\d+):(\d+)", raw)
-    if not match:
+    if not raw:
         return None
-    days, hours, minutes, seconds = (int(part or 0) for part in match.groups()[1:])
-    return match.group(1), ((days * 24 + hours) * 60 + minutes) * 60 + seconds
+    state, *etime = raw.split(None, 1)
+    match = re.fullmatch(r"(?:(?:(\d+)-)?(\d+):)?(\d+):(\d+)", "".join(etime))
+    if not match:
+        return state, None
+    days, hours, minutes, seconds = (int(part or 0) for part in match.groups())
+    return state, ((days * 24 + hours) * 60 + minutes) * 60 + seconds
 
 
 def canonical(value):

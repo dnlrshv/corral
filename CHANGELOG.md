@@ -3,6 +3,25 @@
 All notable changes to Corral are recorded here, following Keep a Changelog.
 Every release section must include a `### Consumer action` subsection, even when no action is required.
 
+## [0.2.0] - unreleased
+
+### Added
+
+- Optional per-route `allowed_repositories`, `allowed_workdirs`, and `max_packet_bytes` controls, with service validation and a bounded inspection packet default.
+- Shared hardened Git configuration for inspection, candidate export, and repair object operations.
+
+### Changed
+
+- Seat process environments remove credential-shaped variables unless the native route declares them in `credential_env`.
+
+### Fixed
+
+- Route scope is checked at service admission and again before native launch, including resolved checkout paths.
+
+### Consumer action
+
+Declare every credential a native route needs in `credential_env` and provide it through the controller's private credential configuration. Set route scopes before enabling implementation or repair lanes. Consumers that relied on inherited credential variables must update their route declarations. Protocol and store schema remain at version 1.
+
 ## [0.1.0] - 2026-09-27
 
 ### Added

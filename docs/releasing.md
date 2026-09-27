@@ -4,7 +4,7 @@ Release tags are annotated `vX.Y.Z` tags on the merge commit. The tag and GitHub
 
 ## Versioning rules
 
-`corral/protocol.py` defines the execution protocol and SQLite store schema versions. Follow its protocol-break definition when changing requests, responses, supported commands, or execution configuration. Additive optional fields do not require a protocol bump. Bump `STORE_SCHEMA_VERSION` for a store schema change that needs a new runtime. Within 0.x, bump the package minor version when either integer changes; otherwise bump the patch version. Keep the versions in `pyproject.toml` and `corral/__init__.py` equal.
+`corral/protocol.py` defines the execution protocol and SQLite store schema versions. Follow its protocol-break definition when changing requests, responses, supported commands, or execution configuration. Additive optional fields do not require a protocol bump. Bump `STORE_SCHEMA_VERSION` for a store schema change that needs a new runtime. Within 0.x, bump the package minor version when either integer changes or an intentional consumer-facing behavior change requires config migration; otherwise bump the patch version. Keep the versions in `pyproject.toml` and `corral/__init__.py` equal. The 0.2.0 route-scoping changes keep both integers at 1, but credential environment scrubbing requires consumers that inherited credentials to declare them, so they are staged as a minor release. The orchestrator updates package version files during release preparation.
 
 ## Checklist
 

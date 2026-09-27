@@ -118,6 +118,8 @@ See the [CHANGELOG](CHANGELOG.md) for release changes and required consumer acti
 
 Ready-to-adapt workflows live in [`examples/github-actions/`](examples/github-actions/): telemetry rollup, weekly retrospective, deterministic retrieval replay, and the instruction-governance gate.
 
+Provider route templates and their configuration notes live in [`examples/routes/`](examples/routes/README.md).
+
 The governance workflow deliberately uses a **trusted-base gate**. Validator code is policy and a pull request's head is untrusted data, so the workflow installs and launches corral from the base ref. The validator then reads the proposed registry, instruction text, diff, and PR-body contract from head without executing head's validator. Keep that topology intact; [`docs/governance.md`](docs/governance.md) explains the launcher and `PYTHONPATH` hardening.
 
 ## Adoption path

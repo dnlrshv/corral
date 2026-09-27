@@ -3,7 +3,7 @@
 All notable changes to Corral are recorded here, following Keep a Changelog.
 Every release section must include a `### Consumer action` subsection, even when no action is required.
 
-## [0.1.0] - unreleased
+## [0.1.0] - 2026-09-27
 
 ### Added
 

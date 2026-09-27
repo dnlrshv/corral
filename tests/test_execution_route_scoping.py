@@ -127,3 +127,15 @@ def test_adapter_runtime_environment_cannot_bypass_credential_declaration(tmp_pa
     env, forwarded, missing = _harness_env(plan, None, None, tmp_path)
     assert env["FOO_API_KEY"] == "declared-fixture"
     assert forwarded == ["FOO_API_KEY"] and missing == []
+
+
+def test_credential_names_cover_keys_sockets_and_credential_files():
+    from corral.execution import credential_env
+
+    for name in ("NVIDIA_KEY", "BROKER_TOKEN", "SERVICE_PASSWORD", "SSH_AUTH_SOCK",
+                 "GOOGLE_APPLICATION_CREDENTIALS", "REGISTRY_PAT", "APP_SECRET_VALUE"):
+        assert credential_env.is_credential(name), name
+    for name in ("PATH", "HOME", "LANG", "TMPDIR", "PYTHONDONTWRITEBYTECODE"):
+        assert not credential_env.is_credential(name), name
+    assert credential_env.scrub({"NVIDIA_KEY": "x", "PATH": "/bin"}, ["NVIDIA_KEY"]) == {
+        "NVIDIA_KEY": "x", "PATH": "/bin"}

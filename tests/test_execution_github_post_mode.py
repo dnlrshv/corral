@@ -1,6 +1,8 @@
 """Dry-run writes retain exact payloads without external effects."""
 import pytest
+from types import SimpleNamespace
 
+from corral.execution.advisory_cli import cmd_publish
 from .advisory_http_fixture import PR, environment
 from .test_execution_github_merge import GitHub, payload, transport
 
@@ -17,6 +19,16 @@ def test_advisory_default_dry_run_records_exact_review(tmp_path):
     assert http.posts == []
     assert store.get("github_dry_run", intent) == result
     assert store.get("advisory_receipt", intent) is None
+
+
+def test_advisory_cli_default_records_without_network(tmp_path, capsys):
+    store, http, _publisher, intent, _advisory = environment(tmp_path)
+    args = SimpleNamespace(repo="test/repo", pr=PR, intent=intent, store=store.path,
+                           post_mode="dry-run", allow_network=False, candidate="candidate")
+    assert cmd_publish(args) == 0
+    assert '"status": "dry-run"' in capsys.readouterr().out
+    assert http.posts == []
+    assert store.get("github_dry_run", intent)["method"] == "POST"
 
 
 def test_merge_dry_run_and_explicit_flag(tmp_path):

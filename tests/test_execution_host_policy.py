@@ -6,11 +6,13 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from corral.execution.host_policy import blackout, priority_command
+from corral.execution.process import Process
 from corral.execution.service_dispatch import launch
 from corral.execution.service import Service
 from corral.execution.service_validation import validate
 from .test_execution_service_cli import configs, git_repo
 from .test_execution_service_dispatch import _two_repositories
+from .test_execution_wave_service_scheduler import _wave_config
 
 
 def _window(*, start="09:00", end="10:00", zone="UTC"):
@@ -38,11 +40,32 @@ def test_blackout_tick_queues_then_dispatches(tmp_path, monkeypatch):
     assert inside["blackout"]["active"] is True
     assert inside["dispatched"] == []
     assert service.status("queued")["event"]["status"] == "prepared"
+    assert "active" in service.status("queued")["blackout"]
     assert launches == []
     outside = service.tick(_epoch(2026, 9, 28, 10, 0))
     assert outside["blackout"]["active"] is False
     assert outside["dispatched"] == ["queued"]
     assert len(launches) == 1
+
+
+def test_schedule_and_wave_wait_through_blackout(tmp_path, monkeypatch):
+    config, _workspace = _wave_config(tmp_path)
+    raw = json.loads(config.read_text())
+    raw["blackout_windows"] = [_window()]
+    raw["schedules"] = [{"id": "periodic", "interval_seconds": 3600,
+                         "repository": "demo", "objective": "scheduled work"}]
+    config.write_text(json.dumps(raw))
+    service = Service(config)
+    service.submit_wave_plan("usage", "wave-pending")
+    launches = []
+    monkeypatch.setattr("corral.execution.service_dispatch.launch",
+                        lambda *_args, **_kwargs: launches.append(True))
+    result = service.tick(_epoch(2026, 9, 28, 9, 30))
+    assert len(result["created"]) == 1
+    assert result["waves"] == result["dispatched"] == []
+    assert result["pending"] == result["created"]
+    assert service.store.records("wave_dispatch") == {}
+    assert launches == []
 
 
 def test_midnight_and_dst_boundaries():
@@ -111,6 +134,22 @@ def test_launcher_receives_priority_prefix(tmp_path, monkeypatch):
            process_priority={"nice": 4, "low_priority_io": False})
     assert seen[0][0][:3] == ["/usr/bin/nice", "-n", "4"]
     assert seen[0][1]["start_new_session"] is True
+
+
+def test_seat_command_and_environment_receive_priority(tmp_path, monkeypatch):
+    seen = []
+
+    class Child:
+        pid = 123
+
+    monkeypatch.setattr("corral.execution.host_policy.shutil.which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr("corral.execution.process.subprocess.Popen",
+                        lambda argv, **kwargs: seen.append((argv, kwargs)) or Child())
+    monkeypatch.setattr(Process, "_identity", lambda _self, _command: {"pid": 123})
+    Process(["/bin/worker"], tmp_path, None, None, env={"EXAMPLE": "present"},
+            process_priority={"nice": 7, "low_priority_io": False})
+    assert seen[0][0] == ["/usr/bin/nice", "-n", "7", "/bin/worker"]
+    assert seen[0][1]["env"]["EXAMPLE"] == "present"
 
 
 def test_validate_rejects_missing_priority_tool(tmp_path, monkeypatch):

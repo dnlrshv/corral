@@ -113,6 +113,8 @@ def test_envelope_tail_is_bounded_and_hashes_decoded_text(tmp_path, monkeypatch)
     assert envelope_hash != hashlib.sha256(tail).hexdigest()
 
 
+# The version probe runs inside the demonstrated worker boundary, which needs Seatbelt.
+@pytest.mark.skipif(native.containment.sandbox_exec() is None, reason="macOS Seatbelt required")
 def test_old_cli_is_refused_before_worker_launch_with_reason(tmp_path, monkeypatch):
     env = ns.native_env(tmp_path)
     route = env["host"]["native_routes"][ns.FAKE_ROUTE]

@@ -68,6 +68,12 @@ def validate(config: str | Path) -> dict:
             continue
         _check_hosts(repo, f"repository {name}", hosts, errors)
         _check_packet(repo, f"repository {name}", errors)
+        allowed_routes = repo.get("allowed_routes")
+        if allowed_routes is not None:
+            if (not isinstance(allowed_routes, list) or any(
+                    not isinstance(item, str) or not item or item not in declared | {"deterministic"}
+                    for item in allowed_routes)):
+                errors.append(f"repository {name} allowed_routes must list declared route ids")
         defaults = repo.get("task_defaults") or {}
         if isinstance(defaults, dict):
             _check_packet(defaults, f"repository {name} task_defaults", errors)
@@ -110,6 +116,12 @@ def validate(config: str | Path) -> dict:
             errors.append("max_dispatch_per_tick must be positive")
     except (TypeError, ValueError):
         errors.append("max_dispatch_per_tick must be a positive integer")
+    budgets = service.get("provider_concurrency", {})
+    if (not isinstance(budgets, dict) or any(
+            not isinstance(name, str) or not name or isinstance(limit, bool)
+            or not isinstance(limit, int) or limit <= 0
+            for name, limit in budgets.items())):
+        errors.append("provider_concurrency must map provider names to positive integers")
 
     if controller.get("secret_env") is not None:
         try:
@@ -149,6 +161,9 @@ def _check_route_reference(name: str, profile_id, repo: dict, host_routes: dict,
     profile = profiles.get(profile_id)
     if profile is None:
         return
+    allowed = repo.get("allowed_routes")
+    if isinstance(allowed, list) and profile.route not in allowed:
+        errors.append(f"repository {name} profile {profile_id} route {profile.route} excludes it")
     workspaces = repo.get("workspaces") or {}
     if not isinstance(workspaces, dict):
         errors.append(f"repository {name} workspaces must be a mapping")

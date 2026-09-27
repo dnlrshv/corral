@@ -9,6 +9,9 @@ import time
 import uuid
 from pathlib import Path
 
+from corral import __version__
+from corral.protocol import installed_commit
+
 from ..redaction import redact_nested_text
 from . import (completion, containment, continuation, inspection_packet, inspection_report, native, routes,
                verifier, workspace_contract)
@@ -19,6 +22,7 @@ from .pr_fence import require_active_review_owner
 from .profiles import registered_profiles, resolve
 from .recovery_store import DispatchFenceLost
 from .store import Store, canonical, digest
+from .service_specs import provider_for
 from .usage import Spool
 from .workspace import apply_manifest, manifest, safe_path
 
@@ -363,6 +367,7 @@ class Controller:
             claim={"attempt": attempt, "generation": generation}, host=execution_host,
             cpu=spec.get("cpu", 1), memory_mb=spec.get("memory_mb", 0),
             capacity=self.capacity(execution_host), state=state,
+            provider=provider_for(spec),
             invocation={"task": task_id, "generation": generation,
                         "role": spec.get("role", "implementation"), "selection": spec["selection"],
                         "observed": None, "usage": "unknown-until-native-events"})
@@ -598,12 +603,22 @@ class Controller:
                             dst_file.parent.mkdir(parents=True, exist_ok=True)
                             dst_file.write_bytes(src_file.read_bytes())
 
+            provenance = (adapter_result or {}).get("provenance") if native_run else None
+            if native_run and provenance is None:
+                provenance = {
+                    "provider": route.provider, "route": route.id, "model": profile.model,
+                    "effort": profile.effort,
+                    "cli_version": (native_evidence or {}).get("cli_version"),
+                    "envelope_schema": route.envelope, "envelope_sha256": None,
+                    "corral_version": __version__, "corral_commit": installed_commit(),
+                }
             result = {"structured": structured, "accepted": accepted, "receipt": receipt,
                       "identity_mismatch": identity_mismatch,
                       "artifact_directory": str(output), "endpoint": "local", "usage": usage,
                       "selection": spec["selection"], "observed": observed or "unknown",
                       "generation": generation,
                       "native": native_evidence,
+                      "provenance": provenance,
                       "inspection_validation": inspection_validation,
                       "adapter_errors": redact_nested_text((adapter_result or {}).get("errors") or []),
                       "adapter_warnings": redact_nested_text((adapter_result or {}).get("warnings") or []),
@@ -629,6 +644,8 @@ class Controller:
             # That record is fenced on the stored state, so it never replaces a settlement.
             state.update(status="uncertain" if launched else "refused-before-launch",
                          error=type(error).__name__)
+            if isinstance(error, routes.CliVersionError):
+                state["reason"] = str(error)
             if launched:
                 self.store.finish_attempt(task=task_id, resource=resource, epoch=epoch,
                                           state=state, owner_status="uncertain")

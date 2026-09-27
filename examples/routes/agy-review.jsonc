@@ -1,0 +1,14 @@
+{
+  "harness": "agy",
+  "binary": "agy",
+  // Verify --plan against your CLI before enabling this review-only route.
+  "argv": ["--add-dir", "{workspace}", "--model", "{model}", "--effort", "{effort}", "--output-format", "json", "--plan", "--print", "{prompt}"],
+  "envelope": "agy-json-v1",
+  "provider": "google",
+  "account_ref": "api-key-review",
+  "endpoint": "local-cli",
+  "supported_models": ["gemini-review-model"],
+  "supported_efforts": ["medium"],
+  "credential_env": ["GEMINI_API_KEY"],
+  "launch_authorized": false
+}

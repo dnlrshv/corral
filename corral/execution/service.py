@@ -8,7 +8,7 @@ from typing import Any
 
 from . import artifact_return, continuation, routes as native_routes
 from .controller import Controller
-from .service_specs import request_spec
+from .service_specs import provider_for, request_spec
 from .store import canonical
 
 TERMINAL = {"completed", "failed", "refused-before-launch", "uncertain", "cancelled"}
@@ -40,6 +40,12 @@ class Service:
         self.repositories = self.config.get("repositories", {})
         self.schedules = self.config.get("schedules", [])
         self.max_dispatch = int(self.config.get("max_dispatch_per_tick", 1))
+        self.provider_concurrency = self.config.get("provider_concurrency", {})
+        if (not isinstance(self.provider_concurrency, dict) or any(
+                not isinstance(name, str) or not name or isinstance(limit, bool)
+                or not isinstance(limit, int) or limit <= 0
+                for name, limit in self.provider_concurrency.items())):
+            raise ValueError("provider_concurrency must map provider names to positive integers")
         self.development_mode = self.config.get("development_mode") is True
         if self.max_dispatch < 1:
             raise ValueError("max_dispatch_per_tick must be positive")
@@ -52,6 +58,10 @@ class Service:
         repo = self.repositories.get(name)
         if not isinstance(repo, dict) or repo.get("enabled", True) is not True:
             raise PermissionError(f"repository profile is not enabled: {name}")
+        allowed = repo.get("allowed_routes")
+        if allowed is not None and (not isinstance(allowed, list) or any(
+                not isinstance(route, str) or not route for route in allowed)):
+            raise PermissionError(f"repository profile {name} allowed_routes is invalid")
         return repo
 
     def _host_workspace(self, repo: dict[str, Any], requested: str | None) -> tuple[str, str]:
@@ -71,6 +81,7 @@ class Service:
 
     def _profile_route(self, spec: dict[str, Any], host: str,
                        workspace: str | None = None) -> str:
+        repository = spec.get("service_repository_profile") or spec.get("repo")
         profile_id = spec.get("profile_id")
         if profile_id:
             profile = next((p for p in self.controller.profiles if p.id == profile_id), None)
@@ -78,11 +89,19 @@ class Service:
                 raise PermissionError("profile is not registered by controller")
             route = native_routes.declared_routes(self.controller.hosts[host]).get(profile.route)
             if route:
-                native_routes.enforce_scope(route, spec.get("service_repository_profile")
-                                            or spec.get("repo"), workspace or spec.get("workspace"))
+                native_routes.enforce_scope(route, repository, workspace or spec.get("workspace"))
+            if repository in self.repositories:
+                allowed = self._repository(repository).get("allowed_routes")
+                if allowed is not None and profile.route not in allowed:
+                    raise PermissionError(f"repository profile {repository} excludes route {profile.route}")
             return profile.route
         routes = list(self.controller.hosts[host].get("routes", []))
-        return routes[0] if routes else "deterministic"
+        selected = routes[0] if routes else "deterministic"
+        if repository in self.repositories:
+            allowed = self._repository(repository).get("allowed_routes")
+            if allowed is not None and selected not in allowed:
+                raise PermissionError(f"repository profile {repository} excludes route {selected}")
+        return selected
 
     def submit(
         self, event_id: str, repository: str, objective: str, *, host: str | None = None,
@@ -208,7 +227,8 @@ class Service:
             raise KeyError(event_id)
         task = (self.controller.status(self.token, event["task_id"])
                 if event.get("task_id") else None)
-        return {"event": event, "task": task}
+        return {"event": event, "task": task,
+                "provenance": (task.get("result") or {}).get("provenance") if task else None}
 
     def amend(self, event_id: str, amendment_id: str, objective: str) -> dict[str, Any]:
         event = self.store.get("service_event", event_id)
@@ -271,12 +291,16 @@ class Service:
             workspace = str(Path(spec.get("workspace")).resolve())
             if workspace_busy(self.store, db, workspace, event_id=event_id):
                 return None
+            provider = provider_for(spec)
+            if not self.store.provider_available(
+                    provider, self.provider_concurrency.get(provider), db=db):
+                return None
             # Capacity is reserved in the store, the single allocation authority that the
             # controller dispatch adopts. A refusal means not dispatched and nothing acquired.
             try:
                 if not self.store.allocate(event["task_id"], host, cpu, memory,
                                            self.controller.capacity(host),
-                                           reservation=event_id, db=db):
+                                           reservation=event_id, provider=provider, db=db):
                     return None
             except PermissionError:
                 return None

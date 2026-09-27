@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -47,6 +48,9 @@ class NativeRoute:
     endpoint: str
     supported_models: tuple[str, ...]
     supported_efforts: tuple[str, ...]
+    denied_models: tuple[str, ...] = ()
+    min_cli_version: str | None = None
+    version_argv: tuple[str, ...] = ()
     credential_env: tuple[str, ...] = ()
     allowed_repositories: tuple[str, ...] = ()
     allowed_workdirs: tuple[str, ...] = ()
@@ -65,7 +69,8 @@ class NativeRoute:
     def as_dict(self) -> dict:
         value = {name: getattr(self, name) for name in self.__dataclass_fields__}
         value["argv"] = list(self.argv)
-        for name in ("supported_models", "supported_efforts", "credential_env", "runtime_env",
+        for name in ("supported_models", "supported_efforts", "denied_models", "version_argv",
+                     "credential_env", "runtime_env",
                  "runtime_read", "runtime_write", "runtime_write_files",
                  "allowed_repositories", "allowed_workdirs"):
             value[name] = list(value[name])
@@ -99,6 +104,23 @@ def declare(route_id: str, raw: dict) -> NativeRoute:
     models = _as_tuple(raw.get("supported_models"))
     if not models:
         raise PermissionError(f"native route {route_id} must pin the models it actually serves")
+    denied = raw.get("denied_models", [])
+    if (not isinstance(denied, list) or any(not isinstance(item, str)
+            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]*\*?", item)
+            for item in denied)):
+        raise PermissionError(f"native route {route_id} denied_models must be exact ids or prefix* globs")
+    if any(_denies(model, pattern) for model in models for pattern in denied):
+        raise PermissionError(f"native route {route_id} supported_models intersects denied_models")
+    minimum = raw.get("min_cli_version")
+    version_argv = raw.get("version_argv", [])
+    if minimum is not None and (not isinstance(minimum, str)
+                                or not re.fullmatch(r"\d+\.\d+\.\d+", minimum)):
+        raise PermissionError(f"native route {route_id} min_cli_version must be X.Y.Z")
+    if (not isinstance(version_argv, list) or any(not isinstance(item, str) or not item
+            or "{" in item or "}" in item for item in version_argv)):
+        raise PermissionError(f"native route {route_id} version_argv must be literal arguments")
+    if minimum is not None and not version_argv:
+        raise PermissionError(f"native route {route_id} min_cli_version requires version_argv")
     inspection_only = bool(raw.get("inspection_only", False))
     runtime_env = _as_tuple(raw.get("runtime_env"))
     runtime_read = _as_tuple(raw.get("runtime_read"))
@@ -154,6 +176,9 @@ def declare(route_id: str, raw: dict) -> NativeRoute:
         endpoint=str(raw.get("endpoint") or "unknown"),
         supported_models=models,
         supported_efforts=_as_tuple(raw.get("supported_efforts")),
+        denied_models=tuple(denied),
+        min_cli_version=minimum,
+        version_argv=tuple(version_argv),
         credential_env=credential_env,
         allowed_repositories=scopes["allowed_repositories"],
         allowed_workdirs=scopes["allowed_workdirs"],
@@ -187,6 +212,44 @@ def enforce_scope(route: NativeRoute, repository: str | None,
 def _placeholders(item: str) -> list[str]:
     """Return all braced placeholders so unsupported declarations fail closed."""
     return re.findall(r"\{[^{}]+\}", str(item))
+
+
+def _denies(model: str, pattern: str) -> bool:
+    return model.startswith(pattern[:-1]) if pattern.endswith("*") else model == pattern
+
+
+_VERSION_CACHE: dict[tuple[str, int, tuple[str, ...]], str | None] = {}
+
+
+class CliVersionError(PermissionError):
+    """A route's executable did not satisfy its declared minimum version."""
+
+
+def probe_version(binary: str, version_argv: tuple[str, ...], *,
+                  wrapper: tuple[str, ...] = (), cwd: str | None = None) -> str | None:
+    """Probe once per executable revision, without forwarding controller credentials."""
+    from .credential_env import scrub
+
+    key = (binary, os.stat(binary).st_mtime_ns, version_argv)
+    if key not in _VERSION_CACHE:
+        try:
+            run = subprocess.run([*wrapper, binary, *version_argv], capture_output=True,
+                                 text=True, timeout=5, check=False,
+                                 cwd=cwd, env=scrub(dict(os.environ)))
+            match = re.search(r"(?<![\d.])(\d+\.\d+\.\d+)(?![\d.])", run.stdout)
+            _VERSION_CACHE[key] = match.group(1) if run.returncode == 0 and match else None
+        except (OSError, subprocess.TimeoutExpired, UnicodeError):
+            _VERSION_CACHE[key] = None
+    return _VERSION_CACHE[key]
+
+
+def enforce_min_version(route: NativeRoute, observed: str | None) -> None:
+    if route.min_cli_version and (observed is None or
+            tuple(map(int, observed.split("."))) <
+            tuple(map(int, route.min_cli_version.split(".")))):
+        raise CliVersionError(f"native route {route.id} CLI version "
+                              f"{observed or 'unparsable'} is below required "
+                              f"{route.min_cli_version}")
 
 
 def declared_routes(host: dict) -> dict[str, NativeRoute]:
@@ -292,6 +355,8 @@ def authorize(route: NativeRoute, profile, *, host_routes: tuple[str, ...]) -> N
     if profile.model not in route.supported_models:
         raise PermissionError(
             f"native route {route.id} does not serve model {profile.model!r}; no silent substitution")
+    if any(_denies(profile.model, pattern) for pattern in route.denied_models):
+        raise PermissionError(f"native route {route.id} denies model {profile.model!r}")
     if profile.effort not in route.supported_efforts:
         raise PermissionError(
             f"native route {route.id} does not serve effort {profile.effort!r} for model {profile.model!r}")
@@ -317,12 +382,14 @@ class LaunchPlan:
     evidence: dict = field(default_factory=dict)
     #: The regular file ``binary`` resolves to, recorded for audit; ``binary`` is executed.
     binary_realpath: str | None = None
+    cli_version: str | None = None
 
     def as_dict(self) -> dict:
         return {"route": self.route.as_dict(), "binary": self.binary,
                 "binary_realpath": self.binary_realpath, "argv": list(self.argv),
                 "model": self.model, "effort": self.effort, "home": self.home,
-                "credential_env": list(self.credential_env), "evidence": self.evidence}
+                "credential_env": list(self.credential_env), "cli_version": self.cli_version,
+                "evidence": self.evidence}
 
 
 def plan(route: NativeRoute, profile, *, host_routes: tuple[str, ...],
@@ -337,6 +404,7 @@ def plan(route: NativeRoute, profile, *, host_routes: tuple[str, ...],
         "endpoint": route.endpoint,
         "envelope": route.envelope,
         "declared_version": route.version,
+        "cli_version": None,
         "synthetic": route.synthetic,
         # Declared authorization is reported verbatim; permission to launch now is separate.
         "launch_authorized": route.launch_authorized,
@@ -355,4 +423,5 @@ def plan(route: NativeRoute, profile, *, host_routes: tuple[str, ...],
     }
     return LaunchPlan(route=route, binary=str(declared), argv=route.argv, model=profile.model,
                       effort=profile.effort, credential_env=route.credential_env,
-                      home=route.runtime_home, evidence=evidence, binary_realpath=str(real))
+                      home=route.runtime_home, evidence=evidence, binary_realpath=str(real),
+                      cli_version=None)

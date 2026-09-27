@@ -6,6 +6,11 @@ from pathlib import Path
 from typing import Any
 
 
+def provider_for(spec: dict[str, Any]) -> str | None:
+    """Provider pinned by the controller-resolved profile, if this is a native task."""
+    return ((spec.get("selection") or {}).get("profile") or {}).get("provider")
+
+
 def request_spec(store, event: dict[str, Any], *, db=None) -> dict[str, Any]:
     """Keep admission identity separate from controller-resolved execution inputs.
 

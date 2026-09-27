@@ -100,7 +100,7 @@ class Controller:
                         f"profile {eligible.id} route {eligible.route!r} is not declared by this host")
                 routes.authorize(declared, eligible, host_routes=tuple(host.get("routes", [])))
                 routes.enforce_scope(declared, spec.get("service_repository_profile")
-                                     or spec.get("repo"), spec["workspace"])
+                                     or spec.get("repo"), spec.get("workspace"))
                 if spec.get("command"):
                     raise PermissionError(
                         "native profile must run through the trusted adapter; explicit command refused")
@@ -129,7 +129,7 @@ class Controller:
                         f"profile {eligible.id} route {eligible.route!r} is not declared by this host")
                 routes.authorize(declared, eligible, host_routes=tuple(host.get("routes", [])))
                 routes.enforce_scope(declared, spec.get("service_repository_profile")
-                                     or spec.get("repo"), spec["workspace"])
+                                     or spec.get("repo"), spec.get("workspace"))
                 if spec.get("command"):
                     raise PermissionError(
                         "native profile must run through the trusted adapter; explicit command refused")

@@ -139,3 +139,29 @@ def test_credential_names_cover_keys_sockets_and_credential_files():
         assert not credential_env.is_credential(name), name
     assert credential_env.scrub({"NVIDIA_KEY": "x", "PATH": "/bin"}, ["NVIDIA_KEY"]) == {
         "NVIDIA_KEY": "x", "PATH": "/bin"}
+
+
+def test_scope_names_profiles_and_requires_a_workspace(tmp_path):
+    env = ns.native_env(tmp_path)
+    raw = env["host"]["native_routes"][ns.FAKE_ROUTE]
+    with pytest.raises(PermissionError, match="repository profiles"):
+        routes.declare(ns.FAKE_ROUTE, {**raw, "allowed_repositories": ["owner/repo"]})
+    route = routes.declare(ns.FAKE_ROUTE, {**raw, "allowed_workdirs": [str(env["workspace"])]})
+    with pytest.raises(PermissionError, match="scoped workspace"):
+        routes.enforce_scope(route, "fixture-native", None)
+
+
+def test_git_environment_drops_redirects_and_credentials(monkeypatch):
+    from corral.execution import git_hardening
+
+    for name, value in {"GIT_DIR": "/elsewhere", "GIT_CONFIG_PARAMETERS": "'core.hooksPath'='x'",
+                        "GIT_SSH_COMMAND": "ssh -o BatchMode=yes", "SSH_AUTH_SOCK": "/tmp/agent",
+                        "SERVICE_API_KEY": "k", "GH_TOKEN": "t", "PATH": "/usr/bin"}.items():
+        monkeypatch.setenv(name, value)
+    env = git_hardening.git_environment({"GH_TOKEN": "explicit"})
+    assert "GIT_DIR" not in env and "GIT_CONFIG_PARAMETERS" not in env
+    assert "SERVICE_API_KEY" not in env
+    assert env["GIT_SSH_COMMAND"] == "ssh -o BatchMode=yes"
+    assert env["SSH_AUTH_SOCK"] == "/tmp/agent"
+    assert env["GH_TOKEN"] == "explicit"
+    assert env["GIT_CONFIG_NOSYSTEM"] == "1"

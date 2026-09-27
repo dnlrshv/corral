@@ -11,7 +11,7 @@ def is_credential(name: str) -> bool:
     upper = name.upper()
     return (upper.startswith(("AWS_", "ANTHROPIC_", "OPENAI_"))
             or upper in _EXACT
-            or upper.endswith(("_TOKEN", "_KEY", "_PAT", "_CREDENTIALS", "_PASSWD"))
+            or upper.endswith(("_TOKEN", "_KEY", "_PAT", "_CREDENTIALS", "_PASSWD", "_PASS"))
             or "_SECRET" in upper or "PASSWORD" in upper)
 
 

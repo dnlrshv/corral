@@ -12,7 +12,9 @@ Every release section must include a `### Consumer action` subsection, even when
 
 ### Changed
 
-- Seat process environments remove credential-shaped variables unless the native route declares them in `credential_env`.
+- Seat process environments remove credential-shaped variables (names ending in `_TOKEN`, `_KEY`, `_PAT`, `_PASS`, `_PASSWD` or `_CREDENTIALS`, containing `_SECRET` or `PASSWORD`, `AWS_*`/`ANTHROPIC_*`/`OPENAI_*`, and agent sockets such as `SSH_AUTH_SOCK`) unless the native route declares them in `credential_env`. Deterministic workers and non-native verifiers have no route declaration, so they never receive such variables, including ones passed in a task's `env`.
+- Git subprocesses for inspection, candidate export and repair run without inherited credential variables. They keep only the SSH agent and tokens a caller passes explicitly.
+- `allowed_repositories` entries must be repository profile names; values containing `/` or `:` (remote slugs) are refused.
 
 ### Fixed
 
@@ -20,7 +22,7 @@ Every release section must include a `### Consumer action` subsection, even when
 
 ### Consumer action
 
-Declare every credential a native route needs in `credential_env` and provide it through the controller's private credential configuration. Set route scopes before enabling implementation or repair lanes. Consumers that relied on inherited credential variables must update their route declarations. Protocol and store schema remain at version 1.
+Declare every credential a native route needs in `credential_env` and provide it through the controller's private credential configuration. Set route scopes before enabling implementation or repair lanes. Consumers that relied on inherited credential variables must update their route declarations. A deterministic worker or non-native verifier that needs a credential must now run through a native route that declares it. A route with `allowed_workdirs` refuses tasks that carry no workspace. Protocol and store schema remain at version 1.
 
 ## [0.1.0] - 2026-09-27
 

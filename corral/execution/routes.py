@@ -113,6 +113,11 @@ def declare(route_id: str, raw: dict) -> NativeRoute:
                                                for item in value):
             raise PermissionError(f"native route {route_id} {field_name} must be a list of nonempty strings")
         scopes[field_name] = tuple(value)
+    # Scopes name service repository profiles. A task outside the service carries a remote
+    # slug in the same `repo` field, so a profile name may never look like one.
+    if any("/" in name or ":" in name for name in scopes["allowed_repositories"]):
+        raise PermissionError(
+            f"native route {route_id} allowed_repositories must name repository profiles, not remotes")
     for root in scopes["allowed_workdirs"]:
         path = Path(root)
         if (not path.is_absolute() or ".." in path.parts
@@ -166,11 +171,14 @@ def declare(route_id: str, raw: dict) -> NativeRoute:
     )
 
 
-def enforce_scope(route: NativeRoute, repository: str | None, workspace: str | Path) -> None:
+def enforce_scope(route: NativeRoute, repository: str | None,
+                  workspace: str | Path | None) -> None:
     """Bind a declared route to its service repository and resolved checkout."""
     if route.allowed_repositories and repository not in route.allowed_repositories:
         raise PermissionError(f"native route {route.id} is not allowed for repository profile")
     if route.allowed_workdirs:
+        if not workspace:
+            raise PermissionError(f"native route {route.id} requires a scoped workspace")
         real = Path(workspace).resolve()
         if not any(real.is_relative_to(Path(root).resolve()) for root in route.allowed_workdirs):
             raise PermissionError(f"native route {route.id} is not allowed for workspace")

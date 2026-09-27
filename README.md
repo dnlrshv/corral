@@ -114,6 +114,8 @@ Set `seats_file: seats.yaml`, `retro.drafter_seat`, and `retro.verifier_seats` i
 
 See the [CHANGELOG](CHANGELOG.md) for release changes and required consumer action, the [release procedure](docs/releasing.md) for tagging rules, and the [upgrade guide](docs/upgrading.md) for pinned consumers and maintained services.
 
+Optional blackout windows, process priority, seat caps, and GitHub publication modes are described in the [host policy guide](docs/host-policy.md).
+
 ## GitHub Actions
 
 Ready-to-adapt workflows live in [`examples/github-actions/`](examples/github-actions/): telemetry rollup, weekly retrospective, deterministic retrieval replay, and the instruction-governance gate.

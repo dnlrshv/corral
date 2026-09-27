@@ -7,6 +7,8 @@ Every release section must include a `### Consumer action` subsection, even when
 
 ### Added
 
+- Optional service blackout windows, per-host process priority, and host-wide seat caps with status and validation.
+- GitHub dry-run Store records for advisory reviews, repair branch pushes, and merges.
 - Optional per-route `allowed_repositories`, `allowed_workdirs`, and `max_packet_bytes` controls, with service validation and a bounded inspection packet default.
 - Shared hardened Git configuration for inspection, candidate export, and repair object operations.
 - Optional route CLI version gates, model denials, repository route allowlists, and service-wide provider concurrency budgets.
@@ -14,6 +16,7 @@ Every release section must include a `### Consumer action` subsection, even when
 
 ### Changed
 
+- GitHub publication now defaults to dry-run. Live advisory COMMENT reviews require `github_post_mode: comment`; repair pushes additionally require `allow_repair_push: true`, and merges require `allow_merge: true` in the coordinator or merge CLI config.
 - Seat process environments remove credential-shaped variables (names ending in `_TOKEN`, `_KEY`, `_PAT`, `_PASS`, `_PASSWD` or `_CREDENTIALS`, containing `_SECRET` or `PASSWORD`, `AWS_*`/`ANTHROPIC_*`/`OPENAI_*`, and agent sockets such as `SSH_AUTH_SOCK`) unless the native route declares them in `credential_env`. Deterministic workers and non-native verifiers have no route declaration, so they never receive such variables, including ones passed in a task's `env`.
 - Git subprocesses for inspection, candidate export and repair run without inherited credential variables. They keep only the SSH agent and tokens a caller passes explicitly.
 - `allowed_repositories` entries must be repository profile names; values containing `/` or `:` (remote slugs) are refused.
@@ -25,7 +28,7 @@ Every release section must include a `### Consumer action` subsection, even when
 
 ### Consumer action
 
-Declare every credential a native route needs in `credential_env` and provide it through the controller's private credential configuration. Set route scopes before enabling implementation or repair lanes. Consumers that relied on inherited credential variables must update their route declarations. A deterministic worker or non-native verifier that needs a credential must now run through a native route that declares it. A route with `allowed_workdirs` refuses tasks that carry no workspace. The new route, repository, and service fields are optional; set `version_argv` when using `min_cli_version`, and align provider names across profiles and budgets. Protocol and store schema remain at version 1.
+Declare every credential a native route needs in `credential_env` and provide it through the controller's private credential configuration. Set route scopes before enabling implementation or repair lanes. Consumers that relied on inherited credential variables must update their route declarations. A deterministic worker or non-native verifier that needs a credential must now run through a native route that declares it. A route with `allowed_workdirs` refuses tasks that carry no workspace. The new route, repository, and service fields are optional; set `version_argv` when using `min_cli_version`, and align provider names across profiles and budgets. **Consumers relying on default GitHub publication must set `github_post_mode: comment` explicitly.** To continue repair branch publication, set per-repository `allow_repair_push: true`; to continue merges, set `allow_merge: true` in the coordinator or merge CLI config. For standalone advisory publication, pass `--post-mode comment --allow-network`. Otherwise these writes create dry-run Store records only. Run `corral-service validate` on each execution host before enabling priority tools. Protocol and store schema remain at version 1.
 
 ## [0.1.0] - 2026-09-27
 

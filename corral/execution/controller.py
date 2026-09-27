@@ -16,7 +16,7 @@ from .adapter import source_root
 from .atomic_io import write_json
 from .process import Process, boundary_for
 from .pr_fence import require_active_review_owner
-from .profiles import Profile, STANDARD_NATIVE_PROFILES, resolve
+from .profiles import registered_profiles, resolve
 from .recovery_store import DispatchFenceLost
 from .store import Store, canonical, digest
 from .usage import Spool
@@ -41,11 +41,7 @@ class Controller:
         # The provider secret file is controller credential state: every worker and verifier
         # boundary denies it, wherever the operator keeps it.
         self.secret_env_path = str(Path(secret_env).resolve()) if secret_env else None
-        registered = {p.id: (p if isinstance(p, Profile) else Profile(**p)) for p in STANDARD_NATIVE_PROFILES}
-        for p in profiles:
-            prof = p if isinstance(p, Profile) else Profile(**p)
-            registered[prof.id] = prof
-        self.profiles = list(registered.values())
+        self.profiles = registered_profiles(profiles)
 
 
     def trusted_host(self, name):

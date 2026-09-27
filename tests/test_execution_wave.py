@@ -416,7 +416,8 @@ def test_wave_reconcile_treats_a_reused_runner_pid_as_dead(
 
     result = _cli(config, {"action": "reconcile-wave", "wave_id": "reused"}, monkeypatch, capsys)
 
-    assert result == {"wave_id": "reused", "reconciled": True, "reason": "proven dead"}
+    assert result == {"wave_id": "reused", "reconciled": True, "reason": "proven dead",
+                      "protocol": 1}
     assert _runner_owner(controller, "reused") == ("runner1", epoch, "released")
 
 
@@ -436,7 +437,7 @@ def test_wave_reconcile_keeps_a_runner_whose_birth_identity_matches(
 
     result = _cli(config, {"action": "reconcile-wave", "wave_id": "live"}, monkeypatch, capsys)
 
-    assert result == {"wave_id": "live", "reconciled": False,
+    assert result == {"wave_id": "live", "reconciled": False, "protocol": 1,
                       "reason": "process is still alive"}
     assert _runner_owner(controller, "live") == ("runner1", epoch, "active")
 
@@ -454,6 +455,6 @@ def test_wave_reconcile_never_trusts_a_live_pid_without_birth_identity(
 
     result = _cli(config, {"action": "reconcile-wave", "wave_id": "legacy"}, monkeypatch, capsys)
 
-    assert result == {"wave_id": "legacy", "reconciled": False,
+    assert result == {"wave_id": "legacy", "reconciled": False, "protocol": 1,
                       "reason": "cannot verify process identity"}
     assert _runner_owner(controller, "legacy") == ("runner1", epoch, "uncertain")

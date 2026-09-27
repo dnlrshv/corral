@@ -108,6 +108,11 @@ Set `seats_file: seats.yaml`, `retro.drafter_seat`, and `retro.verifier_seats` i
 | `corral.telemetry` | Capture session records, roll up weekly data, and reconstruct CI outcomes. | `corral telemetry capture`, `rollup`, `ci-outcome` |
 | `corral.retro` | Mine evidence, draft candidates, verify them, and render weekly summaries. | `corral retro seats check`, `run`, `revert-refinement` |
 | `corral.governance` | Enforce the rule/proposal contract, replay retrieval, lint budgets, and report staleness. | `corral governance check`, `replay`, `build-corpus`, `lint-budget`, `staleness` |
+| `corral.protocol` | Define execution protocol and store schema compatibility versions. | `corral version`, `corral-service version` |
+
+## Versioning and upgrades
+
+See the [CHANGELOG](CHANGELOG.md) for release changes and required consumer action, the [release procedure](docs/releasing.md) for tagging rules, and the [upgrade guide](docs/upgrading.md) for pinned consumers and maintained services.
 
 ## GitHub Actions
 
@@ -126,7 +131,7 @@ The detailed sequence is in [`docs/adoption.md`](docs/adoption.md); the runnable
 
 ## Status and roadmap
 
-corral is pre-release (`0.1.0.dev0`) and not yet published. The toolkit entered this documentation batch with 442 tests, with CI on Ubuntu and macOS across Python 3.10 and 3.12.
+Corral is versioned at `0.1.0`; see the CHANGELOG for release status. The toolkit entered its initial documentation batch with 442 tests and CI on Ubuntu and macOS across Python 3.10 and 3.12.
 
 Near-term roadmap: stabilize configuration and registry schemas, expand portable examples, and harden the adoption path from local hooks through governed weekly retrospectives. The project is designed to improve context discipline and review quality; it does not claim measured token or quality effects.
 

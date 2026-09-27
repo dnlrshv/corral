@@ -390,6 +390,7 @@ def test_legacy_wave_action_is_an_alias_of_the_async_submit(tmp_path, monkeypatc
 
     legacy = call("wave")
     assert call("wave-advanced") == legacy
+    assert legacy.pop("protocol") == 1
     service = Service(config)
     assert service.store.get("wave", "legacy") == legacy
     assert service.store.records("wave_dispatch") == {}

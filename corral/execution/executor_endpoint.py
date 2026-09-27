@@ -12,6 +12,8 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any, Callable
 
+from corral.protocol import check_min_protocol
+
 TASK_ID = re.compile(r"^[0-9a-f]{64}$")
 ACTIONS = {
     "submit", "dispatch", "status", "steer", "continue", "cancel", "reconcile",
@@ -66,6 +68,7 @@ def validate(config: dict[str, Any], request: dict[str, Any], *,
     so it is checked against the request this executor admitted for that task: an unknown
     task, or one outside the registered scope, is refused before the controller runs.
     """
+    check_min_protocol(request)
     action = request.get("action")
     if action not in ACTIONS:
         raise PermissionError("action is not allowed by the executor endpoint")

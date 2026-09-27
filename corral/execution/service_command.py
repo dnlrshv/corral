@@ -5,13 +5,19 @@ import argparse
 import json
 from pathlib import Path
 
+from corral import __version__
+from corral.protocol import (PROTOCOL_VERSION, STORE_SCHEMA_VERSION, installed_commit,
+                             response_with_protocol)
+
 from .service import Service
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", required=True)
+    parser.add_argument("--config")
     sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser("version")
+    sub.add_parser("validate")
     submit = sub.add_parser("submit")
     for flag in ("event-id", "repository", "objective"):
         submit.add_argument("--" + flag, required=True)
@@ -54,6 +60,19 @@ def main(argv: list[str] | None = None) -> int:
     tick = sub.add_parser("tick")
     tick.add_argument("--now", type=float)
     args = parser.parse_args(argv)
+    if args.command == "version":
+        print(json.dumps({"version": __version__, "commit": installed_commit(),
+                          "protocol": PROTOCOL_VERSION,
+                          "store_schema": STORE_SCHEMA_VERSION}, sort_keys=True))
+        return 0
+    if not args.config:
+        parser.error("--config is required for this command")
+    if args.command == "validate":
+        from .service_validation import validate
+
+        result = response_with_protocol(validate(args.config))
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return 0 if result["valid"] else 1
     service = Service(args.config)
     if args.command == "submit":
         snapshot = json.loads(args.snapshot.read_text()) if args.snapshot else None
@@ -83,7 +102,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         result = {"path": str(service.return_artifact(
             args.event_id, args.path, args.destination))}
-    print(json.dumps(result, indent=2, sort_keys=True))
+    print(json.dumps(response_with_protocol(result), indent=2, sort_keys=True))
     return 0
 
 

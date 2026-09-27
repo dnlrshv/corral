@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "corral"
-version = "0.1.0.dev0"
+version = "0.1.0"
 description = "Repo infrastructure for teams operating fleets of coding agents: code map, guardrails, preflight briefs, agent memory, governed retrospectives."
 readme = "README.md"
 license = "Apache-2.0"

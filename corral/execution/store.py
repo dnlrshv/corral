@@ -10,6 +10,12 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
+from corral.protocol import STORE_SCHEMA_VERSION
+
+
+class StoreSchemaError(RuntimeError):
+    """The store needs a newer Corral runtime."""
+
 
 def lease_holder_alive(pid, acquired_at: float | None = None) -> bool:
     """Whether a lease's local holder process still exists.
@@ -74,25 +80,31 @@ class Store:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.transaction() as db:
-            db.executescript("""
-                CREATE TABLE IF NOT EXISTS records(kind TEXT, key TEXT, value TEXT,
-                    PRIMARY KEY(kind,key));
-                CREATE TABLE IF NOT EXISTS owners(resource TEXT PRIMARY KEY,
-                    owner TEXT, epoch INTEGER, status TEXT);
-                CREATE TABLE IF NOT EXISTS leases (
+            version = db.execute("PRAGMA user_version").fetchone()[0]
+            if version > STORE_SCHEMA_VERSION:
+                raise StoreSchemaError(
+                    "DB was written by a newer Corral; roll forward the runtime or "
+                    "restore the pre-upgrade backup"
+                )
+            db.execute("""CREATE TABLE IF NOT EXISTS records(kind TEXT, key TEXT, value TEXT,
+                    PRIMARY KEY(kind,key))""")
+            db.execute("""CREATE TABLE IF NOT EXISTS owners(resource TEXT PRIMARY KEY,
+                    owner TEXT, epoch INTEGER, status TEXT)""")
+            db.execute("""CREATE TABLE IF NOT EXISTS leases (
                     resource TEXT PRIMARY KEY, owner TEXT NOT NULL, epoch INTEGER NOT NULL,
                     holder_pid INTEGER NOT NULL, attempt_id TEXT NOT NULL, head_sha TEXT NOT NULL, acquired_at REAL NOT NULL, status TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS publication_intents (
+                )""")
+            db.execute("""CREATE TABLE IF NOT EXISTS publication_intents (
                     intent TEXT PRIMARY KEY, resource TEXT NOT NULL, owner TEXT NOT NULL, epoch INTEGER NOT NULL,
                     head_sha TEXT NOT NULL, base_sha TEXT NOT NULL, status TEXT NOT NULL, payload TEXT NOT NULL,
                     error TEXT, review_id INTEGER, created_at REAL NOT NULL, updated_at REAL NOT NULL,
                     attempt_id TEXT NOT NULL DEFAULT ''
-                );
-            """)
+                )""")
             columns = {row[1] for row in db.execute("PRAGMA table_info(publication_intents)")}
             if "attempt_id" not in columns:
                 db.execute("ALTER TABLE publication_intents ADD COLUMN attempt_id TEXT NOT NULL DEFAULT ''")
+            if version == 0:
+                db.execute(f"PRAGMA user_version = {STORE_SCHEMA_VERSION}")
 
     @contextmanager
     def transaction(self):

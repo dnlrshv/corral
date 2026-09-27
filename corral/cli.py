@@ -20,11 +20,19 @@ configured value.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
 from corral import __version__
 from corral.config import load_config
+from corral.protocol import PROTOCOL_VERSION, STORE_SCHEMA_VERSION
+
+
+def _cmd_version(args: argparse.Namespace) -> int:
+    print(json.dumps({"version": __version__, "protocol": PROTOCOL_VERSION,
+                      "store_schema": STORE_SCHEMA_VERSION}, sort_keys=True))
+    return 0
 
 
 def _cmd_codemap_build(args: argparse.Namespace) -> int:
@@ -209,6 +217,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--version", action="version", version=f"corral {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser("version", help="Print machine-readable release versions").set_defaults(
+        handler=_cmd_version)
 
     # -- corral codemap -----------------------------------------------------
     codemap = sub.add_parser("codemap", help="Code map builders and queries")

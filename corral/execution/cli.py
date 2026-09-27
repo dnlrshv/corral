@@ -8,6 +8,8 @@ import sys
 import time
 from pathlib import Path
 
+from corral.protocol import check_min_protocol, response_with_protocol
+
 from . import continuation
 from .controller import Controller
 from .runtime_identity import launched, process_status
@@ -45,7 +47,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     config = json.loads(args.config.read_text())
     if args.show_config:
-        print(json.dumps(safe_config_diagnostic(config), indent=2))
+        print(json.dumps(response_with_protocol(safe_config_diagnostic(config)), indent=2))
         return
     controller = Controller(config["state"], config["token"], config["hosts"],
                             default_host=config["default_host"], profiles=config.get("profiles", []),
@@ -67,6 +69,7 @@ def main(argv=None):
                 controller.store.transition_owner(f"wave_runner:{args.execute_wave}", args.runner_id, args.epoch, "released")
     else:
         request = json.load(sys.stdin)
+        check_min_protocol(request)
         action = request.pop("action")
         if action == "submit":
             result = {"task": controller.submit(token, request["request_id"], request["spec"])}
@@ -192,7 +195,7 @@ def main(argv=None):
                     result = {"wave_id": request["wave_id"], "dispatch": "launched", "runner_id": runner_id}
         else:
             raise ValueError("unsupported action")
-    print(json.dumps(result))
+    print(json.dumps(response_with_protocol(result)))
 
 
 if __name__ == "__main__":

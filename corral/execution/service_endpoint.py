@@ -6,6 +6,8 @@ import base64
 import json
 from pathlib import Path
 
+from corral.protocol import check_min_protocol, response_with_protocol
+
 from .service import Service
 
 
@@ -14,6 +16,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--config", required=True, type=Path)
     args = parser.parse_args(argv)
     request = json.load(__import__("sys").stdin)
+    check_min_protocol(request)
     action = request.pop("action")
     service = Service(args.config)
     if action == "submit":
@@ -70,7 +73,7 @@ def main(argv: list[str] | None = None) -> int:
         base64.b64decode(result["data"], validate=True)
     else:
         raise ValueError("unsupported service action")
-    print(json.dumps(result, sort_keys=True))
+    print(json.dumps(response_with_protocol(result), sort_keys=True))
     return 0
 
 

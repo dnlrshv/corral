@@ -7,6 +7,7 @@ Every release section must include a `### Consumer action` subsection, even when
 
 ### Added
 
+- Initial repository toolkit: code map and lineage, surface hooks, preflight briefs, agent memory, telemetry, governed retrospectives, and instruction governance.
 - Optional managed execution with a maintained service, local and authenticated remote clients, durable recovery, owner fencing, explicit profiles, usage observation, and guarded advisory publication (#1).
 - Finite waves through the maintained service, including named plans, capacity and workspace fences, generation-aware reconciliation, and artifact handoffs (#3).
 - Service repair pipeline with admission checks, candidate-bound publication, durable intents, and authenticated readback (#2).
@@ -24,4 +25,4 @@ Every release section must include a `### Consumer action` subsection, even when
 
 ### Consumer action
 
-Pin protocol 1; no config changes are required for this release. Pin the release tag and exact Corral commit, check `corral-service version` at startup, and follow [the pickup procedure](docs/upgrading.md). If a consumer uses the earlier wave action, account for its admission-only behavior described above.
+Pin protocol 1; no config changes are required for this release. Pin the release tag and exact Corral commit, compare the `commit` and `protocol` fields from `corral-service version` at startup, and run the read-only `corral-service validate` before cutover. Follow [the pickup procedure](docs/upgrading.md). If a consumer uses the earlier wave action, account for its admission-only behavior described above.

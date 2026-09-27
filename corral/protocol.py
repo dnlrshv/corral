@@ -12,6 +12,25 @@ PROTOCOL_VERSION = 1
 STORE_SCHEMA_VERSION = 1
 
 
+def installed_commit() -> str | None:
+    """Return the VCS commit recorded by an installed distribution, if present."""
+    import json
+    from importlib import metadata
+
+    try:
+        raw = metadata.distribution("corral").read_text("direct_url.json")
+        direct_url = json.loads(raw) if raw else {}
+        vcs = direct_url.get("vcs_info")
+        commit = vcs.get("commit_id") if isinstance(vcs, dict) else None
+        if (isinstance(direct_url.get("url"), str) and direct_url["url"]
+                and isinstance(vcs, dict) and isinstance(vcs.get("vcs"), str)
+                and vcs["vcs"] and isinstance(commit, str) and commit):
+            return commit
+        return None
+    except Exception:
+        return None
+
+
 def check_min_protocol(request: dict) -> None:
     """Consume the optional compatibility gate before dispatching an action."""
     if "min_protocol" not in request:

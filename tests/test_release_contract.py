@@ -3,6 +3,8 @@ import json
 import re
 import sqlite3
 import sys
+from dataclasses import asdict
+from importlib import metadata
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -12,6 +14,7 @@ from corral import __version__
 from corral.cli import main as corral_main
 from corral.execution import cli as controller_cli
 from corral.execution import executor_endpoint, service_command, service_endpoint
+from corral.execution.profiles import STANDARD_NATIVE_PROFILES
 from corral.execution.store import Store, StoreSchemaError
 from corral.protocol import (
     PROTOCOL_VERSION,
@@ -21,14 +24,49 @@ from corral.protocol import (
 )
 
 
-def test_protocol_constants_and_version_commands(capsys):
+def test_protocol_constants_and_version_commands(capsys, monkeypatch):
+    class Distribution:
+        def read_text(self, _filename):
+            return None
+
+    monkeypatch.setattr(metadata, "distribution", lambda _name: Distribution())
     assert (PROTOCOL_VERSION, STORE_SCHEMA_VERSION) == (1, 1)
     assert service_command.main(["version"]) == 0
     assert json.loads(capsys.readouterr().out) == {
-        "version": __version__, "protocol": 1, "store_schema": 1}
+        "version": __version__, "commit": None, "protocol": 1, "store_schema": 1}
     assert corral_main(["version"]) == 0
     assert json.loads(capsys.readouterr().out) == {
-        "version": __version__, "protocol": 1, "store_schema": 1}
+        "version": __version__, "commit": None, "protocol": 1, "store_schema": 1}
+
+
+@pytest.mark.parametrize("direct_url,expected", [
+    ('{"url":"https://github.com/example/corral","vcs_info":'
+     '{"vcs":"git","commit_id":"abc123"}}', "abc123"),
+    ('{"url":"file:///checkout","dir_info":{"editable":true}}', None),
+    ('{"vcs_info":{"vcs":"git","commit_id":"abc123"}}', None),
+    ('{malformed', None),
+    (None, None),
+])
+def test_version_commit_from_distribution(monkeypatch, capsys, direct_url, expected):
+    class Distribution:
+        def read_text(self, filename):
+            assert filename == "direct_url.json"
+            return direct_url
+
+    monkeypatch.setattr(metadata, "distribution", lambda name: Distribution())
+    for command in (lambda: service_command.main(["version"]),
+                    lambda: corral_main(["version"])):
+        assert command() == 0
+        assert json.loads(capsys.readouterr().out)["commit"] == expected
+
+
+def test_version_commit_missing_distribution(monkeypatch, capsys):
+    def missing(_name):
+        raise metadata.PackageNotFoundError("corral")
+
+    monkeypatch.setattr(metadata, "distribution", missing)
+    assert service_command.main(["version"]) == 0
+    assert json.loads(capsys.readouterr().out)["commit"] is None
 
 
 def test_version_strings_and_changelog_match():
@@ -87,9 +125,80 @@ def test_installed_service_validate_command(tmp_path, capsys):
         "state": str(tmp_path / "state"), "token": "fixture",
         "hosts": {"local": {}}, "default_host": "local"}))
     config = tmp_path / "service.json"
-    config.write_text(json.dumps({"controller_config": str(controller)}))
+    config.write_text(json.dumps({"controller_config": controller.name}))
+    before = {path.relative_to(tmp_path) for path in tmp_path.rglob("*")}
     assert service_command.main(["--config", str(config), "validate"]) == 0
-    assert json.loads(capsys.readouterr().out) == {"valid": True, "protocol": 1}
+    assert json.loads(capsys.readouterr().out) == {
+        "valid": True, "errors": [], "protocol": 1,
+        "store": {"found": None, "supported": 1, "compatible": True}}
+    assert {path.relative_to(tmp_path) for path in tmp_path.rglob("*")} == before
+
+
+def test_validate_reports_route_profile_and_newer_store_without_writes(tmp_path, capsys):
+    state = tmp_path / "state"
+    state.mkdir()
+    db_path = state / "controller.sqlite"
+    with sqlite3.connect(db_path) as db:
+        db.execute("PRAGMA user_version = 2")
+    profile = {**asdict(STANDARD_NATIVE_PROFILES[0]), "id": "bad-route",
+               "route": "missing-route"}
+    controller = tmp_path / "controller.json"
+    controller.write_text(json.dumps({
+        "state": str(state), "token": "fixture", "default_host": "local",
+        "hosts": {"local": {"native_routes": {"broken": {}}}},
+        "profiles": [profile]}))
+    config = tmp_path / "service.json"
+    config.write_text(json.dumps({
+        "controller_config": controller.name, "max_dispatch_per_tick": 0,
+        "repositories": {"demo": {"default_host": "unknown-host",
+                                  "allowed_hosts": ["unknown-host"],
+                                  "review_policies": {"review": {"profile_id": "unknown-profile"}},
+                                  "repair_policies": {"repair": {"profile_id": "unknown-profile"}}}}}))
+    before = db_path.read_bytes()
+    assert service_command.main(["--config", str(config), "validate"]) == 1
+    result = json.loads(capsys.readouterr().out)
+    assert result["store"] == {"found": 2, "supported": 1, "compatible": False}
+    assert "undeclared" in str(result["errors"])
+    assert "unknown-profile" in str(result["errors"])
+    assert "unknown-host" in str(result["errors"])
+    assert "explicit binary" in str(result["errors"])
+    assert "max_dispatch_per_tick" in str(result["errors"])
+    assert db_path.read_bytes() == before
+
+
+def test_validate_secret_value_is_absent_from_output(tmp_path, capsys):
+    secret = tmp_path / "provider-secret.json"
+    secret.write_text(json.dumps({"API_KEY": "dummy-secret-value"}))
+    secret.chmod(0o600)
+    controller = tmp_path / "controller.json"
+    controller.write_text(json.dumps({
+        "state": str(tmp_path / "state"), "token": "fixture",
+        "hosts": {"local": {}}, "default_host": "local", "secret_env": str(secret)}))
+    config = tmp_path / "service.json"
+    config.write_text(json.dumps({"controller_config": controller.name}))
+    assert service_command.main(["--config", str(config), "validate"]) == 0
+    output = capsys.readouterr().out
+    assert "dummy-secret-value" not in output
+    assert json.loads(output)["valid"] is True
+
+
+def test_validate_reads_legacy_store_without_creating_wal_sidecars(tmp_path, capsys):
+    state = tmp_path / "state"
+    state.mkdir()
+    path = state / "controller.sqlite"
+    with sqlite3.connect(path) as db:
+        db.execute("PRAGMA journal_mode=WAL")
+    controller = tmp_path / "controller.json"
+    controller.write_text(json.dumps({
+        "state": str(state), "token": "fixture", "default_host": "local",
+        "hosts": {"local": {}}}))
+    config = tmp_path / "service.json"
+    config.write_text(json.dumps({"controller_config": controller.name}))
+    before = {entry.relative_to(tmp_path) for entry in tmp_path.rglob("*")}
+    assert service_command.main(["--config", str(config), "validate"]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["store"] == {"found": 0, "supported": 1, "compatible": True}
+    assert {entry.relative_to(tmp_path) for entry in tmp_path.rglob("*")} == before
 
 
 def test_controller_endpoint_rejects_newer_protocol(tmp_path, monkeypatch):

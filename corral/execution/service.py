@@ -14,17 +14,23 @@ from .store import canonical
 TERMINAL = {"completed", "failed", "refused-before-launch", "uncertain", "cancelled"}
 
 
+def load_service_config(config: str | Path | dict[str, Any]):
+    """Read both configs with the same controller path resolution as the service."""
+    config_path = Path(config).resolve() if not isinstance(config, dict) else None
+    service_config = json.loads(config_path.read_text()) if config_path else dict(config)
+    controller_path = Path(service_config["controller_config"])
+    if not controller_path.is_absolute() and config_path:
+        controller_path = config_path.parent / controller_path
+    controller_path = controller_path.resolve()
+    controller_config = json.loads(controller_path.read_text())
+    return config_path, service_config, controller_path, controller_config
+
+
 class Service:
     """One service view over the controller's authoritative Store."""
 
     def __init__(self, config: str | Path | dict[str, Any]):
-        self.config_path = Path(config).resolve() if not isinstance(config, dict) else None
-        self.config = json.loads(self.config_path.read_text()) if self.config_path else dict(config)
-        controller_path = Path(self.config["controller_config"])
-        if not controller_path.is_absolute() and self.config_path:
-            controller_path = self.config_path.parent / controller_path
-        self.controller_path = controller_path.resolve()
-        raw = json.loads(controller_path.read_text())
+        self.config_path, self.config, self.controller_path, raw = load_service_config(config)
         self.controller = Controller(raw["state"], raw["token"], raw["hosts"],
                                      default_host=raw["default_host"],
                                      profiles=raw.get("profiles", []),

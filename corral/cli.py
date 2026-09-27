@@ -26,11 +26,12 @@ from pathlib import Path
 
 from corral import __version__
 from corral.config import load_config
-from corral.protocol import PROTOCOL_VERSION, STORE_SCHEMA_VERSION
+from corral.protocol import PROTOCOL_VERSION, STORE_SCHEMA_VERSION, installed_commit
 
 
 def _cmd_version(args: argparse.Namespace) -> int:
-    print(json.dumps({"version": __version__, "protocol": PROTOCOL_VERSION,
+    print(json.dumps({"version": __version__, "commit": installed_commit(),
+                      "protocol": PROTOCOL_VERSION,
                       "store_schema": STORE_SCHEMA_VERSION}, sort_keys=True))
     return 0
 

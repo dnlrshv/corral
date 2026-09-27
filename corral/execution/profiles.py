@@ -88,6 +88,15 @@ STANDARD_NATIVE_PROFILES = (
 )
 
 
+def registered_profiles(profiles=()):
+    """Build the controller's profile registry, including configured overrides."""
+    registered = {p.id: p for p in STANDARD_NATIVE_PROFILES}
+    for profile in profiles:
+        parsed = profile if isinstance(profile, Profile) else Profile(**profile)
+        registered[parsed.id] = parsed
+    return list(registered.values())
+
+
 def resolve(profiles, *, role, routes, tools=(), context=0, model=None,
             effort=None, evidence=None, default=None, deterministic=False,
             demand=None, portable_intent=None):

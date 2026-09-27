@@ -36,6 +36,9 @@ class FakeService:
     repositories = {"corral": {}}
     provider_concurrency = {}
 
+    def seat_limit(self, _host):
+        return None
+
     def _profile_route(self, _spec, _host, _workspace=None):
         return "deterministic"
 
@@ -109,6 +112,9 @@ def test_wave_dispatch_claim_is_idempotent_and_progress_is_detached(tmp_path, mo
         development_mode = False
         max_dispatch = 1
         provider_concurrency = {}
+
+        def seat_limit(self, _host):
+            return None
 
     service = Service()
     monkeypatch.setattr("corral.execution.service_dispatch.launch", lambda *_args, **_kwargs: (

@@ -107,6 +107,28 @@ def test_failed_read_only_preflight_keeps_history_but_can_later_merge_once(tmp_p
     assert client.merge(**payload(epoch))["merged"] and github.puts == 1
 
 
+def test_dry_run_failed_preflight_records_locally_without_network_writes(tmp_path):
+    github = GitHub()
+    client, store, epoch = transport(tmp_path, github)
+    client.post_mode = "dry-run"
+    github.checks[0]["conclusion"] = "failure"
+    writes = []
+    request = client._request
+
+    def observe(method, path, **kwargs):
+        if method != "GET":
+            writes.append((method, path))
+        return request(method, path, **kwargs)
+
+    client._request = observe
+    with pytest.raises(PermissionError, match="required GitHub check"):
+        client.merge(**payload(epoch))
+    assert writes == []
+    assert store.records("merge_preflight_failure")
+    assert store.records("merge_intent") == {}
+    assert store.records("github_dry_run") == {}
+
+
 def test_merge_refuses_missing_required_evidence_empty_token_and_installation_identity(tmp_path, monkeypatch):
     github = GitHub()
     client, _store, epoch = transport(tmp_path, github)

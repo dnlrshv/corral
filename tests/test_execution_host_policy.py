@@ -9,6 +9,7 @@ from corral.execution.host_policy import blackout, priority_command
 from corral.execution.process import Process
 from corral.execution.service_dispatch import launch
 from corral.execution.service import Service
+from corral.execution import service_wave
 from corral.execution.service_validation import validate
 from .test_execution_service_cli import configs, git_repo
 from .test_execution_service_dispatch import _two_repositories
@@ -40,7 +41,7 @@ def test_blackout_tick_queues_then_dispatches(tmp_path, monkeypatch):
     assert inside["blackout"]["active"] is True
     assert inside["dispatched"] == []
     assert service.status("queued")["event"]["status"] == "prepared"
-    assert "active" in service.status("queued")["blackout"]
+    assert service.status("queued", now=_epoch(2026, 9, 28, 9, 30))["blackout"] == inside["blackout"]
     assert launches == []
     outside = service.tick(_epoch(2026, 9, 28, 10, 0))
     assert outside["blackout"]["active"] is False
@@ -66,6 +67,26 @@ def test_schedule_and_wave_wait_through_blackout(tmp_path, monkeypatch):
     assert result["pending"] == result["created"]
     assert service.store.records("wave_dispatch") == {}
     assert launches == []
+
+
+def test_blackout_reconciles_wave_without_launching_next_step(tmp_path, monkeypatch):
+    config, _workspace = _wave_config(tmp_path)
+    raw = json.loads(config.read_text())
+    raw["blackout_windows"] = [_window()]
+    config.write_text(json.dumps(raw))
+    service = Service(config)
+    producer = service.submit_wave_plan("usage", "wave-reconcile")["wave"]["tasks"]["producer"]
+    launches = []
+    monkeypatch.setattr("corral.execution.service_dispatch.launch",
+                        lambda *_args, **_kwargs: launches.append(True) or {"pid": 123})
+    assert service_wave._dispatch(service, "wave-reconcile", producer, "primary") == "active"
+    monkeypatch.setattr("corral.execution.runtime_identity.process_status",
+                        lambda _identity: "dead")
+    result = service.tick(_epoch(2026, 9, 28, 9, 30))
+    assert result["waves"] == result["dispatched"] == []
+    assert service.store.get("wave_dispatch", producer)["status"] == "uncertain"
+    assert service.store.get("allocation", producer)["active"] is False
+    assert len(launches) == 1
 
 
 def test_midnight_and_dst_boundaries():

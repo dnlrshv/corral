@@ -237,7 +237,7 @@ class Service:
         self.store.replace("service_event", event_id, updated)
         return self.status(event_id)
 
-    def status(self, event_id: str) -> dict[str, Any]:
+    def status(self, event_id: str, *, now: float | None = None) -> dict[str, Any]:
         event = self.store.get("service_event", event_id)
         if event is None:
             raise KeyError(event_id)
@@ -245,7 +245,7 @@ class Service:
                 if event.get("task_id") else None)
         return {"event": event, "task": task,
                 "provenance": (task.get("result") or {}).get("provenance") if task else None,
-                "blackout": blackout(self.blackout_windows, time.time())}
+                "blackout": blackout(self.blackout_windows, time.time() if now is None else now)}
 
     def amend(self, event_id: str, amendment_id: str, objective: str) -> dict[str, Any]:
         event = self.store.get("service_event", event_id)

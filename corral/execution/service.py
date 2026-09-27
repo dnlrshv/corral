@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import artifact_return, continuation
+from . import artifact_return, continuation, routes as native_routes
 from .controller import Controller
 from .service_specs import request_spec
 from .store import canonical
@@ -69,12 +69,17 @@ class Service:
             raise PermissionError(f"host is not allowed by repository profile: {host}")
         return host, workspace
 
-    def _profile_route(self, spec: dict[str, Any], host: str) -> str:
+    def _profile_route(self, spec: dict[str, Any], host: str,
+                       workspace: str | None = None) -> str:
         profile_id = spec.get("profile_id")
         if profile_id:
             profile = next((p for p in self.controller.profiles if p.id == profile_id), None)
             if profile is None:
                 raise PermissionError("profile is not registered by controller")
+            route = native_routes.declared_routes(self.controller.hosts[host]).get(profile.route)
+            if route:
+                native_routes.enforce_scope(route, spec.get("service_repository_profile")
+                                            or spec.get("repo"), workspace or spec.get("workspace"))
             return profile.route
         routes = list(self.controller.hosts[host].get("routes", []))
         return routes[0] if routes else "deterministic"

@@ -150,6 +150,9 @@ def prepare(*, spec: dict, host: dict, profile, task_dir: Path, workspace: str, 
     """Resolve the trusted route, demonstrate containment and build the adapter command."""
     declared = routes.declared_routes(host)
     route = declared.get(profile.route)
+    if route is not None:
+        routes.enforce_scope(route, spec.get("service_repository_profile")
+                             or spec.get("repo"), workspace)
     if route is None:
         raise PermissionError(f"no trusted native route declaration for {profile.route!r}")
     # Every root the worker can write: its workspace, the trusted task and state directories
@@ -186,7 +189,10 @@ def prepare(*, spec: dict, host: dict, profile, task_dir: Path, workspace: str, 
         context = json.loads(Path(context_path).read_text())
         candidate_binding = inspection_packet.bind_candidate(
             spec, workspace, context.get("workspace_provenance"))
-        packet = inspection_packet.build(spec, context, workspace, candidate_binding)
+        packet_spec = dict(spec)
+        if "max_packet_bytes" not in packet_spec and route.max_packet_bytes is not None:
+            packet_spec["max_packet_bytes"] = route.max_packet_bytes
+        packet = inspection_packet.build(packet_spec, context, workspace, candidate_binding)
         packet_path = inspection_packet.persist(packet, scratch)
         packet_record = {"path": str(packet_path), "digest": packet["digest"],
                          "task": packet["task"], "attempt": packet["attempt"],

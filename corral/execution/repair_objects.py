@@ -20,6 +20,8 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from .git_hardening import HARDENING as _HARDENING, git_environment
+
 SHA = re.compile(r"^[0-9a-f]{40}$")
 _ZERO = "0" * 40
 
@@ -35,19 +37,6 @@ _PACKED_REFS_LIMIT = 64 << 20
 #: without following a final symlink.
 _READ_FLAGS = (os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
                | getattr(os, "O_CLOEXEC", 0))
-
-#: Inherited variables that configure the trusted service's own SSH transport. Every other
-#: ``GIT_*`` variable could redirect the repository, index, object store or configuration.
-_INHERITED_GIT_ENV = frozenset({"GIT_SSH", "GIT_SSH_COMMAND", "GIT_SSH_VARIANT"})
-
-#: Settings that keep hooks, fsmonitor, external diff, user-level attributes and ignores, and
-#: automatic maintenance out of every invocation; ``credential.helper=`` clears inherited helpers.
-_HARDENING = ("-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false",
-              "-c", "core.untrackedCache=false", "-c", "core.attributesFile=/dev/null",
-              "-c", "core.excludesFile=/dev/null", "-c", "diff.external=",
-              "-c", "gc.auto=0", "-c", "maintenance.auto=false",
-              "-c", "credential.helper=")
-
 
 class GitTimeout(RuntimeError):
     """A trusted Git operation outlived its wall-clock bound.
@@ -80,17 +69,6 @@ def _git(command: list[str], operation: str, *, timeout: float, input: bytes | N
     except subprocess.TimeoutExpired:
         pass
     raise GitTimeout(operation, timeout)
-
-
-def git_environment(extra: dict[str, str] | None = None) -> dict[str, str]:
-    """Return the service environment without repository-redirecting Git variables."""
-    env = {key: value for key, value in os.environ.items()
-           if not key.startswith("GIT_") or key in _INHERITED_GIT_ENV}
-    env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull, GIT_ATTR_NOSYSTEM="1",
-               GIT_NO_REPLACE_OBJECTS="1", GIT_NO_LAZY_FETCH="1", GIT_TERMINAL_PROMPT="0",
-               GIT_OPTIONAL_LOCKS="0")
-    env.update(extra or {})
-    return env
 
 
 def validate_branch(branch: Any) -> str:

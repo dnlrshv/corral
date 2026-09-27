@@ -99,6 +99,8 @@ class Controller:
                     raise PermissionError(
                         f"profile {eligible.id} route {eligible.route!r} is not declared by this host")
                 routes.authorize(declared, eligible, host_routes=tuple(host.get("routes", [])))
+                routes.enforce_scope(declared, spec.get("service_repository_profile")
+                                     or spec.get("repo"), spec["workspace"])
                 if spec.get("command"):
                     raise PermissionError(
                         "native profile must run through the trusted adapter; explicit command refused")
@@ -126,6 +128,8 @@ class Controller:
                     raise PermissionError(
                         f"profile {eligible.id} route {eligible.route!r} is not declared by this host")
                 routes.authorize(declared, eligible, host_routes=tuple(host.get("routes", [])))
+                routes.enforce_scope(declared, spec.get("service_repository_profile")
+                                     or spec.get("repo"), spec["workspace"])
                 if spec.get("command"):
                     raise PermissionError(
                         "native profile must run through the trusted adapter; explicit command refused")
@@ -418,12 +422,17 @@ class Controller:
             harness = declared_profile.get("harness")
             native_run = bool(harness) and harness != "synthetic"
             profile = None
+            route = None
             inspection_only = False
             if native_run:
                 profile = next((item for item in self.profiles if item.id == declared_profile.get("id")), None)
                 if profile is None:
                     raise PermissionError("native selection is not a controller-registered profile")
                 route = routes.declared_routes(host).get(profile.route)
+                if route is None:
+                    raise PermissionError("native route is no longer declared by this host")
+                routes.enforce_scope(route, spec.get("service_repository_profile")
+                                     or spec.get("repo"), workspace)
                 inspection_only = bool(route and route.inspection_only)
             policy = None
             verifier_paths, pre_verifier_manifest = [], None
@@ -479,7 +488,8 @@ class Controller:
             stored = json.loads(canonical(state))
             with (output / "stdout").open("wb") as out, (output / "stderr").open("wb") as err:
                 child = Process(command, run_cwd, out, err, env=run_env,
-                                seatbelt_profile=seatbelt, containment_label=label)
+                                seatbelt_profile=seatbelt, containment_label=label,
+                                credential_env_names=route.credential_env if native_run else ())
                 launched = True
                 # The label the process object actually applied, never an inferred claim.
                 state.update(status="running", pid=child.child.pid, pgid=child.pgid,

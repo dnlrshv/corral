@@ -118,12 +118,15 @@ def submit_pr_review(service, repository: str, pr_number: int, policy_id: str, *
     objective = policy.get("objective", "Inspect the bound candidate and produce an advisory report.")
     spec = {"trusted_export_id": receipt["export_id"], "objective": objective,
             "profile_id": profile_id, "role": "review", "host": selected_host,
+            "service_repository_profile": repository,
             "pr_owner": owner, "pr_owner_epoch": epoch}
+    if "max_packet_bytes" in policy or "max_packet_bytes" in repo:
+        spec["max_packet_bytes"] = policy.get("max_packet_bytes", repo.get("max_packet_bytes"))
     event_id = "github-review:" + receipt["export_id"]
     identity = {"event_id": event_id, "repository": github_repository,
                 "repository_profile": repository, "host": selected_host,
                 "mode": "interactive", "role": "review", "profile_id": profile_id,
-                "route": service._profile_route(spec, selected_host),
+                "route": service._profile_route(spec, selected_host, receipt["workspace"]),
                 "pr_owner": owner, "pr_owner_epoch": epoch,
                 "trusted_export_id": receipt["export_id"],
                 "candidate_binding": {key: receipt[key] for key in (

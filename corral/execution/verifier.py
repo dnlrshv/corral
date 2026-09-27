@@ -16,7 +16,7 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import containment
+from . import containment, credential_env
 from .workspace import manifest
 
 DECEPTION_NAMES: frozenset[str] = frozenset({
@@ -293,7 +293,8 @@ def execute(policy: Policy, workspace: str | Path, *, candidate_paths: list[str]
     if policy.kind != "external":
         env.pop("PYTHONPATH", None)
     command = containment.wrapped(seatbelt_profile, list(policy.argv)) if seatbelt_profile else list(policy.argv)
-    exit_code, stdout, stderr, timed_out = _run_bounded(command, cwd=str(root), env=env, timeout=timeout)
+    exit_code, stdout, stderr, timed_out = _run_bounded(
+        command, cwd=str(root), env=credential_env.scrub(env), timeout=timeout)
     candidate_post = manifest(root, candidate_paths, workspace_provenance)
     base.update({"exit_code": exit_code, "candidate_post": candidate_post["digest"],
                  "unchanged": candidate_pre["digest"] == candidate_post["digest"],

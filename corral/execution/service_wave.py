@@ -58,6 +58,7 @@ def resolve(service, name: str, wave_id: str, *, objective: str | None = None,
         if not isinstance(task_objective, str) or not task_objective.strip():
             raise ValueError(f"wave task {task_name} requires an objective")
         spec = {**defaults, "repo": repository, "workspace": workspace,
+                "service_repository_profile": repository,
                 "objective": task_objective, "host": selected_host, "mode": "wave",
                 "role": role, "profile_id": raw.get("profile_id", defaults.get("profile_id")),
                 "candidate_paths": list(raw.get("candidate_paths",

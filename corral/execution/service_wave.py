@@ -189,6 +189,8 @@ def _dispatch(service, wave_id: str, task_id: str, host: str) -> str:
         if not service.store.provider_available(
                 provider, service.provider_concurrency.get(provider), db=db):
             return "capacity-unavailable"
+        if not service.store.seats_available(service.seat_limit(host), host, db=db):
+            return "capacity-unavailable"
         # The store is the single capacity authority; a refusal means nothing was acquired.
         try:
             if not service.store.allocate(task_id, host, cpu, memory,
@@ -203,7 +205,8 @@ def _dispatch(service, wave_id: str, task_id: str, host: str) -> str:
         if host != service.execution_host and not service.controller.hosts[host].get("executor"):
             raise PermissionError("nonlocal host requires an authenticated remote executor route")
         identity = launch(service.controller_path, service.store.path.parent, task_id, host,
-                          development_mode=service.development_mode)
+                          development_mode=service.development_mode,
+                          process_priority=service.controller.hosts[host].get("process_priority"))
     except Exception as error:
         # No launcher process exists, so its reservation is returned to the host.
         service.store.release_reservation(task_id, key)

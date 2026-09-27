@@ -66,7 +66,8 @@ def transport(tmp_path, github):
               "required_internal_reviews": [],
               "live_policy_digest": compute_policy_digest({"rulesets": github.rulesets, "classic_protection": github.protection})}
     return GitHubMergeTransport(store=store, token="fixture-token", actor="fixture-merge",
-                                http_client=github, merge_policy=policy), store, epoch
+                                http_client=github, merge_policy=policy,
+                                post_mode="comment", allow_merge=True), store, epoch
 
 
 def payload(epoch):
@@ -146,7 +147,8 @@ def test_internal_review_can_satisfy_explicit_policy_without_remote_approval(tmp
     receipt = {"receipt_id": digest(receipt), **receipt}
     store.put_once("internal_review_receipt", receipt["receipt_id"], receipt)
     client = GitHubMergeTransport(store=store, token="fixture-token", actor="fixture-merge",
-                                  http_client=github, merge_policy=policy)
+                                  http_client=github, merge_policy=policy,
+                                  post_mode="comment", allow_merge=True)
     assert client.merge(**payload(epoch))["merged"] is True
 
 

@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 
 from . import containment, credential_env
+from .host_policy import priority_command
 
 
 def boundary_for(cwd, protected_paths=(), verifier_paths=(), task_dir=None,
@@ -35,7 +36,8 @@ def boundary_for(cwd, protected_paths=(), verifier_paths=(), task_dir=None,
 class Process:
     def __init__(self, command, cwd, stdout, stderr, env=None,
                  protected_paths=(), verifier_paths=(), use_sandbox=False, task_dir=None,
-                 seatbelt_profile=None, containment_label=None, credential_env_names=()):
+                 seatbelt_profile=None, containment_label=None, credential_env_names=(),
+                 process_priority=None):
         clean = {k: os.environ[k] for k in ("PATH", "LANG", "TMPDIR") if k in os.environ}
         clean.update(env or {})
         clean = credential_env.scrub(clean, credential_env_names)
@@ -49,6 +51,7 @@ class Process:
             cmd = containment.wrapped(profile, cmd)
             if containment_label is None:
                 self.containment = "seatbelt-worker-boundary"
+        cmd = priority_command(cmd, process_priority)
         self.child = subprocess.Popen(cmd, cwd=cwd, stdout=stdout, stderr=stderr,
                                       env=clean, start_new_session=True)
         self.pgid = self.child.pid

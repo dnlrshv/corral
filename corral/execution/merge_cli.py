@@ -18,7 +18,9 @@ def main(argv=None):
         raise PermissionError("merge CLI does not accept tokens in config; use the configured user-token source")
     transport = GitHubMergeTransport(store=Store(config["state"]), token=None, actor=config["actor"],
                                      allow_network=True, auth_mode=config.get("auth_mode", "user-token"),
-                                     merge_policy=config["merge_policy"])
+                                     merge_policy=config["merge_policy"],
+                                     post_mode=config.get("github_post_mode", "dry-run"),
+                                     allow_merge=config.get("allow_merge") is True)
     if request.get("action") == "merge":
         result = transport.merge(**request["payload"])
     elif request.get("action") == "reconcile":

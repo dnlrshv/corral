@@ -13,6 +13,7 @@ from .policy import (_get_auth_token, _strip_dynamic_protection_metadata,
                      _strip_dynamic_ruleset_metadata, compute_policy_digest)
 from .policy_schema import validate_protection, validate_ruleset
 from .store import digest
+from .github_post_mode import record as record_dry_run, validate as validate_post_mode
 
 
 class GitHubMergeTransport:
@@ -26,13 +27,16 @@ class GitHubMergeTransport:
 
     def __init__(self, *, store, token: str | None, actor: str,
                  http_client: Callable[..., Any] | None = None, allow_network: bool = False,
-                 auth_mode: str = "user-token", merge_policy: dict):
+                 auth_mode: str = "user-token", merge_policy: dict,
+                 post_mode: str = "dry-run", allow_merge: bool = False):
         if auth_mode != "user-token":
             raise PermissionError("installation-token merge identity is unsupported until its actor readback is configured")
         resolved = _get_auth_token(token)
         if not resolved:
             raise PermissionError("authenticated GitHub merge token is required")
         self.store, self.token, self.actor = store, resolved, actor
+        self.post_mode = validate_post_mode(post_mode)
+        self.allow_merge = allow_merge
         self.account_ref = str(merge_policy.get("account_ref") or "")
         if not self.account_ref:
             raise PermissionError("merge policy requires a configured account reference")
@@ -227,6 +231,12 @@ class GitHubMergeTransport:
         except Exception as error:
             self._audit_preflight_failure(intent, error)
             raise
+        if self.post_mode == "dry-run":
+            return record_dry_run(self.store, intent, method="PUT",
+                                  endpoint=f"/repos/{repo}/pulls/{number}/merge",
+                                  body={"sha": head})
+        if not self.allow_merge:
+            raise PermissionError("merge requires allow_merge")
         created = self.store.owned_operation(
             resource, owner, epoch, "merge_intent", intent,
             {"pr": pr, "head": head, "base": base, "policy": self.merge_policy,

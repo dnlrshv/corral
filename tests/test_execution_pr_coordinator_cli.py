@@ -20,6 +20,7 @@ def test_publish_advisory_passes_trusted_policy_inputs(tmp_path, monkeypatch, ca
     config = tmp_path / "coordinator.json"
     config.write_text(json.dumps({
         "state": str(store.path), "pr": PR, "owner_epoch": 1, "publisher": ACTOR,
+        "github_post_mode": "comment",
         "campaign_authorization": "test operator",
         "publication_policy_snapshot": snapshot,
         "publication_policy_inputs": POLICY_INPUTS,

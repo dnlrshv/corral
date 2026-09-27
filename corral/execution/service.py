@@ -8,6 +8,8 @@ from typing import Any
 
 from . import artifact_return, continuation, routes as native_routes
 from .controller import Controller
+from .host_policy import blackout, validate_windows
+from .github_post_mode import validate as validate_post_mode
 from .service_specs import provider_for, request_spec
 from .store import canonical
 
@@ -38,9 +40,15 @@ class Service:
         self.token = raw["token"]
         self.execution_host = raw.get("execution_host", raw["default_host"])
         self.repositories = self.config.get("repositories", {})
+        self.github_post_mode = validate_post_mode(self.config.get("github_post_mode", "dry-run"))
         self.schedules = self.config.get("schedules", [])
         self.max_dispatch = int(self.config.get("max_dispatch_per_tick", 1))
         self.provider_concurrency = self.config.get("provider_concurrency", {})
+        self.blackout_windows = validate_windows(self.config.get("blackout_windows", []))
+        self.max_concurrent_seats = self.config.get("max_concurrent_seats")
+        if self.max_concurrent_seats is not None and (type(self.max_concurrent_seats) is not int
+                                                      or self.max_concurrent_seats <= 0):
+            raise ValueError("max_concurrent_seats must be a positive integer")
         if (not isinstance(self.provider_concurrency, dict) or any(
                 not isinstance(name, str) or not name or isinstance(limit, bool)
                 or not isinstance(limit, int) or limit <= 0
@@ -59,10 +67,18 @@ class Service:
         if not isinstance(repo, dict) or repo.get("enabled", True) is not True:
             raise PermissionError(f"repository profile is not enabled: {name}")
         allowed = repo.get("allowed_routes")
+        validate_post_mode(repo.get("github_post_mode", self.github_post_mode))
         if allowed is not None and (not isinstance(allowed, list) or any(
                 not isinstance(route, str) or not route for route in allowed)):
             raise PermissionError(f"repository profile {name} allowed_routes is invalid")
         return repo
+
+    def post_mode(self, repository: str) -> str:
+        return validate_post_mode(self._repository(repository).get(
+            "github_post_mode", self.github_post_mode))
+
+    def seat_limit(self, host: str) -> int | None:
+        return self.controller.hosts[host].get("max_concurrent_seats", self.max_concurrent_seats)
 
     def _host_workspace(self, repo: dict[str, Any], requested: str | None) -> tuple[str, str]:
         host = requested or repo.get("default_host") or self.controller.default_host
@@ -228,7 +244,8 @@ class Service:
         task = (self.controller.status(self.token, event["task_id"])
                 if event.get("task_id") else None)
         return {"event": event, "task": task,
-                "provenance": (task.get("result") or {}).get("provenance") if task else None}
+                "provenance": (task.get("result") or {}).get("provenance") if task else None,
+                "blackout": blackout(self.blackout_windows, time.time())}
 
     def amend(self, event_id: str, amendment_id: str, objective: str) -> dict[str, Any]:
         event = self.store.get("service_event", event_id)
@@ -294,6 +311,8 @@ class Service:
             provider = provider_for(spec)
             if not self.store.provider_available(
                     provider, self.provider_concurrency.get(provider), db=db):
+                return None
+            if not self.store.seats_available(self.seat_limit(host), host, db=db):
                 return None
             # Capacity is reserved in the store, the single allocation authority that the
             # controller dispatch adopts. A refusal means not dispatched and nothing acquired.
@@ -451,21 +470,28 @@ class Service:
         from .service_scheduler import acquire_tick, dispatch_lanes, release_tick
 
         runtime = observe()
+        now = time.time() if now is None else now
+        blocked = blackout(self.blackout_windows, now)
         self.store.replace("service_runtime", "current", runtime)
         lease = acquire_tick(self, runtime)
         if lease is None:
             return {"created": [], "reconciled": [], "dispatched": [], "waves": [],
-                    "busy": True,
+                    "busy": True, "blackout": blocked,
                     "pending": [k for k, v in self.store.records("service_event").items()
                                 if v.get("status") == "prepared"]}
         try:
-            now = time.time() if now is None else now
             created = self._materialize_schedules(now)
             reconciled = self._reconcile(runtime)
             events = self.store.records("service_event")
-            dispatched, waves = dispatch_lanes(self, events, now, runtime)
+            if blocked["active"]:
+                from .service_wave import reconcile_dispatches
+                reconcile_dispatches(self)
+                dispatched, waves = [], []
+            else:
+                dispatched, waves = dispatch_lanes(self, events, now, runtime)
             return {"created": created, "reconciled": reconciled,
                     "dispatched": dispatched, "waves": waves, "busy": False,
+                    "blackout": blocked,
                     "pending": [k for k, v in self.store.records("service_event").items()
                                 if v.get("status") == "prepared"]}
         finally:

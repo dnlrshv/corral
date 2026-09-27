@@ -57,7 +57,8 @@ def main(argv=None) -> None:
         transport = GitHubAdvisoryTransport(
             store=coordinator.store, bridge_token=token, bridge_actor=config["publisher"],
             authorized_bridge_actors=frozenset({config["publisher"]}), allow_network=True,
-            policy_inputs=config["publication_policy_inputs"])
+            policy_inputs=config["publication_policy_inputs"],
+            post_mode=config.get("github_post_mode", "dry-run"))
         result = coordinator.publish_advisory(transport)
     elif args.action == "merge":
         merge = config["merge"]
@@ -66,7 +67,8 @@ def main(argv=None) -> None:
         transport = GitHubMergeTransport(
             store=coordinator.store, token=token, actor=merge["actor"], allow_network=True,
             auth_mode=merge.get("auth_mode", "user-token"),
-            merge_policy=policy)
+            merge_policy=policy, post_mode=config.get("github_post_mode", "dry-run"),
+            allow_merge=config.get("allow_merge") is True)
         result = coordinator.merge(transport)
     print(json.dumps(result, sort_keys=True))
 

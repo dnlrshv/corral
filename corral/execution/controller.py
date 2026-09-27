@@ -64,7 +64,9 @@ class Controller:
         """Registered capacity that the store admits allocations against for one host."""
         declared = self.hosts[host]
         return {"cpu": declared.get("cpu", os.cpu_count() or 1),
-                "memory_mb": declared.get("memory_mb", 0)}
+                "memory_mb": declared.get("memory_mb", 0),
+                **({"max_concurrent_seats": declared["max_concurrent_seats"]}
+                   if "max_concurrent_seats" in declared else {})}
 
     def authorize(self, token):
         if not hmac.compare_digest(token, self.token):
@@ -494,7 +496,8 @@ class Controller:
             with (output / "stdout").open("wb") as out, (output / "stderr").open("wb") as err:
                 child = Process(command, run_cwd, out, err, env=run_env,
                                 seatbelt_profile=seatbelt, containment_label=label,
-                                credential_env_names=route.credential_env if native_run else ())
+                                credential_env_names=route.credential_env if native_run else (),
+                                process_priority=host.get("process_priority"))
                 launched = True
                 # The label the process object actually applied, never an inferred claim.
                 state.update(status="running", pid=child.child.pid, pgid=child.pgid,
@@ -556,6 +559,7 @@ class Controller:
                                           seatbelt_profile=verifier_seatbelt,
                                           containment_evidence=verifier_evidence,
                                           containment_env=verifier_env,
+                                          process_priority=host.get("process_priority"),
                                           timeout=verifier_timeout)
                 receipt = record.payload
             receipt["native"] = native_evidence

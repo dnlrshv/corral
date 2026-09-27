@@ -225,6 +225,8 @@ class PRCoordinator:
         else:
             receipt = transport.advisory(
                 self.pr, current["review_receipt"], intent, payload)
+        if receipt.get("status") == "dry-run":
+            return receipt
         if not transport.has_advisory(intent):
             raise PermissionError("advisory delivery lacks an authenticated durable receipt")
         value = {**current, "stage": "advisory-delivered",
@@ -248,6 +250,8 @@ class PRCoordinator:
             return transport.reconcile(intent, require_merged=True)
         receipt = transport.merge(pr=self.pr, owner="corral", epoch=self.owner_epoch,
                                   head=current["head"], base=current["base"])
+        if receipt.get("status") == "dry-run":
+            return receipt
         value = {**current, "stage": "merged", "merge_intent": receipt["intent"],
                  "evidence": [*current["evidence"], digest(receipt)]}
         self._write(value, ("advisory-delivered",))

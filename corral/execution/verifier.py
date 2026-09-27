@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import containment, credential_env
+from .host_policy import priority_command
 from .workspace import manifest
 
 DECEPTION_NAMES: frozenset[str] = frozenset({
@@ -239,6 +240,7 @@ def execute(policy: Policy, workspace: str | Path, *, candidate_paths: list[str]
             attempt: str, pre_verifier_manifest: dict | None, workspace_provenance: dict | None = None,
             seatbelt_profile: str | None = None, containment_evidence: dict | None = None,
             containment_env: dict[str, str] | None = None,
+            process_priority: dict | None = None,
             timeout: float = VERIFIER_TIMEOUT_SECONDS) -> Receipt:
     """Run the bound verifier outside the worker boundary and retain pre/post digests."""
     root = Path(workspace).resolve()
@@ -293,6 +295,7 @@ def execute(policy: Policy, workspace: str | Path, *, candidate_paths: list[str]
     if policy.kind != "external":
         env.pop("PYTHONPATH", None)
     command = containment.wrapped(seatbelt_profile, list(policy.argv)) if seatbelt_profile else list(policy.argv)
+    command = priority_command(command, process_priority)
     exit_code, stdout, stderr, timed_out = _run_bounded(
         command, cwd=str(root), env=credential_env.scrub(env), timeout=timeout)
     candidate_post = manifest(root, candidate_paths, workspace_provenance)

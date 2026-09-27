@@ -5,15 +5,17 @@ import subprocess
 import sys
 from pathlib import Path
 
+from .host_policy import priority_command
 from .runtime_identity import launched
 
 
 def launch(controller_config: Path, state_dir: Path, task_id: str, host: str,
-           *, development_mode: bool = False) -> dict:
+           *, development_mode: bool = False, process_priority: dict | None = None) -> dict:
     log_path = state_dir / "service-dispatch.log"
     command = [sys.executable, *([] if development_mode else ["-I"]),
                "-m", "corral.execution.service_worker", "--config",
                str(controller_config), "--task", task_id, "--host", host]
+    command = priority_command(command, process_priority)
     with log_path.open("ab") as log:
         process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
                                    start_new_session=True)

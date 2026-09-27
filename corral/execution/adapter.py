@@ -296,8 +296,8 @@ def run_adapter(task_dir: Path, workspace: Path) -> int:
         return 1
 
     stdout_bytes = _read_tail_bytes(task_dir / "harness.stdout")
-    stdout_text = stdout_bytes.decode("utf-8", errors="replace")
-    result["provenance"]["envelope_sha256"] = hashlib.sha256(stdout_bytes).hexdigest()
+    stdout_text, envelope_hash = _decode_envelope(stdout_bytes)
+    result["provenance"]["envelope_sha256"] = envelope_hash
     stderr_text = _read_tail(task_dir / "harness.stderr")
     log_text = _read_tail(task_dir / HARNESS_LOG) if (task_dir / HARNESS_LOG).exists() else ""
     try:
@@ -327,16 +327,24 @@ def run_adapter(task_dir: Path, workspace: Path) -> int:
     return 0 if envelope.ok else 1
 
 
+def _decode_envelope(stdout_bytes: bytes) -> tuple[str, str]:
+    """Return exactly the text parsed and its provenance digest, including replacement characters."""
+    text = stdout_bytes.decode("utf-8", errors="replace")
+    return text, hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
 def _read_tail(path: Path, limit: int = 4_000_000) -> str:
     return _read_tail_bytes(path, limit).decode("utf-8", errors="replace")
 
 
 def _read_tail_bytes(path: Path, limit: int = 4_000_000) -> bytes:
     try:
-        data = path.read_bytes()
+        with path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            handle.seek(max(0, handle.tell() - limit))
+            return handle.read(limit)
     except OSError:
         return b""
-    return data[-limit:]
 
 
 def _finish(task_dir: Path, result: dict, usage_path: Path, started: float, attempt: str,

@@ -2,16 +2,18 @@
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import json
 import os
 import re
 import stat
+import subprocess
 import threading
 from pathlib import Path
 
 import pytest
 
-from corral.execution import native, routes, service_dispatch
+from corral.execution import adapter, native, routes, service_dispatch, service_wave
 from corral.execution.service import Service
 from corral.execution.service_validation import validate
 
@@ -31,6 +33,8 @@ def test_model_denials_and_version_declaration(tmp_path):
     for change in ({"denied_models": [ns.FAKE_MODEL]},
                    {"denied_models": [ns.FAKE_MODEL[:3] + "*"]},
                    {"denied_models": ["bad*middle"]},
+                   {"denied_models": [ns.FAKE_MODEL.upper()]},
+                   {"denied_models": [ns.FAKE_MODEL[:3].upper() + "*"]},
                    {"min_cli_version": "1.2"},
                    {"min_cli_version": "1.2.3"},
                    {"version_argv": ["--version", "{prompt}"]}):
@@ -46,7 +50,7 @@ def test_model_denials_and_version_declaration(tmp_path):
         routes.enforce_min_version(route, None)
 
 
-def test_version_probe_caches_by_binary_mtime(tmp_path):
+def test_version_probe_reprobes_changed_binary(tmp_path):
     binary = tmp_path / "version-cli"
     binary.write_text("#!/bin/sh\necho cli 1.2.3 later 9.9.9\n")
     binary.chmod(binary.stat().st_mode | stat.S_IEXEC)
@@ -55,6 +59,58 @@ def test_version_probe_caches_by_binary_mtime(tmp_path):
     changed = binary.stat().st_mtime_ns + 1_000_000_000
     os.utime(binary, ns=(changed, changed))
     assert routes.probe_version(str(binary), ("--version",)) == "1.2.4"
+
+
+def test_version_probe_retries_timeout_and_unparsable_output(tmp_path, monkeypatch):
+    binary = tmp_path / "version-cli"
+    binary.write_text("#!/bin/sh\necho 1.2.3\n")
+    binary.chmod(binary.stat().st_mode | stat.S_IEXEC)
+    calls = []
+
+    def probe(*args, **kwargs):
+        calls.append(args)
+        if len(calls) == 1:
+            raise subprocess.TimeoutExpired(args[0], 5)
+        if len(calls) == 2:
+            return subprocess.CompletedProcess(args[0], 0, "unparsable", "")
+        return subprocess.CompletedProcess(args[0], 0, "cli 1.2.3", "")
+
+    monkeypatch.setattr(routes.subprocess, "run", probe)
+    assert routes.probe_version(str(binary), ("--version",)) is None
+    assert routes.probe_version(str(binary), ("--version",)) is None
+    assert routes.probe_version(str(binary), ("--version",)) == "1.2.3"
+    assert routes.probe_version(str(binary), ("--version",)) == "1.2.3"
+    assert len(calls) == 3
+
+
+def test_version_probe_resolves_path_and_rejects_spoofed_mtime(tmp_path, monkeypatch):
+    binary = tmp_path / "version-cli"
+    binary.write_text("#!/bin/sh\necho cli 1.2.3\n")
+    binary.chmod(binary.stat().st_mode | stat.S_IEXEC)
+    monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
+    assert routes.probe_version(binary.name, ("--version",)) == "1.2.3"
+    original = binary.stat()
+    replacement = tmp_path / "replacement"
+    replacement.write_text("#!/bin/sh\necho cli 2.0.0\n")
+    replacement.chmod(replacement.stat().st_mode | stat.S_IEXEC)
+    os.utime(replacement, ns=(original.st_atime_ns, original.st_mtime_ns))
+    os.replace(replacement, binary)
+    assert binary.stat().st_mtime_ns == original.st_mtime_ns
+    assert routes.probe_version(binary.name, ("--version",)) == "2.0.0"
+
+
+def test_envelope_tail_is_bounded_and_hashes_decoded_text(tmp_path, monkeypatch):
+    output = tmp_path / "harness.stdout"
+    with output.open("wb") as handle:
+        handle.seek(8_000_000)
+        handle.write(b"end:\xff")
+    monkeypatch.setattr(Path, "read_bytes", lambda _path: pytest.fail("unbounded output read"))
+    tail = adapter._read_tail_bytes(output, 8)
+    assert tail == b"\0\0\0end:\xff"
+    text, envelope_hash = adapter._decode_envelope(tail)
+    assert text == "\0\0\0end:\ufffd"
+    assert envelope_hash == hashlib.sha256(text.encode("utf-8")).hexdigest()
+    assert envelope_hash != hashlib.sha256(tail).hexdigest()
 
 
 def test_old_cli_is_refused_before_worker_launch_with_reason(tmp_path, monkeypatch):
@@ -71,6 +127,7 @@ def test_old_cli_is_refused_before_worker_launch_with_reason(tmp_path, monkeypat
     assert state["status"] == "refused-before-launch"
     assert "1.2.3" in state["reason"] and "2.0.0" in state["reason"]
     assert state.get("pid") is None
+    assert controller.store.get("allocation", task)["active"] is False
 
 
 def _service(tmp_path):
@@ -136,6 +193,29 @@ def test_provider_budget_spans_repositories_and_skips_busy_provider(tmp_path, mo
     assert service.tick(now=11)["dispatched"] == ["second"]
     assert service.store.get("allocation", second)["provider"] == "fixture"
     assert launched == [first, third, second]
+
+
+def test_wave_dispatch_uses_controller_resolved_provider_budget(tmp_path, monkeypatch):
+    service, _ = _service(tmp_path)
+    launched = []
+    monkeypatch.setattr(service_dispatch, "launch", lambda _c, _s, task, _h, **_k:
+                        launched.append(task) or {"pid": os.getpid()})
+    task_ids = []
+    for name in ("first", "second"):
+        repo = service.repositories[name]
+        task_ids.append(service.controller.submit(service.token, f"wave-{name}", {
+            "repo": name, "service_repository_profile": name,
+            "workspace": repo["workspaces"][ns.FAKE_HOST], "host": ns.FAKE_HOST,
+            "objective": f"Inspect {name}", "candidate_paths": [],
+            "profile_id": repo["task_defaults"]["profile_id"],
+        }))
+    first, second = task_ids
+    assert service.controller.context(first)["selection"]["profile"]["provider"] == "fixture"
+    assert service_wave._dispatch(service, "wave-1", first, ns.FAKE_HOST) == "active"
+    assert service_wave._dispatch(service, "wave-1", second, ns.FAKE_HOST) == "capacity-unavailable"
+    assert launched == [first]
+    assert service.store.get("allocation", first)["provider"] == "fixture"
+    assert service.store.get("allocation", second) is None
 
 
 def test_invalid_provider_budget_is_reported(tmp_path):

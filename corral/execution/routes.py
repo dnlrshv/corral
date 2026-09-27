@@ -7,6 +7,7 @@ profile id, and the profile's route must be declared and authorized by the host.
 """
 from __future__ import annotations
 
+from fnmatch import fnmatchcase
 import os
 import re
 import shutil
@@ -215,10 +216,10 @@ def _placeholders(item: str) -> list[str]:
 
 
 def _denies(model: str, pattern: str) -> bool:
-    return model.startswith(pattern[:-1]) if pattern.endswith("*") else model == pattern
+    return fnmatchcase(model.casefold(), pattern.casefold())
 
 
-_VERSION_CACHE: dict[tuple[str, int, tuple[str, ...]], str | None] = {}
+_VERSION_CACHE: dict[tuple[str, str, int, int, int, int, int, tuple[str, ...]], str] = {}
 
 
 class CliVersionError(PermissionError):
@@ -230,17 +231,33 @@ def probe_version(binary: str, version_argv: tuple[str, ...], *,
     """Probe once per executable revision, without forwarding controller credentials."""
     from .credential_env import scrub
 
-    key = (binary, os.stat(binary).st_mtime_ns, version_argv)
-    if key not in _VERSION_CACHE:
-        try:
-            run = subprocess.run([*wrapper, binary, *version_argv], capture_output=True,
-                                 text=True, timeout=5, check=False,
-                                 cwd=cwd, env=scrub(dict(os.environ)))
-            match = re.search(r"(?<![\d.])(\d+\.\d+\.\d+)(?![\d.])", run.stdout)
-            _VERSION_CACHE[key] = match.group(1) if run.returncode == 0 and match else None
-        except (OSError, subprocess.TimeoutExpired, UnicodeError):
-            _VERSION_CACHE[key] = None
-    return _VERSION_CACHE[key]
+    # Use the same PATH lookup as launch, then fingerprint the regular file behind
+    # symlinks. ctime and inode keep a replaced binary from reusing a cached version
+    # even when its mtime and size are restored.
+    resolved = shutil.which(binary) if not Path(binary).is_absolute() else binary
+    if not resolved:
+        return None
+    declared = os.path.abspath(resolved)
+    real = os.path.realpath(declared)
+    try:
+        revision = os.stat(real)
+    except OSError:
+        return None
+    key = (declared, real, revision.st_dev, revision.st_ino, revision.st_size,
+           revision.st_mtime_ns, revision.st_ctime_ns, version_argv)
+    if key in _VERSION_CACHE:
+        return _VERSION_CACHE[key]
+    try:
+        run = subprocess.run([*wrapper, binary, *version_argv], capture_output=True,
+                             text=True, timeout=5, check=False,
+                             cwd=cwd, env=scrub(dict(os.environ)))
+        match = re.search(r"(?<![\d.])(\d+\.\d+\.\d+)(?![\d.])", run.stdout)
+    except (OSError, subprocess.TimeoutExpired, UnicodeError):
+        return None
+    if run.returncode == 0 and match:
+        _VERSION_CACHE[key] = match.group(1)
+        return match.group(1)
+    return None
 
 
 def enforce_min_version(route: NativeRoute, observed: str | None) -> None:

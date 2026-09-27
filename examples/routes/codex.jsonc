@@ -6,7 +6,7 @@
   "provider": "openai",
   "account_ref": "codex-auth-file",
   "endpoint": "local-cli",
-  "supported_models": ["gpt-6-sol"],
+  "supported_models": ["example-codex-model"],
   "supported_efforts": ["medium", "high"],
   "min_cli_version": "0.144.1",
   "version_argv": ["--version"],

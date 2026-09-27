@@ -117,11 +117,26 @@ def _check_hosts(value: dict, label: str, hosts: dict, errors: list[str]) -> Non
 
 
 def _store_version(path: Path) -> int:
-    """Read WAL state when available without letting SQLite create sidecars."""
+    """Read the store's user_version without creating SQLite sidecar files.
+
+    With a live write-ahead log the newest header may still be in the log, so SQLite
+    reads it under its normal shared lock. Without one, the main file header is
+    authoritative and is read directly: opening a WAL-mode database through SQLite
+    would create -wal/-shm files, and ``immutable=1`` would skip locking against a
+    live writer.
+    """
     wal = Path(str(path) + "-wal")
     shm = Path(str(path) + "-shm")
-    if wal.exists() and not shm.exists():
-        raise OSError("WAL exists without its shared-memory file")
-    suffix = "?mode=ro" if wal.exists() else "?mode=ro&immutable=1"
-    with sqlite3.connect(path.resolve().as_uri() + suffix, uri=True) as db:
-        return db.execute("PRAGMA user_version").fetchone()[0]
+    if wal.exists():
+        if not shm.exists():
+            raise OSError("WAL exists without its shared-memory file")
+        with sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True) as db:
+            return db.execute("PRAGMA user_version").fetchone()[0]
+    with path.open("rb") as handle:
+        header = handle.read(100)
+    if len(header) == 0:
+        return 0
+    if len(header) < 100 or not header.startswith(b"SQLite format 3\x00"):
+        raise ValueError("store is not a SQLite database")
+    # user_version is the big-endian integer at offset 60 of the database header.
+    return int.from_bytes(header[60:64], "big", signed=True)

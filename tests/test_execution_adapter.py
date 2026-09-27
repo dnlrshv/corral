@@ -6,6 +6,7 @@ command builder or sandbox call is monkeypatched. Model output is explicitly syn
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 import sys
@@ -105,6 +106,13 @@ def test_adapter_package_resolves_from_a_foreign_cwd_and_completes(tmp_path):
     result = json.loads((task_dir / ADAPTER_RESULT).read_text())
     assert result["status"] == "completed"
     assert result["structured"] == {"answer": 5}
+    provenance = result["provenance"]
+    assert provenance["provider"] == "fixture"
+    assert provenance["route"] == ns.FAKE_ROUTE
+    assert provenance["model"] == ns.FAKE_MODEL
+    assert provenance["envelope_schema"] == "corral-synthetic-v1"
+    assert provenance["envelope_sha256"] == hashlib.sha256(
+        (task_dir / "harness.stdout").read_bytes()).hexdigest()
     assert (env["workspace"] / "math_ops.py").read_text() == FIXED_CANDIDATE
     # The child really ran under the profile the controller prepared.
     assert result["containment"]["passed"] is True

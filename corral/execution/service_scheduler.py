@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .scheduler import ready
-from .service_specs import request_spec
+from .service_specs import provider_for, request_spec
 
 TICK_RESOURCE = "service-scheduler:tick"
 
@@ -96,6 +96,12 @@ def dispatch_ready(service, events: dict[str, dict[str, Any]], now: float,
             specs = {key: request_spec(service.store, event) for key, event in events.items()
                      if event.get("status") in {"prepared", "dispatching", "uncertain"}}
             busy = _busy_workspaces(events, specs, wave_dispatches)
+            allocations = service.store.records("allocation").values()
+            provider_active = {}
+            for allocation in allocations:
+                if allocation.get("active") and allocation.get("provider"):
+                    provider = allocation["provider"]
+                    provider_active[provider] = provider_active.get(provider, 0) + 1
             pending = [
                 {"id": key, "route": value["route"], "mode": value["mode"],
                  "submitted": value["submitted"], "due": 0,
@@ -105,6 +111,9 @@ def dispatch_ready(service, events: dict[str, dict[str, Any]], now: float,
                 if value.get("host") == host and value.get("status") == "prepared"
                 and str(Path(specs[key]["workspace"]).resolve())
                 not in busy
+                and (not (provider := provider_for(specs[key]))
+                     or provider_active.get(provider, 0) <
+                     service.provider_concurrency.get(provider, float("inf")))
             ]
             # Capacity in use is read from the store, the authority the claim reserves against.
             # Launched wave tasks hold store reservations too, so they are already counted.
@@ -114,12 +123,15 @@ def dispatch_ready(service, events: dict[str, dict[str, Any]], now: float,
             eligible = ready(pending, set(), running, capacity, now)
             if not eligible:
                 continue
-            event_id = eligible[0]
-            event = service._claim(event_id, now, runtime, scheduler_host=host)
-            if event is None:
+            event = None
+            for event_id in eligible:
+                event = service._claim(event_id, now, runtime, scheduler_host=host)
+                if event is not None:
+                    break
                 current = service.store.get("service_event", event_id)
                 if current is not None:
                     events[event_id] = current
+            if event is None:
                 continue
             made_progress = True
             try:

@@ -1,0 +1,15 @@
+{
+  "harness": "corral-inspection-packet",
+  "binary": "python3",
+  "argv": ["-I", "-m", "corral.execution.inspection_transport", "--packet", "{packet_file}", "--result", "{result_file}", "--endpoint", "SET_HTTPS_ENDPOINT", "--credential-env", "DEEPSEEK_API_KEY", "--model", "{model}", "--effort", "{effort}", "--provider", "deepseek", "--account-ref", "review-account", "--route", "deepseek-review"],
+  "envelope": "corral-inspection-report-v1",
+  "provider": "deepseek",
+  "account_ref": "review-account",
+  "endpoint": "SET_HTTPS_ENDPOINT",
+  "supported_models": ["deepseek-review-model"],
+  "denied_models": ["deepseek-retired-*"],
+  "supported_efforts": ["medium"],
+  "credential_env": ["DEEPSEEK_API_KEY"],
+  "inspection_only": true,
+  "launch_authorized": false
+}

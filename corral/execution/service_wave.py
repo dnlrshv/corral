@@ -9,6 +9,7 @@ from corral.redaction import redact_text
 
 from . import continuation
 from .store import canonical, digest
+from .service_specs import provider_for
 from .wave import WaveRunner
 
 
@@ -68,6 +69,7 @@ def resolve(service, name: str, wave_id: str, *, objective: str | None = None,
                 "wave_workspace_key": workspace_key,
                 "source_reason": f"named-wave-plan:{name}",
                 "source_confidence": "controller-registered"}
+        service._profile_route(spec, selected_host, workspace)
         resolved.append({"name": task_name,
                          "request_id": f"service-wave:{wave_id}:{task_name}", "spec": spec})
     for item in resolved:
@@ -95,7 +97,10 @@ def _admissible(service, tasks: list[dict[str, Any]]) -> None:
         spec = item.get("spec") if isinstance(item, dict) else None
         if not isinstance(spec, dict):
             raise ValueError("wave task requires a spec object")
-        hosts.add(spec.get("host") or service.controller.default_host)
+        host = spec.get("host") or service.controller.default_host
+        hosts.add(host)
+        if spec.get("service_repository_profile") or spec.get("repo") in service.repositories:
+            service._profile_route(spec, host, spec.get("workspace"))
         cpu, memory = spec.get("cpu", 1), spec.get("memory_mb", 0)
         name = item.get("name") or item.get("request_id")
         if not isinstance(cpu, int) or isinstance(cpu, bool) or cpu <= 0:
@@ -168,6 +173,7 @@ def _dispatch(service, wave_id: str, task_id: str, host: str) -> str:
     key = continuation.claim_key(task_id, generation)
     spec = service.controller.context(task_id)
     cpu, memory = spec.get("cpu", 1), spec.get("memory_mb", 0)
+    provider = provider_for(spec)
     workspace = str(Path(spec["workspace"]).resolve())
     claim = {"wave_id": wave_id, "task": task_id, "host": host,
              "workspace": spec.get("workspace"), "cpu": cpu,
@@ -180,11 +186,14 @@ def _dispatch(service, wave_id: str, task_id: str, host: str) -> str:
             return json.loads(row[0]).get("status", "unknown")
         if workspace_busy(service.store, db, workspace, wave_key=key):
             return "workspace-busy"
+        if not service.store.provider_available(
+                provider, service.provider_concurrency.get(provider), db=db):
+            return "capacity-unavailable"
         # The store is the single capacity authority; a refusal means nothing was acquired.
         try:
             if not service.store.allocate(task_id, host, cpu, memory,
                                           service.controller.capacity(host),
-                                          reservation=key, db=db):
+                                          reservation=key, provider=provider, db=db):
                 return "capacity-unavailable"
         except PermissionError:
             return "capacity-unavailable"

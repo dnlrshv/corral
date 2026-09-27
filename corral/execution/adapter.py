@@ -20,6 +20,9 @@ import time
 from pathlib import Path
 from typing import Any
 
+from corral import __version__
+from corral.protocol import installed_commit
+
 from ..redaction import redact_nested_text
 from . import containment, credential_env, envelopes
 from .inspection_packet import PACKET_FILE
@@ -207,6 +210,13 @@ def run_adapter(task_dir: Path, workspace: Path) -> int:
         "usage_events": [], "errors": [], "warnings": [], "containment": None, "harness": {},
         "synthetic": bool(plan.get("route", {}).get("synthetic")), "detail": {},
     }
+    result["provenance"] = {
+        "provider": route.get("provider"), "route": route.get("id"),
+        "model": plan.get("model"), "effort": plan.get("effort"),
+        "cli_version": plan.get("cli_version"), "envelope_schema": route.get("envelope"),
+        "envelope_sha256": None, "corral_version": __version__,
+        "corral_commit": installed_commit(),
+    }
     try:
         receipt = containment.require(boundary)
     except PermissionError as error:
@@ -285,7 +295,9 @@ def run_adapter(task_dir: Path, workspace: Path) -> int:
         _finish(task_dir, result, usage_path, started, attempt)
         return 1
 
-    stdout_text = _read_tail(task_dir / "harness.stdout")
+    stdout_bytes = _read_tail_bytes(task_dir / "harness.stdout")
+    stdout_text, envelope_hash = _decode_envelope(stdout_bytes)
+    result["provenance"]["envelope_sha256"] = envelope_hash
     stderr_text = _read_tail(task_dir / "harness.stderr")
     log_text = _read_tail(task_dir / HARNESS_LOG) if (task_dir / HARNESS_LOG).exists() else ""
     try:
@@ -315,12 +327,24 @@ def run_adapter(task_dir: Path, workspace: Path) -> int:
     return 0 if envelope.ok else 1
 
 
+def _decode_envelope(stdout_bytes: bytes) -> tuple[str, str]:
+    """Return exactly the text parsed and its provenance digest, including replacement characters."""
+    text = stdout_bytes.decode("utf-8", errors="replace")
+    return text, hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
 def _read_tail(path: Path, limit: int = 4_000_000) -> str:
+    return _read_tail_bytes(path, limit).decode("utf-8", errors="replace")
+
+
+def _read_tail_bytes(path: Path, limit: int = 4_000_000) -> bytes:
     try:
-        data = path.read_bytes()
+        with path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            handle.seek(max(0, handle.tell() - limit))
+            return handle.read(limit)
     except OSError:
-        return ""
-    return data[-limit:].decode("utf-8", errors="replace")
+        return b""
 
 
 def _finish(task_dir: Path, result: dict, usage_path: Path, started: float, attempt: str,

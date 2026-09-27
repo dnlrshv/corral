@@ -174,6 +174,12 @@ def prepare(*, spec: dict, host: dict, profile, task_dir: Path, workspace: str, 
     if overlaps:
         raise PermissionError("worker boundary configuration overlaps trusted state: " + "; ".join(overlaps))
     demonstration = containment.require(boundary)
+    if route.version_argv:
+        wrapper = tuple(containment.wrapped(containment.build_profile(boundary), []))
+        plan.cli_version = routes.probe_version(plan.binary, route.version_argv,
+                                                wrapper=wrapper, cwd=str(scratch))
+        plan.evidence["cli_version"] = plan.cli_version
+        routes.enforce_min_version(route, plan.cli_version)
     verifier_prepared = None
     if not route.inspection_only:
         if not attempt:

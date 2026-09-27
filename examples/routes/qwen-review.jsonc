@@ -1,0 +1,14 @@
+{
+  "harness": "qwen-code",
+  "binary": "qwen",
+  // Verify the entire argv contract against your CLI before enabling this review-only route.
+  "argv": ["--model", "{model}", "--output-format", "stream-json", "{prompt}"],
+  "envelope": "qwen-code-stream-v1",
+  "provider": "alibaba",
+  "account_ref": "qwen-review",
+  "endpoint": "local-cli",
+  "supported_models": ["qwen-review-model"],
+  "supported_efforts": ["medium"],
+  "credential_env": [],
+  "launch_authorized": false
+}

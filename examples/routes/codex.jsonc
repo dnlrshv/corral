@@ -1,0 +1,15 @@
+{
+  "harness": "codex",
+  "binary": "codex",
+  "argv": ["exec", "--json", "--sandbox", "workspace-write", "-C", "{workspace}", "--model", "{model}", "-c", "model_reasoning_effort=\"{effort}\"", "--output-last-message", "{result_file}", "{prompt}"],
+  "envelope": "codex-jsonl-v1",
+  "provider": "openai",
+  "account_ref": "codex-auth-file",
+  "endpoint": "local-cli",
+  "supported_models": ["example-codex-model"],
+  "supported_efforts": ["medium", "high"],
+  "min_cli_version": "0.144.1",
+  "version_argv": ["--version"],
+  "credential_env": [],
+  "launch_authorized": false
+}

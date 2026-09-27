@@ -33,6 +33,12 @@ class FakeService:
                             "consumer": "/wave/dev-consumer"}},
                 "task_defaults": {"role": "implementation", "profile_id": "impl"}}
 
+    repositories = {"corral": {}}
+    provider_concurrency = {}
+
+    def _profile_route(self, _spec, _host, _workspace=None):
+        return "deterministic"
+
     def _host_workspace(self, repo, requested):
         host = requested or repo["default_host"]
         if host not in repo["allowed_hosts"]:
@@ -102,6 +108,7 @@ def test_wave_dispatch_claim_is_idempotent_and_progress_is_detached(tmp_path, mo
         execution_host = "primary"
         development_mode = False
         max_dispatch = 1
+        provider_concurrency = {}
 
     service = Service()
     monkeypatch.setattr("corral.execution.service_dispatch.launch", lambda *_args, **_kwargs: (

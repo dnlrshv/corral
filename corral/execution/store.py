@@ -158,7 +158,8 @@ class Store:
             seq = db.execute("SELECT COUNT(*) FROM records WHERE kind=?", (kind,)).fetchone()[0] + 1
             db.execute("INSERT INTO records VALUES(?,?,?)", (kind, key, canonical({"sequence": seq, "value": value})))
 
-    def allocate(self, task, host, cpu, memory_mb, capacity, *, reservation=None, db=None):
+    def allocate(self, task, host, cpu, memory_mb, capacity, *, reservation=None,
+                 provider=None, db=None):
         """Allocate registered host capacity to one task; the store is the only capacity authority.
 
         Service admission passes ``reservation`` (its event id) so capacity is held from the
@@ -169,7 +170,7 @@ class Store:
         if db is None:
             with self.transaction() as opened:
                 return self.allocate(task, host, cpu, memory_mb, capacity,
-                                     reservation=reservation, db=opened)
+                                     reservation=reservation, provider=provider, db=opened)
         rows = db.execute("SELECT key,value FROM records WHERE kind='allocation'").fetchall()
         allocations = {k: json.loads(v) for k, v in rows}
         own = allocations.get(task)
@@ -185,12 +186,25 @@ class Store:
         value = {"host": host, "cpu": cpu, "memory_mb": memory_mb, "active": True}
         if reservation is not None:
             value["reservation"] = reservation
+        if provider is not None:
+            value["provider"] = provider
+        elif own and own.get("active") and own.get("provider"):
+            value["provider"] = own["provider"]
         db.execute("INSERT OR REPLACE INTO records VALUES('allocation',?,?)", (task, canonical(value)))
         return True
 
     def active_allocations(self, host):
         return [value for value in self.records("allocation").values()
                 if value.get("active") and value.get("host") == host]
+
+    def provider_available(self, provider: str | None, limit: int | None, *, db) -> bool:
+        """Read provider reservations inside the caller's dispatch transaction."""
+        if not provider or limit is None:
+            return True
+        active = (json.loads(raw) for (raw,) in db.execute(
+            "SELECT value FROM records WHERE kind='allocation'"))
+        return sum(item.get("active") and item.get("provider") == provider
+                   for item in active) < limit
 
     def release_allocation(self, task):
         value = self.get("allocation", task)
@@ -210,7 +224,7 @@ class Store:
             return True
 
     def begin_dispatch(self, *, resource, task, claim_key, claim, host, cpu, memory_mb, capacity,
-                       state, invocation):
+                       state, invocation, provider=None):
         """Make this call the one dispatcher of a task generation, or write nothing at all.
 
         Claim, host allocation, workspace ownership, dispatching state and invocation commit
@@ -221,7 +235,7 @@ class Store:
         with self.transaction() as db:
             if db.execute("SELECT 1 FROM records WHERE kind='claim' AND key=?", (claim_key,)).fetchone():
                 return None
-            if not self.allocate(task, host, cpu, memory_mb, capacity, db=db):
+            if not self.allocate(task, host, cpu, memory_mb, capacity, provider=provider, db=db):
                 return None
             epoch, newly_acquired = self._acquire(db, resource, task)
             db.execute("INSERT INTO records VALUES('claim',?,?)", (claim_key, canonical(claim)))

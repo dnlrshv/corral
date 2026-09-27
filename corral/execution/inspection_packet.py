@@ -16,11 +16,14 @@ from typing import Any
 
 from corral.redaction import check_file_text_safe, check_outbound_safe
 
+from .git_hardening import HARDENING, LOCAL_TIMEOUT_SECONDS, git_environment
 from .store import digest
 from .workspace import safe_path
 
 PACKET_FILE = "inspection-packet.json"
 PACKET_SCHEMA = "corral-inspection-packet-v1"
+# Four MiB covers ordinary source reviews while bounding a single paid inference request.
+DEFAULT_MAX_PACKET_BYTES = 4 * 1024 * 1024
 _HEX_REV = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 _BASE_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
 _EXECUTION_WORDS = re.compile(
@@ -90,15 +93,18 @@ def bind_candidate(spec: dict, workspace: Path | str, workspace_provenance: Any)
             raise PermissionError("checkout inspection requires a safe inspection_base_ref")
         try:
             remote = subprocess.check_output(
-                ["git", "remote", "get-url", "origin"], cwd=workspace, text=True,
-                stderr=subprocess.DEVNULL).strip()
+                ["git", *HARDENING, "remote", "get-url", "origin"], cwd=workspace, text=True,
+                stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, env=git_environment(),
+                timeout=LOCAL_TIMEOUT_SECONDS).strip()
             current_head = subprocess.check_output(
-                ["git", "rev-parse", "--verify", "HEAD^{commit}"], cwd=workspace, text=True,
-                stderr=subprocess.DEVNULL).strip()
+                ["git", *HARDENING, "rev-parse", "--verify", "HEAD^{commit}"],
+                cwd=workspace, text=True, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+                env=git_environment(), timeout=LOCAL_TIMEOUT_SECONDS).strip()
             base = subprocess.check_output(
-                ["git", "rev-parse", "--verify", f"{base_ref}^{{commit}}"], cwd=workspace,
-                text=True, stderr=subprocess.DEVNULL).strip()
-        except (OSError, subprocess.CalledProcessError) as error:
+                ["git", *HARDENING, "rev-parse", "--verify", f"{base_ref}^{{commit}}"],
+                cwd=workspace, text=True, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+                env=git_environment(), timeout=LOCAL_TIMEOUT_SECONDS).strip()
+        except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
             raise PermissionError("checkout inspection candidate binding is unavailable") from error
         if not remote or current_head != trusted["head"] or not _HEX_REV.fullmatch(base):
             raise PermissionError("checkout inspection candidate binding is invalid")
@@ -114,6 +120,9 @@ def bind_candidate(spec: dict, workspace: Path | str, workspace_provenance: Any)
 def build(spec: dict, context: dict, workspace: Path | str,
           candidate_binding: dict[str, Any]) -> dict[str, Any]:
     """Read only the controller allowlist and return a digest-bound review packet."""
+    limit = spec.get("max_packet_bytes", DEFAULT_MAX_PACKET_BYTES)
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+        raise PermissionError("max_packet_bytes must be a positive integer")
     root = Path(workspace).resolve()
     if spec.get("role") != "review":
         raise PermissionError("inspection packet transport is restricted to the review role")
@@ -129,11 +138,17 @@ def build(spec: dict, context: dict, workspace: Path | str,
         raise PermissionError("every inspection input must be bound as a candidate path")
 
     documents = []
+    input_bytes = 0
     for name in allowlist:
         path = safe_path(root, name)
         if not path.is_file():
             raise PermissionError(f"inspection input is missing: {name}")
-        data = path.read_bytes()
+        with path.open("rb") as handle:
+            data = handle.read(limit - input_bytes + 1)
+        input_bytes += len(data)
+        if input_bytes > limit:
+            actual = input_bytes + max(0, path.stat().st_size - len(data))
+            raise PermissionError(f"inspection inputs are {actual} bytes; allowed packet {limit} bytes")
         try:
             text = data.decode("utf-8")
         except UnicodeDecodeError as error:
@@ -185,6 +200,9 @@ def build(spec: dict, context: dict, workspace: Path | str,
     if not packet["task"] or not packet["attempt"]:
         raise PermissionError("inspection packet lacks controller task/attempt binding")
     packet["digest"] = digest(packet)
+    actual = len(json.dumps(packet, indent=2, sort_keys=True).encode("utf-8"))
+    if actual > limit:
+        raise PermissionError(f"inspection packet is {actual} bytes; allowed {limit} bytes")
     return packet
 
 
@@ -213,7 +231,8 @@ def recheck_documents(packet_record: dict[str, Any] | None, workspace: Path | st
         path = safe_path(root, name)
         if not path.is_file():
             raise PermissionError(f"inspection document disappeared after inference: {name}")
-        data = path.read_bytes()
+        with path.open("rb") as handle:
+            data = handle.read(byte_count + 1)
         if len(data) != byte_count or _sha(data) != expected:
             raise PermissionError(f"inspection document changed after inference: {name}")
 

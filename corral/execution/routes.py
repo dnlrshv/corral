@@ -48,6 +48,9 @@ class NativeRoute:
     supported_models: tuple[str, ...]
     supported_efforts: tuple[str, ...]
     credential_env: tuple[str, ...] = ()
+    allowed_repositories: tuple[str, ...] = ()
+    allowed_workdirs: tuple[str, ...] = ()
+    max_packet_bytes: int | None = None
     runtime_env: tuple[str, ...] = ()
     runtime_read: tuple[str, ...] = ()
     runtime_write: tuple[str, ...] = ()
@@ -63,7 +66,8 @@ class NativeRoute:
         value = {name: getattr(self, name) for name in self.__dataclass_fields__}
         value["argv"] = list(self.argv)
         for name in ("supported_models", "supported_efforts", "credential_env", "runtime_env",
-                 "runtime_read", "runtime_write", "runtime_write_files"):
+                 "runtime_read", "runtime_write", "runtime_write_files",
+                 "allowed_repositories", "allowed_workdirs"):
             value[name] = list(value[name])
         return value
 
@@ -102,6 +106,28 @@ def declare(route_id: str, raw: dict) -> NativeRoute:
     runtime_write_files = _as_tuple(raw.get("runtime_write_files"))
     runtime_home = str(raw["runtime_home"]) if raw.get("runtime_home") else None
     credential_env = _as_tuple(raw.get("credential_env"))
+    scopes = {}
+    for field_name in ("allowed_repositories", "allowed_workdirs"):
+        value = raw.get(field_name, [])
+        if not isinstance(value, list) or any(not isinstance(item, str) or not item.strip()
+                                               for item in value):
+            raise PermissionError(f"native route {route_id} {field_name} must be a list of nonempty strings")
+        scopes[field_name] = tuple(value)
+    # Scopes name service repository profiles. A task outside the service carries a remote
+    # slug in the same `repo` field, so a profile name may never look like one.
+    if any("/" in name or ":" in name for name in scopes["allowed_repositories"]):
+        raise PermissionError(
+            f"native route {route_id} allowed_repositories must name repository profiles, not remotes")
+    for root in scopes["allowed_workdirs"]:
+        path = Path(root)
+        if (not path.is_absolute() or ".." in path.parts
+                or os.path.normpath(root) != root):
+            raise PermissionError(f"native route {route_id} allowed_workdirs must be absolute normalized roots")
+    max_packet_bytes = raw.get("max_packet_bytes")
+    if ("max_packet_bytes" in raw and (isinstance(max_packet_bytes, bool)
+                                       or not isinstance(max_packet_bytes, int)
+                                       or max_packet_bytes <= 0)):
+        raise PermissionError(f"native route {route_id} max_packet_bytes must be a positive integer")
     if inspection_only:
         forbidden = {"{workspace}", "{scratch}", "{prompt_file}", "{prompt}",
                      "{schema_file}", "{log_file}"}
@@ -129,6 +155,9 @@ def declare(route_id: str, raw: dict) -> NativeRoute:
         supported_models=models,
         supported_efforts=_as_tuple(raw.get("supported_efforts")),
         credential_env=credential_env,
+        allowed_repositories=scopes["allowed_repositories"],
+        allowed_workdirs=scopes["allowed_workdirs"],
+        max_packet_bytes=max_packet_bytes,
         runtime_env=runtime_env,
         runtime_read=runtime_read,
         runtime_write=runtime_write,
@@ -140,6 +169,19 @@ def declare(route_id: str, raw: dict) -> NativeRoute:
         notes=str(raw.get("notes") or ""),
         inspection_only=inspection_only,
     )
+
+
+def enforce_scope(route: NativeRoute, repository: str | None,
+                  workspace: str | Path | None) -> None:
+    """Bind a declared route to its service repository and resolved checkout."""
+    if route.allowed_repositories and repository not in route.allowed_repositories:
+        raise PermissionError(f"native route {route.id} is not allowed for repository profile")
+    if route.allowed_workdirs:
+        if not workspace:
+            raise PermissionError(f"native route {route.id} requires a scoped workspace")
+        real = Path(workspace).resolve()
+        if not any(real.is_relative_to(Path(root).resolve()) for root in route.allowed_workdirs):
+            raise PermissionError(f"native route {route.id} is not allowed for workspace")
 
 
 def _placeholders(item: str) -> list[str]:

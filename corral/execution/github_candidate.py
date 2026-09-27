@@ -12,6 +12,7 @@ import time
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from .git_hardening import HARDENING, LOCAL_TIMEOUT_SECONDS, git_environment
 from .policy_inputs import normalize as normalize_policy_inputs
 from .store import digest
 
@@ -25,8 +26,9 @@ def _oid(value: Any, label: str) -> str:
 
 def _base_ref(value: Any) -> str:
     text = str(value or "")
-    result = subprocess.run(["git", "check-ref-format", "--branch", text],
-                            text=True, capture_output=True)
+    result = subprocess.run(["git", *HARDENING, "check-ref-format", "--branch", text],
+                            text=True, capture_output=True, env=git_environment(),
+                            timeout=LOCAL_TIMEOUT_SECONDS)
     if result.returncode or text.startswith("-"):
         raise ValueError("authenticated GitHub base ref is invalid")
     return text
@@ -65,13 +67,14 @@ class GitObjects:
             raise ValueError("Git object cache and remote URL are required")
         self.path.parent.mkdir(parents=True, exist_ok=True)
         if not self.path.exists():
-            subprocess.run(["git", "init", "--bare", str(self.path)], check=True,
-                           capture_output=True)
+            subprocess.run(["git", *HARDENING, "init", "--bare", str(self.path)], check=True,
+                           capture_output=True, env=git_environment(),
+                           timeout=LOCAL_TIMEOUT_SECONDS)
 
     def run(self, *args: str, input: bytes | None = None) -> bytes:
-        env = {**os.environ, "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull}
+        env = git_environment()
         file_policy = "always" if self.allow_file_remote else "never"
-        command = ["git", "-c", "core.hooksPath=/dev/null", "-c",
+        command = ["git", *HARDENING, "-c",
                    f"protocol.file.allow={file_policy}", "-C", str(self.path), *args]
         if self.credential_helper:
             binary = Path(self.credential_helper[0])
@@ -79,9 +82,14 @@ class GitObjects:
                     or not os.access(binary, os.X_OK)):
                 raise PermissionError("trusted Git credential helper must be an absolute executable")
             helper = "!" + shlex.join(self.credential_helper)
-            command[1:1] = ["-c", "credential.helper=", "-c",
-                            f"credential.helper={helper}", "-c", "credential.useHttpPath=true"]
-        result = subprocess.run(command, input=input, capture_output=True, env=env)
+            command[1 + len(HARDENING):1 + len(HARDENING)] = [
+                "-c", f"credential.helper={helper}", "-c", "credential.useHttpPath=true"]
+        try:
+            result = subprocess.run(command, input=input, capture_output=True, env=env,
+                                    stdin=subprocess.DEVNULL if input is None else None,
+                                    timeout=LOCAL_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            raise RuntimeError("trusted Git object operation timed out") from None
         if result.returncode:
             raise RuntimeError("trusted Git object operation failed")
         return result.stdout

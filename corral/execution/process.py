@@ -8,7 +8,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from . import containment
+from . import containment, credential_env
 
 
 def boundary_for(cwd, protected_paths=(), verifier_paths=(), task_dir=None,
@@ -35,9 +35,10 @@ def boundary_for(cwd, protected_paths=(), verifier_paths=(), task_dir=None,
 class Process:
     def __init__(self, command, cwd, stdout, stderr, env=None,
                  protected_paths=(), verifier_paths=(), use_sandbox=False, task_dir=None,
-                 seatbelt_profile=None, containment_label=None):
+                 seatbelt_profile=None, containment_label=None, credential_env_names=()):
         clean = {k: os.environ[k] for k in ("PATH", "LANG", "TMPDIR") if k in os.environ}
         clean.update(env or {})
+        clean = credential_env.scrub(clean, credential_env_names)
         self.containment = containment_label or "standard-clean-env"
         cmd = list(command)
         profile = seatbelt_profile

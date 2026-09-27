@@ -82,6 +82,44 @@ def _packet(tmp_path: Path, objective: str = "Inspect the source") -> Path:
     return persist(value, tmp_path / "scratch")
 
 
+def test_packet_size_limit_reports_actual_and_allowed_bytes(tmp_path):
+    root, spec, store = _workspace(tmp_path)
+    packet = _built(root, spec, "Inspect the source", store)
+    size = len(json.dumps(packet, indent=2, sort_keys=True).encode())
+    assert _built(root, {**spec, "max_packet_bytes": size}, "Inspect the source", store) == packet
+    with pytest.raises(PermissionError, match=rf"{size} bytes; allowed {size - 1} bytes"):
+        _built(root, {**spec, "max_packet_bytes": size - 1}, "Inspect the source", store)
+
+
+def test_checkout_binding_ignores_planted_git_programs(tmp_path):
+    root, spec, _ = _workspace(tmp_path, snapshot=False)
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    subprocess.run(["git", "add", "candidate.py", "candidate.diff"], cwd=root, check=True)
+    subprocess.run(["git", "-c", "user.name=Fixture", "-c",
+                    "user.email=fixture", "commit", "-qm", "base"],
+                   cwd=root, check=True)
+    subprocess.run(["git", "remote", "add", "origin", "file:///repository"],
+                   cwd=root, check=True)
+    marker = tmp_path / "executed"
+    program = tmp_path / "untrusted-program"
+    program.write_text(f"#!/bin/sh\ntouch '{marker}'\n")
+    program.chmod(0o755)
+    include = tmp_path / "included-config"
+    include.write_text(f"[core]\n\tfsmonitor = {program}\n")
+    subprocess.run(["git", "config", "--local", "include.path", str(include)],
+                   cwd=root, check=True)
+    subprocess.run(["git", "config", "--local", "core.fsmonitor", str(program)],
+                   cwd=root, check=True)
+    hook = root / ".git" / "hooks" / "post-checkout"
+    hook.write_text(program.read_text())
+    hook.chmod(0o755)
+    spec["inspection_base_ref"] = "HEAD"
+    provenance = workspace_contract.preflight(spec, root)
+    binding = bind_candidate(spec, root, provenance)
+    assert binding["kind"] == "checkout"
+    assert not marker.exists()
+
+
 def test_transport_sends_one_stateless_tool_free_request_and_records_usage(tmp_path):
     packet = _packet(tmp_path)
     result_path = tmp_path / "result.json"

@@ -3,6 +3,27 @@
 All notable changes to Corral are recorded here, following Keep a Changelog.
 Every release section must include a `### Consumer action` subsection, even when no action is required.
 
+## [0.2.0] - unreleased
+
+### Added
+
+- Optional per-route `allowed_repositories`, `allowed_workdirs`, and `max_packet_bytes` controls, with service validation and a bounded inspection packet default.
+- Shared hardened Git configuration for inspection, candidate export, and repair object operations.
+
+### Changed
+
+- Seat process environments remove credential-shaped variables (names ending in `_TOKEN`, `_KEY`, `_PAT`, `_PASS`, `_PASSWD` or `_CREDENTIALS`, containing `_SECRET` or `PASSWORD`, `AWS_*`/`ANTHROPIC_*`/`OPENAI_*`, and agent sockets such as `SSH_AUTH_SOCK`) unless the native route declares them in `credential_env`. Deterministic workers and non-native verifiers have no route declaration, so they never receive such variables, including ones passed in a task's `env`.
+- Git subprocesses for inspection, candidate export and repair run without inherited credential variables. They keep only the SSH agent and tokens a caller passes explicitly.
+- `allowed_repositories` entries must be repository profile names; values containing `/` or `:` (remote slugs) are refused.
+
+### Fixed
+
+- Route scope is checked at service admission and again before native launch, including resolved checkout paths.
+
+### Consumer action
+
+Declare every credential a native route needs in `credential_env` and provide it through the controller's private credential configuration. Set route scopes before enabling implementation or repair lanes. Consumers that relied on inherited credential variables must update their route declarations. A deterministic worker or non-native verifier that needs a credential must now run through a native route that declares it. A route with `allowed_workdirs` refuses tasks that carry no workspace. Protocol and store schema remain at version 1.
+
 ## [0.1.0] - 2026-09-27
 
 ### Added

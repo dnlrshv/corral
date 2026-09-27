@@ -129,7 +129,7 @@ def test_installed_service_validate_command(tmp_path, capsys):
     before = {path.relative_to(tmp_path) for path in tmp_path.rglob("*")}
     assert service_command.main(["--config", str(config), "validate"]) == 0
     assert json.loads(capsys.readouterr().out) == {
-        "valid": True, "errors": [], "protocol": 1,
+        "valid": True, "errors": [], "warnings": [], "protocol": 1,
         "store": {"found": None, "supported": 1, "compatible": True}}
     assert {path.relative_to(tmp_path) for path in tmp_path.rglob("*")} == before
 

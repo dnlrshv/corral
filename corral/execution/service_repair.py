@@ -123,6 +123,7 @@ def submit_pr_repair(service, repository: str, pr_number: int, review_receipt_id
                                            "review_receipt": review_receipt_id,
                                            "policy": policy})
     spec = {"repo": repository, "workspace": workspace, "workspace_kind": "checkout",
+            "service_repository_profile": repository,
             "host": selected_host, "mode": "interactive", "role": "repair",
             "profile_id": policy["profile_id"], "objective": objective,
             "candidate_paths": candidate_paths, "verifier_paths": verifier_paths,

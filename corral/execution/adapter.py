@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from ..redaction import redact_nested_text
-from . import containment, envelopes
+from . import containment, credential_env, envelopes
 from .inspection_packet import PACKET_FILE
 from .store import digest
 from .workspace import safe_path
@@ -147,7 +147,7 @@ def _harness_env(plan: dict, boundary: containment.Boundary, home: str | None,
             forwarded.append(name)
         else:
             missing.append(name)
-    return env, forwarded, missing
+    return credential_env.scrub(env, plan.get("credential_env") or ()), forwarded, missing
 
 
 def _write_prompt(scratch: Path, context: dict) -> Path:

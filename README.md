@@ -155,6 +155,14 @@ from the client. Host capacity, enabled routes, profiles and controller paths
 are private config. The controller store is the only capacity authority: the
 service reserves capacity when it claims an event, the dispatch adopts that
 reservation, and a refused dispatch acquires no ownership or capacity.
+Native routes may declare `allowed_repositories` (service repository profile names)
+and `allowed_workdirs` (absolute normalized checkout roots). Corral checks both at
+admission and before launch using resolved paths. Inspection routes may set
+`max_packet_bytes` in the route or review policy; the default is 4 MiB and
+oversized packets are refused. Native seats receive credential-shaped environment
+variables only when listed in that route's `credential_env`. The executor endpoint's
+separate `allowed_repositories` restricts requests to that executor; it does not
+replace a native route's scope. See [execution scoping](docs/execution-scoping.md).
 Input/result manifests bind the Git base and explicitly selected file digests;
 changed destinations fail closed. Verifiers run in their own process group under
 a wall-clock bound (`verifier_timeout_seconds` per host, default 3600 s); one

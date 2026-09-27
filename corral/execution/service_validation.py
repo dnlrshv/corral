@@ -14,23 +14,27 @@ from .service import load_service_config
 
 def validate(config: str | Path) -> dict:
     errors: list[str] = []
+    warnings: list[str] = []
     store = {"found": None, "supported": STORE_SCHEMA_VERSION, "compatible": True}
     try:
         _, service, _, controller = load_service_config(config)
     except (OSError, ValueError, TypeError, KeyError) as exc:
-        return {"valid": False, "errors": [f"configuration: {exc}"], "store": store}
+        return {"valid": False, "errors": [f"configuration: {exc}"],
+                "warnings": warnings, "store": store}
     if not isinstance(service, dict) or not isinstance(controller, dict):
         return {"valid": False, "errors": ["service and controller configs must be objects"],
-                "store": store}
+                "warnings": warnings, "store": store}
 
     hosts = controller.get("hosts")
     if not isinstance(hosts, dict):
         errors.append("controller hosts must be a mapping")
         hosts = {}
     declared = set()
+    host_routes = {}
     for name, host in hosts.items():
         try:
-            declared.update(routes.declared_routes(host))
+            host_routes[name] = routes.declared_routes(host)
+            declared.update(host_routes[name])
         except (AttributeError, TypeError, ValueError, PermissionError) as exc:
             errors.append(f"host {name}: {exc}")
     if not isinstance(controller.get("default_host"), str) or controller["default_host"] not in hosts:
@@ -46,6 +50,13 @@ def validate(config: str | Path) -> dict:
     for profile in profiles:
         if not isinstance(profile.route, str) or profile.route not in declared | standard_routes:
             errors.append(f"profile {profile.id} route {profile.route!r} is undeclared")
+        if set(profile.roles) & {"implementation", "repair"}:
+            for host_name, route_map in host_routes.items():
+                route = route_map.get(profile.route)
+                if route and not (route.allowed_repositories or route.allowed_workdirs):
+                    warnings.append(f"host {host_name} write-capable route {route.id} has no scoping")
+    warnings = sorted(set(warnings))
+    profiles_by_id = {profile.id: profile for profile in profiles}
 
     repositories = service.get("repositories", {})
     if not isinstance(repositories, dict):
@@ -56,6 +67,12 @@ def validate(config: str | Path) -> dict:
             errors.append(f"repository {name} must be a mapping")
             continue
         _check_hosts(repo, f"repository {name}", hosts, errors)
+        _check_packet(repo, f"repository {name}", errors)
+        defaults = repo.get("task_defaults") or {}
+        if isinstance(defaults, dict):
+            _check_packet(defaults, f"repository {name} task_defaults", errors)
+            _check_route_reference(name, defaults.get("profile_id"), repo, host_routes,
+                                   profiles_by_id, errors)
         for kind in ("review_policies", "repair_policies"):
             policies = repo.get(kind) or {}
             if not isinstance(policies, dict):
@@ -71,6 +88,22 @@ def validate(config: str | Path) -> dict:
                                                or profile_id not in profile_ids):
                     errors.append(f"{label} profile_id {profile_id!r} is not registered")
                 _check_hosts(policy, label, hosts, errors)
+                _check_packet(policy, label, errors)
+                _check_route_reference(name, profile_id, repo, host_routes,
+                                       profiles_by_id, errors)
+
+    plans = service.get("wave_plans") or {}
+    if isinstance(plans, dict):
+        for plan_name, plan in plans.items():
+            for task in plan.get("tasks", ()) if isinstance(plan, dict) else ():
+                if not isinstance(task, dict):
+                    continue
+                repo_name = task.get("repository")
+                repo = repositories.get(repo_name)
+                if isinstance(repo, dict):
+                    profile_id = task.get("profile_id", (repo.get("task_defaults") or {}).get("profile_id"))
+                    _check_route_reference(repo_name, profile_id, repo, host_routes,
+                                           profiles_by_id, errors)
 
     try:
         if int(service.get("max_dispatch_per_tick", 1)) < 1:
@@ -99,7 +132,31 @@ def validate(config: str | Path) -> dict:
             store["compatible"] = False
             errors.append(f"store cannot be read: {exc}")
 
-    return {"valid": not errors, "errors": errors, "store": store}
+    return {"valid": not errors, "errors": errors, "warnings": warnings, "store": store}
+
+
+def _check_packet(value: dict, label: str, errors: list[str]) -> None:
+    if "max_packet_bytes" in value:
+        limit = value["max_packet_bytes"]
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+            errors.append(f"{label} max_packet_bytes must be a positive integer")
+
+
+def _check_route_reference(name: str, profile_id, repo: dict, host_routes: dict,
+                           profiles: dict, errors: list[str]) -> None:
+    if not isinstance(profile_id, str):
+        return
+    profile = profiles.get(profile_id)
+    if profile is None:
+        return
+    workspaces = repo.get("workspaces") or {}
+    if not isinstance(workspaces, dict):
+        errors.append(f"repository {name} workspaces must be a mapping")
+        return
+    for host_name in workspaces:
+        route = host_routes.get(host_name, {}).get(profile.route)
+        if route and route.allowed_repositories and name not in route.allowed_repositories:
+            errors.append(f"repository {name} profile {profile_id} route {route.id} excludes it")
 
 
 def _check_hosts(value: dict, label: str, hosts: dict, errors: list[str]) -> None:

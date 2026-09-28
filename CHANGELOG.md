@@ -3,6 +3,17 @@
 All notable changes to Corral are recorded here, following Keep a Changelog.
 Every release section must include a `### Consumer action` subsection, even when no action is required.
 
+## [0.2.1] - unreleased
+
+### Fixed
+
+- PR inspection exports use the unique merge base through the PR head for changed paths and the diff, excluding unrelated changes on an advanced base branch.
+- Pre-launch refusals record a bounded, redacted reason for permission, value, and OS errors.
+
+### Consumer action
+
+None. Inspection packets now contain only the PR's own changes.
+
 ## [0.2.0] - 2026-09-28
 
 ### Added

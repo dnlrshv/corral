@@ -12,7 +12,7 @@ from pathlib import Path
 from corral import __version__
 from corral.protocol import installed_commit
 
-from ..redaction import redact_nested_text
+from ..redaction import redact_nested_text, redact_text
 from . import (completion, containment, continuation, inspection_packet, inspection_report, native, routes,
                verifier, workspace_contract)
 from .adapter import source_root
@@ -650,6 +650,8 @@ class Controller:
                          error=type(error).__name__)
             if isinstance(error, routes.CliVersionError):
                 state["reason"] = str(error)
+            elif not launched and isinstance(error, (PermissionError, ValueError, OSError)):
+                state["reason"] = redact_text(str(error))[:500]
             if launched:
                 self.store.finish_attempt(task=task_id, resource=resource, epoch=epoch,
                                           state=state, owner_status="uncertain")

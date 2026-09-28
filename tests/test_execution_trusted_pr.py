@@ -38,12 +38,14 @@ def pr_fixture(tmp_path: Path, *, fetched_head_matches=True, advanced_base=False
     if advanced_base:
         subprocess.run(["git", "checkout", "-qb", "advanced", base], cwd=source, check=True)
         (source / "main-only.txt").write_text("advanced\n")
-        subprocess.run(["git", "add", "main-only.txt"], cwd=source, check=True)
+        (source / "unrelated.txt").write_text("advanced base only\n")
+        subprocess.run(["git", "add", "main-only.txt", "unrelated.txt"], cwd=source, check=True)
         subprocess.run(["git", "-c", "user.name=Fixture", "-c",
                         "user.email=f@example.invalid", "commit", "-qm", "advance main"],
                        cwd=source, check=True)
         base_tip = subprocess.run(["git", "rev-parse", "HEAD"], cwd=source, check=True,
                                   text=True, capture_output=True).stdout.strip()
+        base = base_tip
     remote = tmp_path / "remote.git"
     subprocess.run(["git", "init", "-q", "--bare", remote], check=True)
     subprocess.run(["git", "push", "-q", remote, f"{base_tip}:refs/heads/main"],
@@ -110,7 +112,8 @@ def test_controller_owned_pr_export_is_immutable_registered_shape(tmp_path, monk
     assert receipt["export_id"] == digest({k: v for k, v in receipt.items()
                                            if k != "export_id"})
     assert receipt["export_digest"] == receipt["selected_files_digest"]
-    assert observation["base_ref_tip"] == base_tip and base_tip != base
+    assert observation["base_ref_tip"] == base_tip == base
+    assert receipt["base"] == base and receipt["merge_base"] != base
     assert receipt["diff_sha256"] == receipt["selected_files"][
         ".corral-review/candidate.diff"]["digest"]
     assert set(receipt["selected_files"]) == {
@@ -119,9 +122,53 @@ def test_controller_owned_pr_export_is_immutable_registered_shape(tmp_path, monk
     assert not (source / "should-not-exist").exists()
     workspace = Path(receipt["workspace"])
     assert workspace.is_absolute() and (workspace / "input.txt").read_text() == "candidate\n"
+    diff = (workspace / ".corral-review/candidate.diff").read_text()
+    assert "input.txt" in diff and "runme.sh" in diff
+    assert "main-only.txt" not in diff and "unrelated.txt" not in diff
     reused, second_observation = prepare(
         tmp_path / "state", "fixture/repo", 7, "advisory", config)
     assert reused == receipt and second_observation["base_ref_tip"] == base_tip
+
+
+def test_criss_cross_merge_bases_refuse_candidate(tmp_path):
+    source = git_repo(tmp_path / "source")
+
+    def git(*args, input=None):
+        return subprocess.run(["git", *args], cwd=source, input=input, text=True,
+                              capture_output=True, check=True).stdout.strip()
+
+    root = git("rev-parse", "HEAD")
+    tree = git("rev-parse", "HEAD^{tree}")
+    left = git("-c", "user.name=Fixture", "-c", "user.email=f@example.invalid",
+               "commit-tree", tree, "-p", root, input="left\n")
+    right = git("-c", "user.name=Fixture", "-c", "user.email=f@example.invalid",
+                "commit-tree", tree, "-p", root, input="right\n")
+    base = git("-c", "user.name=Fixture", "-c", "user.email=f@example.invalid",
+               "commit-tree", tree, "-p", left, "-p", right, input="base merge\n")
+    head = git("-c", "user.name=Fixture", "-c", "user.email=f@example.invalid",
+               "commit-tree", tree, "-p", right, "-p", left, input="head merge\n")
+    objects = GitObjects(source, "https://example.invalid/repo.git")
+    with pytest.raises(PermissionError, match="multiple merge bases"):
+        objects.merge_base(base, head)
+
+    remote = tmp_path / "remote.git"
+    subprocess.run(["git", "init", "-q", "--bare", remote], check=True)
+    git("push", "-q", str(remote), f"{base}:refs/heads/main")
+    git("push", "-q", str(remote), f"{head}:refs/pull/7/head")
+    fixture = tmp_path / "pr.json"
+    fixture.write_text(json.dumps({"state": "open", "draft": False,
+                                   "head": {"sha": head},
+                                   "base": {"sha": base, "ref": "main"}}))
+    fake_gh = tmp_path / "gh"
+    fake_gh.write_text("#!/usr/bin/env python3\nimport os\nfrom pathlib import Path\n"
+                       "print(Path(os.environ['CORRAL_PR_FIXTURE']).read_text())\n")
+    fake_gh.chmod(0o755)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("CORRAL_PR_FIXTURE", str(fixture))
+        with pytest.raises(PermissionError, match="multiple merge bases"):
+            prepare(tmp_path / "state", "fixture/repo", 7, "advisory",
+                    repository_config(tmp_path, remote, fake_gh))
+    assert not (tmp_path / "state" / "trusted-export-receipts").exists()
 
 
 def test_git_fetch_uses_only_explicit_trusted_credential_helper(tmp_path, monkeypatch):

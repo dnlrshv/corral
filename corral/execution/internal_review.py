@@ -89,6 +89,7 @@ def _structured(store, result: dict[str, Any], export: dict[str, Any], task_id: 
             or provenance.get("pr") != export["pr_number"]
             or provenance.get("head") != export["head"]
             or provenance.get("base") != export["base"]
+            or provenance.get("merge_base") != export.get("merge_base")
             or provenance.get("policy_id") != export["policy_id"]
             or provenance.get("policy_digest") != export["policy_digest"]):
         raise PermissionError("inspection report provenance differs from its trusted export")

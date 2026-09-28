@@ -30,6 +30,7 @@ def _trusted_export(store, export_id: str) -> dict:
             or isinstance(value["pr_number"], bool) or not isinstance(value["pr_number"], int)
             or value["pr_number"] <= 0
             or not SHA.fullmatch(str(value["head"])) or not SHA.fullmatch(str(value["base"]))
+            or ("merge_base" in value and not SHA.fullmatch(str(value["merge_base"])))
             or not isinstance(value["policy_id"], str) or not value["policy_id"]
             or not SHA256.fullmatch(str(value["policy_digest"]))
             or not isinstance(value["auth_mode"], str) or not value["auth_mode"]):
@@ -125,6 +126,8 @@ def preflight(spec: dict, workspace: str | Path, *, store=None) -> dict:
                  "trusted_export_id": declared["export_id"], "policy_id": declared["policy_id"],
                  "policy_digest": declared["policy_digest"], "auth_mode": declared["auth_mode"],
                  "files": files}
+        if "merge_base" in declared:
+            value["merge_base"] = declared["merge_base"]
     elif kind == "immutable_snapshot":
         declared = spec.get("snapshot_provenance")
         if not isinstance(declared, dict) or any(not isinstance(declared.get(key), str) or not declared[key]

@@ -87,6 +87,10 @@ def bind_candidate(spec: dict, workspace: Path | str, workspace_provenance: Any)
                   "auth_mode": trusted["auth_mode"],
                   "workspace_provenance_digest": trusted["digest"],
                   "git_metadata_required": False}
+        if "merge_base" in trusted:
+            if not _HEX_REV.fullmatch(str(trusted["merge_base"])):
+                raise PermissionError("controller snapshot merge base must be a full Git SHA")
+            result["merge_base"] = trusted["merge_base"]
     else:
         base_ref = spec.get("inspection_base_ref")
         if not isinstance(base_ref, str) or not _BASE_REF.fullmatch(base_ref) or base_ref.startswith("-"):

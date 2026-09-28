@@ -44,7 +44,8 @@ def _register_export(root: Path, state_path: Path, *, extra_paths: tuple[str, ..
                     "mode": (root / name).stat().st_mode & 0o777}
              for name in base_spec["candidate_paths"]}
     core = {"repository": "example/repo", "pr_number": 12, "head": HEAD,
-            "base": BASE, "policy_id": "policy-12", "policy_digest": "d" * 64,
+            "base": BASE, "merge_base": "c" * 40,
+            "policy_id": "policy-12", "policy_digest": "d" * 64,
             "workspace": str(root.resolve()), "selected_files": files,
             "selected_files_digest": digest(files), "diff_path": "candidate.diff",
             "diff_sha256": files["candidate.diff"]["digest"],
@@ -89,6 +90,7 @@ def _packet(tmp_path: Path, objective: str = "Inspect the source") -> Path:
 def test_packet_size_limit_reports_actual_and_allowed_bytes(tmp_path):
     root, spec, store = _workspace(tmp_path)
     packet = _built(root, spec, "Inspect the source", store)
+    assert packet["provenance"]["merge_base"] == "c" * 40
     size = len(json.dumps(packet, indent=2, sort_keys=True).encode())
     assert _built(root, {**spec, "max_packet_bytes": size}, "Inspect the source", store) == packet
     with pytest.raises(PermissionError, match=rf"{size} bytes; allowed {size - 1} bytes"):

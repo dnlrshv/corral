@@ -10,4 +10,4 @@ This package provides:
 - :mod:`corral.cli` — the ``corral`` command-line entry point.
 """
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"

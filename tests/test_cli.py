@@ -137,7 +137,9 @@ def test_version_flag(capsys) -> None:
     with pytest.raises(SystemExit) as excinfo:
         main(["--version"])
     assert excinfo.value.code == 0
-    assert "corral 0.1.0" in capsys.readouterr().out
+    from corral import __version__
+
+    assert f"corral {__version__}" in capsys.readouterr().out
 
 
 def test_magic_numbers_hook_cli_skips_without_constants(

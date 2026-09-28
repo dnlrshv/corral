@@ -24,6 +24,7 @@ Every release section must include a `### Consumer action` subsection, even when
 
 ### Fixed
 
+- Packet-only inspection routes can verify HTTPS endpoints: the interpreter's public TLS trust store is now readable inside the boundary. Before this fix, the generic `*.pem` secret denial also blocked the CA bundle, so every inspection request to an HTTPS provider failed certificate verification. Earlier live proofs of the inspection path used synthetic, zero-inference fixtures and did not exercise a real provider call. Transport errors now name the underlying reason class (for example `URLError(SSLCertVerificationError)`). No consumer action is required.
 - Route scope is checked at service admission and again before native launch, including resolved checkout paths.
 
 ### Consumer action

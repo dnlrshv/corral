@@ -130,7 +130,7 @@ def submit_pr_review(service, repository: str, pr_number: int, policy_id: str, *
                 "pr_owner": owner, "pr_owner_epoch": epoch,
                 "trusted_export_id": receipt["export_id"],
                 "candidate_binding": {key: receipt[key] for key in (
-                    "pr_number", "head", "base", "policy_id", "policy_digest")},
+                    "pr_number", "head", "base", "merge_base", "policy_id", "policy_digest")},
                 "resolved_spec": spec}
     event = {**identity, "submitted": time.time(), "status": "admitted", "task_id": None}
     with service.store.transaction() as db:

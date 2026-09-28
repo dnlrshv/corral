@@ -123,6 +123,19 @@ class GitObjects:
     def source_digest(self, revision: str, name: str) -> str:
         return hashlib.sha256(self._blob(revision, name)[2]).hexdigest()
 
+    def merge_base(self, base: str, head: str) -> str:
+        try:
+            bases = self.run("merge-base", "--all", base, head).decode("ascii").splitlines()
+        except (RuntimeError, UnicodeDecodeError) as error:
+            raise PermissionError("candidate merge base is unavailable") from error
+        if not bases:
+            raise PermissionError("candidate has no merge base")
+        if len(bases) > 1:
+            raise PermissionError("candidate has multiple merge bases")
+        if len(bases[0]) != 40 or any(char not in "0123456789abcdef" for char in bases[0]):
+            raise PermissionError("candidate merge base is invalid")
+        return bases[0]
+
     def changed_paths(self, base: str, head: str) -> list[str]:
         raw = self.run("diff", "--name-only", "-z", "--diff-filter=ACMRT", base, head, "--")
         return sorted(item.decode("utf-8") for item in raw.split(b"\0") if item)
@@ -218,14 +231,15 @@ def prepare(state: Path, repository: str, number: int, policy_id: str,
         number, candidate["head"], candidate["base"], candidate["base_ref"])
     policy_digest, related = _policy_binding(
         objects, policy_id, policy, candidate["base"], candidate["base_ref"])
-    changed = objects.changed_paths(candidate["base"], candidate["head"])
+    merge_base = objects.merge_base(candidate["base"], candidate["head"])
+    changed = objects.changed_paths(merge_base, candidate["head"])
     selected_paths = sorted(set(changed + related))
     if any(name == ".corral-review" or name.startswith(".corral-review/")
            for name in selected_paths):
         raise PermissionError("candidate collides with the reserved review metadata path")
     binding = {key: candidate[key] for key in (
         "repository", "pr_number", "head", "base", "auth_mode")}
-    binding.update(policy_id=policy_id, policy_digest=policy_digest)
+    binding.update(merge_base=merge_base, policy_id=policy_id, policy_digest=policy_digest)
     directory_id = digest(binding)
     root = state.resolve() / "candidate-snapshots" / directory_id
     receipts = state.resolve() / "trusted-export-receipts"
@@ -244,7 +258,7 @@ def prepare(state: Path, repository: str, number: int, policy_id: str,
     try:
         selected = objects.export(candidate["head"], temporary, selected_paths)
         diff_path = ".corral-review/candidate.diff"
-        diff_data = objects.diff(candidate["base"], candidate["head"])
+        diff_data = objects.diff(merge_base, candidate["head"])
         diff_target = temporary / diff_path
         diff_target.parent.mkdir(parents=True)
         diff_target.write_bytes(diff_data)

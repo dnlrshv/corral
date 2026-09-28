@@ -108,6 +108,26 @@ def test_filesystem_error_before_worker_is_a_released_refusal(setup):  # noqa: F
     _assert_follow_up_dispatch_succeeds(controller, repo, "after-io")
 
 
+def test_prelaunch_permission_reason_is_bounded_and_redacted(setup, monkeypatch):  # noqa: F811
+    controller, repo = setup
+    task = controller.submit("owner", "redacted-refusal", spec(repo))
+    secret = "ghp_" + "f" * 36
+    message = f"credential-shaped inspection input refused: api_key={secret} " + "x" * 600
+
+    def refuse(*_args, **_kwargs):
+        raise PermissionError(message)
+
+    monkeypatch.setattr(verifier, "policy", refuse)
+    with pytest.raises(PermissionError, match="credential-shaped inspection input refused"):
+        controller.run("owner", task, execution_host="fixture")
+    state = controller.store.get("state", task)
+    assert state["status"] == "refused-before-launch"
+    assert state["error"] == "PermissionError"
+    assert state["reason"].startswith("credential-shaped inspection input refused")
+    assert "[REDACTED]" in state["reason"] and secret not in state["reason"]
+    assert len(state["reason"]) == 500
+
+
 def test_prelaunch_refusal_never_releases_an_epoch_it_did_not_acquire(setup):  # noqa: F811
     controller, repo = setup
     task = controller.submit("owner", "reentrant", {**spec(repo), "verify": None})

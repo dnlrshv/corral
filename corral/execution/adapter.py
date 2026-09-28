@@ -102,6 +102,7 @@ def _boundary(task_dir: Path) -> tuple[containment.Boundary, dict]:
                                         trusted_read_allow=tuple(declared.get("trusted_read_allow") or ()),
                                         trusted_metadata_allow=tuple(declared.get("trusted_metadata_allow") or ()),
                                         trusted_read_roots=tuple(declared.get("trusted_read_roots") or ()),
+                                        trusted_tls_roots=tuple(declared.get("trusted_tls_roots") or ()),
                                         sentinels=tuple(declared.get("sentinels") or ()),
                                         network=bool(declared.get("network", True)))
     except KeyError as error:
@@ -134,6 +135,10 @@ def _harness_env(plan: dict, boundary: containment.Boundary, home: str | None,
     for name in BASE_ENV_NAMES:
         if os.environ.get(name):
             env[name] = os.environ[name]
+    if plan.get("route", {}).get("inspection_only"):
+        for name in ("SSL_CERT_FILE", "SSL_CERT_DIR"):
+            if os.environ.get(name):
+                env[name] = os.environ[name]
     env["TMPDIR"] = str(scratch)
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     if home:

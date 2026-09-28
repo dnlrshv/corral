@@ -1,8 +1,12 @@
 import hashlib
 import io
 import json
+import ssl
 import stat
 import subprocess
+import sys
+import urllib.error
+from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
@@ -11,7 +15,7 @@ from corral.execution import containment, envelopes, native, routes, workspace_c
 from corral.execution.agent import AgentConfig, CorralAgent
 from corral.execution.controller import Controller
 from corral.execution.inspection_packet import bind_candidate, build, persist
-from corral.execution.inspection_transport import invoke
+from corral.execution.inspection_transport import _post, invoke
 from corral.execution.internal_review import record as record_internal_review
 from corral.execution.profiles import Profile
 from corral.execution.store import Store, digest
@@ -155,6 +159,16 @@ def test_transport_sends_one_stateless_tool_free_request_and_records_usage(tmp_p
     stored = json.loads(result_path.read_text())
     assert stored["verdict"] == "PASS"
     assert stored["report"].startswith("The source")
+
+
+def test_transport_reports_sanitized_url_error_reason():
+    def opener(_request):
+        raise urllib.error.URLError(ssl.SSLCertVerificationError("private endpoint and token"))
+
+    with pytest.raises(RuntimeError, match=r"URLError\(SSLCertVerificationError\)") as error:
+        _post("https://provider.invalid/v1", "fixture-secret", {}, opener=opener)
+    assert "private endpoint" not in str(error.value)
+    assert "fixture-secret" not in str(error.value)
 
 
 def test_transport_rejects_prose_only_verdict_before_report_persistence(tmp_path):
@@ -406,7 +420,11 @@ def test_inspection_route_rejects_broad_tools_and_runtime_hooks(tmp_path):
                                                     "--effort", "{effort}"]})
 
 
-def test_packet_boundary_allows_only_controller_derived_transport_modules(tmp_path):
+def test_packet_boundary_allows_only_controller_derived_transport_modules(tmp_path, monkeypatch):
+    monkeypatch.setattr(native.ssl, "get_default_verify_paths",
+                        lambda: SimpleNamespace(cafile=None, capath=None))
+    monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+    monkeypatch.delenv("SSL_CERT_DIR", raising=False)
     source = Path(__file__).resolve().parents[1]
     boundary, _scratch, _grants = native.build_boundary(
         workspace=str(tmp_path / "candidate"), state_dir=tmp_path / "state",
@@ -436,6 +454,84 @@ def test_packet_boundary_allows_only_controller_derived_transport_modules(tmp_pa
     code_root = (source / "corral").resolve()
     assert boundary.trusted_read_roots == (str(code_root),)
     assert f'(allow file-read* (subpath "{code_root}"))' in profile
+
+
+def test_packet_boundary_grants_resolved_tls_trust_only(tmp_path, monkeypatch):
+    source = Path(__file__).resolve().parents[1]
+    public = tmp_path / "public"
+    public.mkdir()
+    cafile = public / "bundle.pem"
+    cafile.write_text("public certificate fixture")
+    alias = public / "cert.pem"
+    alias.symlink_to(cafile)
+    capath = public / "certs"
+    capath.mkdir()
+    override_file = public / "override.pem"
+    override_file.write_text("another public certificate fixture")
+    override_dir = public / "override-certs"
+    override_dir.mkdir()
+    denied_file = tmp_path / "candidate" / "secret.pem"
+    denied_file.parent.mkdir()
+    denied_file.write_text("denied")
+    monkeypatch.setattr(native.ssl, "get_default_verify_paths",
+                        lambda: SimpleNamespace(cafile=str(alias), capath=str(capath)))
+    monkeypatch.setenv("SSL_CERT_FILE", str(override_file))
+    monkeypatch.setenv("SSL_CERT_DIR", str(override_dir))
+    boundary, _, _ = native.build_boundary(
+        workspace=str(denied_file.parent), state_dir=tmp_path / "state",
+        artifacts=tmp_path / "artifacts", task_dir=tmp_path / "task",
+        source_root=source, task_id="packet-tls", packet_only=True)
+    code_files, code_metadata, code_roots = native._inspection_self_code(source)
+    assert set(boundary.trusted_read_allow) == {*code_files, str(cafile), str(override_file)}
+    assert set(boundary.trusted_metadata_allow) == {
+        *code_metadata, str(public), str(capath), str(override_dir)}
+    assert set(boundary.trusted_read_roots) == {*code_roots, str(capath), str(override_dir)}
+    assert boundary.trusted_tls_roots == (str(capath), str(override_dir))
+    assert str(denied_file) not in boundary.trusted_read_allow
+    profile = containment.build_profile(boundary)
+    assert profile.rfind(f'(allow file-read* (literal "{cafile}"))') > profile.find("\\.(pem|key")
+    assert profile.rfind(f'(allow file-read* (subpath "{capath}"))') > profile.find("\\.(pem|key")
+    monkeypatch.setenv("SSL_CERT_FILE", str(denied_file))
+    denied_override, _, _ = native.build_boundary(
+        workspace=str(denied_file.parent), state_dir=tmp_path / "denied-state",
+        artifacts=tmp_path / "denied-artifacts", task_dir=tmp_path / "denied-task",
+        source_root=source, task_id="denied-override", packet_only=True)
+    assert str(denied_file) not in denied_override.trusted_read_allow
+    plain, _, _ = native.build_boundary(
+        workspace=str(denied_file.parent), state_dir=tmp_path / "other-state",
+        artifacts=tmp_path / "other-artifacts", task_dir=tmp_path / "other-task",
+        source_root=source, task_id="plain", packet_only=False)
+    assert plain.trusted_read_allow == plain.trusted_read_roots == plain.trusted_tls_roots == ()
+
+
+@pytest.mark.skipif(containment.sandbox_exec() is None, reason="macOS Seatbelt required")
+def test_packet_boundary_reads_ca_bundle_but_denies_candidate(tmp_path):
+    cafile = ssl.get_default_verify_paths().cafile
+    if not cafile or not Path(cafile).is_file():
+        pytest.skip("controller interpreter has no regular CA bundle")
+    source = Path(__file__).resolve().parents[1]
+    candidate = tmp_path / "candidate"
+    candidate.mkdir()
+    denied = candidate / "private.txt"
+    denied.write_text("denied")
+    boundary, _, _ = native.build_boundary(
+        workspace=str(candidate), state_dir=tmp_path / "state",
+        artifacts=tmp_path / "artifacts", task_dir=tmp_path / "task",
+        source_root=source, task_id="packet-tls-live", packet_only=True)
+    script = ("import errno, json, sys\n"
+              "with open(sys.argv[1], 'rb') as stream: read = stream.read(1)\n"
+              "try:\n"
+              "    open(sys.argv[2], 'rb').read(1)\n"
+              "except OSError as error:\n"
+              "    denied = errno.errorcode.get(error.errno)\n"
+              "else:\n"
+              "    denied = None\n"
+              "print(json.dumps([bool(read), denied]))\n")
+    run = subprocess.run(containment.wrapped(containment.build_profile(boundary),
+                                             [sys.executable, "-c", script, cafile, str(denied)]),
+                         capture_output=True, text=True, check=True)
+    assert json.loads(run.stdout)[0] is True
+    assert json.loads(run.stdout)[1] in ("EPERM", "EACCES")
 
 
 _FIXTURE_HARNESS = r'''#!/usr/bin/env python3

@@ -24,6 +24,7 @@ Every release section must include a `### Consumer action` subsection, even when
 
 ### Fixed
 
+- Packet-only inspection routes can verify HTTPS endpoints because the public TLS trust store is readable inside the boundary. No consumer action is required.
 - Route scope is checked at service admission and again before native launch, including resolved checkout paths.
 
 ### Consumer action

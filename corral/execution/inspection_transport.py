@@ -66,7 +66,10 @@ def _post(url: str, token: str, body: dict[str, Any], opener=None) -> dict[str, 
     except urllib.error.HTTPError as error:
         raise RuntimeError(f"inspection provider returned HTTP {error.code}") from None
     except (OSError, ValueError, RuntimeError) as error:
-        raise RuntimeError(f"inspection provider request failed: {type(error).__name__}") from None
+        reason = (f"({type(error.reason).__name__})"
+                  if isinstance(error, urllib.error.URLError) and error.reason is not None else "")
+        raise RuntimeError(
+            f"inspection provider request failed: {type(error).__name__}{reason}") from None
     if not isinstance(payload, dict):
         raise RuntimeError("inspection provider returned a non-object response")
     return payload

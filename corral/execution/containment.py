@@ -180,6 +180,7 @@ class Boundary:
     trusted_read_allow: tuple[str, ...] = ()
     trusted_metadata_allow: tuple[str, ...] = ()
     trusted_read_roots: tuple[str, ...] = ()
+    trusted_tls_roots: tuple[str, ...] = ()
     sentinels: tuple[str, ...] = ()
     network: bool = True
     label: str = "seatbelt-worker-boundary"
@@ -192,6 +193,7 @@ class Boundary:
                 "trusted_read_allow": list(self.trusted_read_allow),
                 "trusted_metadata_allow": list(self.trusted_metadata_allow),
                 "trusted_read_roots": list(self.trusted_read_roots),
+                "trusted_tls_roots": list(self.trusted_tls_roots),
                 "sentinels": list(self.sentinels),
                 "network": self.network, "label": self.label}
 
@@ -244,6 +246,7 @@ def build_profile(boundary: Boundary) -> str:
     trusted_read_allow = [str(_real(item)) for item in boundary.trusted_read_allow]
     trusted_metadata_allow = [str(_real(item)) for item in boundary.trusted_metadata_allow]
     trusted_read_roots = [str(_real(item)) for item in boundary.trusted_read_roots]
+    trusted_tls_roots = [str(_real(item)) for item in boundary.trusted_tls_roots]
     rules = [
         "(version 1)",
         "(deny default)",
@@ -280,8 +283,6 @@ def build_profile(boundary: Boundary) -> str:
         # Write stays denied by the global `(deny file-write*)` emitted below.
         rules.append(f"(allow file-read* (subpath {_quote(allowed)}))")
         rules.append(f"(allow file-read* (literal {_quote(allowed)}))")
-    for file in trusted_read_allow:
-        rules.append(f"(allow file-read* (literal {_quote(file)}))")
     for directory in trusted_metadata_allow:
         rules.append(f"(allow file-read* (literal {_quote(directory)}))")
         rules.append(f"(allow file-read-metadata (literal {_quote(directory)}))")
@@ -306,6 +307,12 @@ def build_profile(boundary: Boundary) -> str:
         rules.append(f'(deny file-read* file-write* (regex #"{pattern}"))')
     for pattern in SECRET_FILE_ALLOW_REGEXES:
         rules.append(f'(allow file-read* (regex #"{pattern}"))')
+    # Exact controller-owned files and TLS CA directories must survive the generic .pem
+    # denial; the broad Corral source root is deliberately not re-opened here.
+    for file in trusted_read_allow:
+        rules.append(f"(allow file-read* (literal {_quote(file)}))")
+    for root in trusted_tls_roots:
+        rules.append(f"(allow file-read* (subpath {_quote(root)}))")
     return "\n".join(rules) + "\n"
 
 

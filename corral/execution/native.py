@@ -10,6 +10,8 @@ preparation fails closed otherwise.
 from __future__ import annotations
 
 import json
+import os
+import ssl
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -78,6 +80,41 @@ def _inspection_self_code(source_root: Path) -> tuple[tuple[str, ...], tuple[str
             (str((root / "corral").resolve()),))
 
 
+def _inspection_tls_trust(denied: set[str]) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+    """Grant only existing public CA files and directories selected by this interpreter."""
+    paths = ssl.get_default_verify_paths()
+    files, roots, metadata = set(), set(), set()
+    denied_paths = {Path(item) for item in denied}
+    candidates = [(item, False) for item in (paths.cafile, os.environ.get("SSL_CERT_FILE"))]
+    candidates += [(item, True) for item in (paths.capath, os.environ.get("SSL_CERT_DIR"))]
+    for raw, directory in candidates:
+        if not raw:
+            continue
+        original = Path(raw).expanduser().absolute()
+        try:
+            resolved = original.resolve()
+        except (OSError, RuntimeError):
+            continue
+        if not (resolved.is_dir() if directory else resolved.is_file()):
+            continue
+        # Never reopen controller, candidate, or protected paths through an override.
+        if any(resolved == item or resolved.is_relative_to(item)
+               or item.is_relative_to(resolved) for item in denied_paths):
+            continue
+        (roots if directory else files).add(str(resolved))
+        # Keep metadata at the leaf and at each symlink hop; ancestor metadata is
+        # already allowed outside explicitly denied roots by the base profile.
+        metadata.update((str(original.parent.resolve()), str(resolved.parent)))
+        if directory:
+            metadata.add(str(resolved))
+        current = Path(original.anchor)
+        for part in original.parts[1:]:
+            current /= part
+            if current.is_symlink():
+                metadata.update((str(current.parent.resolve()), str(current.resolve().parent)))
+    return tuple(sorted(files)), tuple(sorted(metadata)), tuple(sorted(roots))
+
+
 def build_boundary(*, workspace: str, state_dir: Path, artifacts: Path, task_dir: Path,
                    source_root: Path, verifier_roots: tuple[str, ...] = (),
                    host_protected: tuple[str, ...] = (), route_read: tuple[str, ...] = (),
@@ -98,7 +135,6 @@ def build_boundary(*, workspace: str, state_dir: Path, artifacts: Path, task_dir
     denied = {
         str(state_dir.resolve()),
         str(artifacts.resolve()),
-        str(Path(source_root).resolve()),
         str(scratch_root.resolve()),
         *{str(Path(item).resolve()) for item in verifier_roots},
         *{str(Path(item).expanduser().resolve()) for item in host_protected},
@@ -106,6 +142,8 @@ def build_boundary(*, workspace: str, state_dir: Path, artifacts: Path, task_dir
     }
     if packet_only:
         denied.add(str(Path(workspace).resolve()))
+    tls_denied = denied.copy()
+    denied.add(str(Path(source_root).resolve()))
     granted = {str(Path(item).expanduser().resolve()) for item in route_read if item}
     writable_files = {Path(item).expanduser().resolve() for item in route_write_files if item}
     invalid_file_grants = [str(item) for item in writable_files
@@ -131,14 +169,21 @@ def build_boundary(*, workspace: str, state_dir: Path, artifacts: Path, task_dir
     worker_workspace = scratch if packet_only else Path(workspace).resolve()
     trusted_read_allow, trusted_metadata_allow, trusted_read_roots = (
         _inspection_self_code(Path(source_root)) if packet_only else ((), (), ()))
+    tls_files, tls_metadata, tls_roots = (
+        _inspection_tls_trust(tls_denied)
+        if packet_only else ((), (), ()))
+    # Inspection routes execute a declared binary, which can differ from the controller's
+    # interpreter (including a venv). Its SSL defaults cannot be read safely without running
+    # it, so these grants cover only the controller interpreter and its environment.
     boundary = containment.Boundary(workspace=str(worker_workspace),
                                     scratch=str(scratch.resolve()), tmpdir=str(scratch.resolve()),
                                     deny=tuple(sorted(denied)), allow=tuple(sorted(granted)),
                                     write_allow=tuple(sorted({str(Path(item).expanduser().resolve()) for item in route_write if item})),
                                     write_file_allow=tuple(sorted(str(item) for item in writable_files)),
-                                    trusted_read_allow=trusted_read_allow,
-                                    trusted_metadata_allow=trusted_metadata_allow,
-                                    trusted_read_roots=trusted_read_roots,
+                                    trusted_read_allow=tuple(sorted((*trusted_read_allow, *tls_files))),
+                                    trusted_metadata_allow=tuple(sorted((*trusted_metadata_allow, *tls_metadata))),
+                                    trusted_read_roots=tuple(sorted((*trusted_read_roots, *tls_roots))),
+                                    trusted_tls_roots=tls_roots,
                                     sentinels=sentinels)
     return boundary, scratch, auth_read_granted
 
@@ -215,7 +260,10 @@ def prepare(*, spec: dict, host: dict, profile, task_dir: Path, workspace: str, 
                                "isolation_claim": demonstration.get("isolation_claim")},
          "note": ("inspection route receives only a copied packet and cannot read the candidate workspace"
                   if route.inspection_only else
-                  "read is default-allow with curated credential/controller denials; write is default-deny")},
+                  "read is default-allow with curated credential/controller denials; write is default-deny"),
+         "tls_trust_reason": ("public CA trust paths used by the controller interpreter for inspection HTTPS; "
+                              "a separately declared route interpreter may have different SSL defaults"
+                              if route.inspection_only else None)},
         indent=2, sort_keys=True))
     if verifier_prepared is not None:
         (task_dir / "verifier-boundary.json").write_text(json.dumps(
@@ -227,6 +275,9 @@ def prepare(*, spec: dict, host: dict, profile, task_dir: Path, workspace: str, 
     (task_dir / "launch-plan.json").write_text(json.dumps(plan_dict, indent=2, sort_keys=True))
     command = build_adapter_command(task_dir=task_dir, workspace=workspace, source=source_root)
     env = {"CORRAL_CONTEXT_PATH": str(context_path), "CORRAL_USAGE_PATH": str(usage_path)}
+    if route.inspection_only:
+        env.update({name: os.environ[name] for name in ("SSL_CERT_FILE", "SSL_CERT_DIR")
+                    if os.environ.get(name)})
     from .secret_env import select
     # Values are forwarded in-process only; only names are recorded in evidence.
     env.update(select(plan.credential_env, credential_values))

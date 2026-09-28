@@ -19,6 +19,7 @@ from .github_support import (
     verify_remote_candidate,
 )
 from .publication_store import record_absence
+from .github_post_mode import record as record_dry_run, validate as validate_post_mode
 from .store import lease_holder_alive
 
 
@@ -40,6 +41,7 @@ class GitHubAdvisoryTransport:
         policy_inputs: dict | None = None,
         absence_reads: int = 3,
         absence_quiet_seconds: float = 300.0,
+        post_mode: str = "dry-run",
     ):
         if absence_reads < 2:
             raise ValueError("absence proof requires at least two consistent readbacks")
@@ -49,6 +51,7 @@ class GitHubAdvisoryTransport:
         self.allow_network = allow_network
         self.timeout = timeout
         self.policy_inputs = policy_inputs
+        self.post_mode = validate_post_mode(post_mode)
         # A failed POST is proven absent only after this many consecutive readbacks,
         # and only once GitHub can no longer be processing a request sent that long ago.
         # The quiet period is the guard against a delayed write: the readbacks run back
@@ -211,6 +214,9 @@ class GitHubAdvisoryTransport:
         """
         epoch, wire = self._verify_approval_and_ownership(pr, intent, payload)
         repo, number = self._parse_pr(pr)
+        if self.post_mode == "dry-run":
+            return record_dry_run(self.store, intent, method="POST",
+                                  endpoint=f"/repos/{repo}/pulls/{number}/reviews", body=wire)
         resource = "pr:" + pr
         with self.store.transaction() as db:
             prior = db.execute(

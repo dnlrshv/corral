@@ -127,6 +127,7 @@ def environment(tmp_path, *, body="advisory", comments=None, base_ref="main"):
     )
     transport = GitHubAdvisoryTransport(
         http_client=http, store=store, bridge_actor=ACTOR,
-        authorized_bridge_actors=frozenset({ACTOR}), policy_inputs=inputs
+        authorized_bridge_actors=frozenset({ACTOR}), policy_inputs=inputs,
+        post_mode="comment",
     )
     return store, http, transport, intent, payload

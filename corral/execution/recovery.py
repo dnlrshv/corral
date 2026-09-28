@@ -203,7 +203,8 @@ def reconcile(controller, token, task, probe):
                               task=task, attempt=attempt,
                               pre_verifier_manifest=(persisted if bound and persisted is not None
                                                      else None), workspace_provenance=workspace_provenance,
-                              timeout=verifier.timeout_for(host), **boundary)
+                              timeout=verifier.timeout_for(host),
+                              process_priority=host.get("process_priority"), **boundary)
     receipt = dict(record.payload)
     if verifier_intact is None and bound:
         receipt["verifier_intact"] = None

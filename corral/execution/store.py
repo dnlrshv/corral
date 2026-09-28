@@ -181,6 +181,9 @@ class Store:
         active = [v for k, v in allocations.items() if k != task and v["active"] and v["host"] == host]
         if cpu <= 0 or memory_mb < 0:
             raise ValueError("invalid resource request")
+        limit = capacity.get("max_concurrent_seats")
+        if limit is not None and len(active) >= limit:
+            raise PermissionError("registered host seat capacity unavailable")
         if sum(v["cpu"] for v in active) + cpu > capacity["cpu"] or sum(v["memory_mb"] for v in active) + memory_mb > capacity["memory_mb"]:
             raise PermissionError("registered host capacity unavailable")
         value = {"host": host, "cpu": cpu, "memory_mb": memory_mb, "active": True}
@@ -205,6 +208,14 @@ class Store:
             "SELECT value FROM records WHERE kind='allocation'"))
         return sum(item.get("active") and item.get("provider") == provider
                    for item in active) < limit
+
+    def seats_available(self, limit: int | None, host: str, *, db) -> bool:
+        """Count all active repository and provider reservations for one host."""
+        if limit is None:
+            return True
+        return sum(item.get("active") and item.get("host") == host for item in (
+            json.loads(raw) for (raw,) in db.execute(
+                "SELECT value FROM records WHERE kind='allocation'"))) < limit
 
     def release_allocation(self, task):
         value = self.get("allocation", task)

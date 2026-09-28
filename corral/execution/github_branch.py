@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from . import continuation
+from .github_post_mode import record as record_dry_run
 from .repair_objects import GitTimeout, RepairObjects, validate_branch
 from .store import digest
 
@@ -258,7 +259,15 @@ class BranchPublisher:
                 return observed
         elif remote["head"] != commit["old_head"]:
             raise PermissionError("PR head changed before repair publication")
-        else:
+        if self.service.post_mode(self.repository_name) == "dry-run":
+            return record_dry_run(
+                self.store, intent, method="git push",
+                endpoint=f"refs/heads/{branch}",
+                body={"repository": self.github_repository, "old_head": commit["old_head"],
+                      "new_head": commit["new_head"], "force": False})
+        if self.repo.get("allow_repair_push") is not True:
+            raise PermissionError("repair branch push requires allow_repair_push")
+        if not prior:
             self.store.owned_operation(
                 resource, owner, epoch, "repair_publish_intent", intent,
                 {"intent": intent, "pr": pr, "branch": branch, "actor": actor, **commit})

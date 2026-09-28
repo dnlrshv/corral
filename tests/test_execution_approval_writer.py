@@ -67,6 +67,7 @@ def test_writer_requires_the_stored_payload_and_an_explicit_policy(tmp_path):
 
 def test_refused_write_leaves_the_intent_publishable_and_persists_the_snapshot(tmp_path):
     store, http, transport, intent, payload, good, snapshot = _prepared(tmp_path)
+    transport.post_mode = "comment"
     with pytest.raises(ValueError):
         record_advisory_approval(store, **{**good, "canonical_wire_hash": None})
     approval = record_advisory_approval(store, **good, policy_snapshot=snapshot)

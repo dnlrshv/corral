@@ -12,6 +12,7 @@ from typing import Any
 from .advisory import compute_advisory_intent, validate_advisory_payload
 from .github_advisory import GitHubAdvisoryTransport
 from .github_support import compute_canonical_wire_hash, parse_pr_identity
+from .github_post_mode import record as record_dry_run, validate as validate_post_mode
 from .publication_validation import require_approval_provenance, validate_payload
 from .policy import _get_auth_token, load_policy_snapshot
 from .store import Store, record_advisory_approval
@@ -223,24 +224,27 @@ def cmd_publish(args: argparse.Namespace) -> int:
         and ownership and ownership[0] == "corral" and ownership[2] == "active"
     )
 
-    if not args.allow_network:
-        report = {
-            "status": "local_offline_verification",
-            "ready_for_publication": False,
-            "local_approval_and_owner_present": ready,
-            "pr": args.pr,
-            "intent": args.intent,
-            "ownership": ownership,
-            "approval_present": bool(approval),
-            "network_prohibited": True,
-            "notice": "live GitHub POST prohibited in local sandbox; authorized deployment required",
-        }
-        print(json.dumps(report, indent=2))
-        return 0 if ready else 1
-
     if not ready:
         print(json.dumps({"status": "error", "reason": "unauthorized or unowned PR"}, indent=2), file=sys.stderr)
         return 1
+
+    mode = validate_post_mode(args.post_mode)
+    if mode == "dry-run":
+        wire_hash, wire = validate_payload(args.pr, args.intent, payload)
+        required = {key: payload[key] for key in
+                    ("repo", "pr", "head", "base", "policy", "publisher")}
+        required.update(intent=args.intent, epoch=ownership[1],
+                        canonical_wire_hash=wire_hash)
+        require_approval_provenance(approval.get("authorized_by"))
+        if any(approval.get(key) != value for key, value in required.items()):
+            raise PermissionError("candidate-bound approval differs from dry-run payload")
+        repo, number = parse_pr_identity(args.pr)
+        result = record_dry_run(store, args.intent, method="POST",
+                                endpoint=f"/repos/{repo}/pulls/{number}/reviews", body=wire)
+        print(json.dumps(result, indent=2))
+        return 0
+    if not args.allow_network:
+        raise PermissionError("comment mode requires --allow-network")
 
     token = _get_auth_token()
     transport = GitHubAdvisoryTransport(
@@ -249,6 +253,7 @@ def cmd_publish(args: argparse.Namespace) -> int:
         bridge_token=token,
         authorized_bridge_actors=frozenset({args.bridge_actor}),
         allow_network=True,
+        post_mode=mode,
         policy_inputs=load_policy_inputs(getattr(args, "policy_inputs", None)),
     )
     receipt = transport.advisory(args.pr, args.candidate, args.intent, payload)
@@ -312,6 +317,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_pub.add_argument("--store", type=Path, required=True)
     p_pub.add_argument("--bridge-actor", default="github-actions[bot]")
     p_pub.add_argument("--allow-network", action="store_true", default=False)
+    p_pub.add_argument("--post-mode", choices=("dry-run", "comment"), default="dry-run")
     p_pub.add_argument("--policy-inputs", type=Path, help="Repository policy source and runner declarations")
     p_pub.set_defaults(func=cmd_publish)
 

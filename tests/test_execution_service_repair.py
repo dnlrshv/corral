@@ -126,6 +126,7 @@ def service_fixture(tmp_path: Path, workspace: Path, remote: Path, gh: Path, *,
     config.write_text(json.dumps({
         "controller_config": str(controller), "repositories": {"demo": {
             "enabled": True, "github_repository": "fixture/repo", "remote_url": str(remote),
+            "github_post_mode": "comment", "allow_repair_push": True,
             "development_file_remote": True,
             "github": {"executable": str(gh), "auth_mode": "fixture-user"},
             "default_host": "fixture", "allowed_hosts": ["fixture"],
@@ -426,6 +427,20 @@ def test_admission_reads_the_checkout_head_as_data(tmp_path, monkeypatch, plante
             if any(root in argument for root in roots):
                 assert argument in {"--work-tree=" + root for root in roots}, command
         assert kwargs.get("stdin") is subprocess.DEVNULL or kwargs.get("input") is not None
+
+
+def test_branch_dry_run_records_ref_update_without_push(tmp_path, monkeypatch):
+    case = admitted(tmp_path, monkeypatch, repository={"github_post_mode": "dry-run",
+                                                  "allow_repair_push": False})
+    accepted_repair(case.service, case.event, case.workspace)
+    outcome = case.service.publish_pr_repair("demo", case.event["event_id"])
+    assert outcome["status"] == "dry-run"
+    assert outcome["method"] == "git push"
+    assert outcome["endpoint"] == "refs/heads/repair-7"
+    assert outcome["body"]["old_head"] == case.head
+    assert outcome["body"]["new_head"] != case.head
+    assert remote_head(case.remote) == case.head
+    assert case.service.store.get("github_dry_run", outcome["intent"]) == outcome
 
 
 def test_branch_publication_pushes_exact_accepted_commit_once(tmp_path, monkeypatch):

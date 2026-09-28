@@ -140,7 +140,8 @@ def dispatch_ready(service, events: dict[str, dict[str, Any]], now: float,
                         "nonlocal host requires an authenticated remote executor route")
                 launcher = launch(service.controller_path, service.store.path.parent,
                                   event["task_id"], host,
-                                  development_mode=service.development_mode)
+                                  development_mode=service.development_mode,
+                                  process_priority=host_cfg.get("process_priority"))
                 updated = {**event, "launcher_identity": launcher}
             except Exception as exc:
                 # No launcher process exists, so its reservation is returned to the host.

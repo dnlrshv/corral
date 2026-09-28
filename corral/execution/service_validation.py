@@ -7,6 +7,7 @@ from pathlib import Path
 from corral.protocol import STORE_SCHEMA_VERSION
 
 from . import routes
+from .host_policy import validate_priority, validate_windows
 from .profiles import STANDARD_NATIVE_PROFILES, registered_profiles
 from .secret_env import load as load_secret_env
 from .service import load_service_config
@@ -35,6 +36,11 @@ def validate(config: str | Path) -> dict:
         try:
             host_routes[name] = routes.declared_routes(host)
             declared.update(host_routes[name])
+            if "process_priority" in host:
+                validate_priority(host["process_priority"])
+            limit = host.get("max_concurrent_seats")
+            if limit is not None and (type(limit) is not int or limit <= 0):
+                errors.append(f"host {name} max_concurrent_seats must be a positive integer")
         except (AttributeError, TypeError, ValueError, PermissionError) as exc:
             errors.append(f"host {name}: {exc}")
     if not isinstance(controller.get("default_host"), str) or controller["default_host"] not in hosts:
@@ -68,6 +74,11 @@ def validate(config: str | Path) -> dict:
             continue
         _check_hosts(repo, f"repository {name}", hosts, errors)
         _check_packet(repo, f"repository {name}", errors)
+        if repo.get("github_post_mode", "dry-run") not in ("dry-run", "comment"):
+            errors.append(f"repository {name} github_post_mode must be dry-run or comment")
+        for flag in ("allow_advisory_reviews", "allow_repair_push", "allow_merge"):
+            if flag in repo and type(repo[flag]) is not bool:
+                errors.append(f"repository {name} {flag} must be boolean")
         allowed_routes = repo.get("allowed_routes")
         if allowed_routes is not None:
             if (not isinstance(allowed_routes, list) or any(
@@ -122,6 +133,15 @@ def validate(config: str | Path) -> dict:
             or not isinstance(limit, int) or limit <= 0
             for name, limit in budgets.items())):
         errors.append("provider_concurrency must map provider names to positive integers")
+    limit = service.get("max_concurrent_seats")
+    if limit is not None and (type(limit) is not int or limit <= 0):
+        errors.append("max_concurrent_seats must be a positive integer")
+    try:
+        validate_windows(service.get("blackout_windows", []))
+    except ValueError as exc:
+        errors.append(str(exc))
+    if service.get("github_post_mode", "dry-run") not in ("dry-run", "comment"):
+        errors.append("github_post_mode must be dry-run or comment")
 
     if controller.get("secret_env") is not None:
         try:

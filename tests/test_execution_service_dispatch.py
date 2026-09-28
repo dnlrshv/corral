@@ -108,7 +108,8 @@ class StandInLaunchers:
     def __init__(self):
         self.procs = []
 
-    def __call__(self, _config, _state, task_id, host, *, development_mode=False):
+    def __call__(self, _config, _state, task_id, host, *, development_mode=False,
+                 process_priority=None):
         proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
         self.procs.append(proc)
         return {**launched(proc.pid, str(Path(sys.executable).resolve()), host),

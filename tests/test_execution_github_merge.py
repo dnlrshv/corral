@@ -66,7 +66,8 @@ def transport(tmp_path, github):
               "required_internal_reviews": [],
               "live_policy_digest": compute_policy_digest({"rulesets": github.rulesets, "classic_protection": github.protection})}
     return GitHubMergeTransport(store=store, token="fixture-token", actor="fixture-merge",
-                                http_client=github, merge_policy=policy), store, epoch
+                                http_client=github, merge_policy=policy,
+                                post_mode="comment", allow_merge=True), store, epoch
 
 
 def payload(epoch):
@@ -104,6 +105,28 @@ def test_failed_read_only_preflight_keeps_history_but_can_later_merge_once(tmp_p
     assert not store.records("merge_intent") and store.records("merge_preflight_failure")
     github.checks[0]["conclusion"] = "success"
     assert client.merge(**payload(epoch))["merged"] and github.puts == 1
+
+
+def test_dry_run_failed_preflight_records_locally_without_network_writes(tmp_path):
+    github = GitHub()
+    client, store, epoch = transport(tmp_path, github)
+    client.post_mode = "dry-run"
+    github.checks[0]["conclusion"] = "failure"
+    writes = []
+    request = client._request
+
+    def observe(method, path, **kwargs):
+        if method != "GET":
+            writes.append((method, path))
+        return request(method, path, **kwargs)
+
+    client._request = observe
+    with pytest.raises(PermissionError, match="required GitHub check"):
+        client.merge(**payload(epoch))
+    assert writes == []
+    assert store.records("merge_preflight_failure")
+    assert store.records("merge_intent") == {}
+    assert store.records("github_dry_run") == {}
 
 
 def test_merge_refuses_missing_required_evidence_empty_token_and_installation_identity(tmp_path, monkeypatch):
@@ -146,7 +169,8 @@ def test_internal_review_can_satisfy_explicit_policy_without_remote_approval(tmp
     receipt = {"receipt_id": digest(receipt), **receipt}
     store.put_once("internal_review_receipt", receipt["receipt_id"], receipt)
     client = GitHubMergeTransport(store=store, token="fixture-token", actor="fixture-merge",
-                                  http_client=github, merge_policy=policy)
+                                  http_client=github, merge_policy=policy,
+                                  post_mode="comment", allow_merge=True)
     assert client.merge(**payload(epoch))["merged"] is True
 
 

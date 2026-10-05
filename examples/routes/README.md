@@ -14,6 +14,16 @@ examples keep `launch_authorized: false` until the operator checks them.
 - `agy-review`: API-key mode passes `GEMINI_API_KEY` through `credential_env`.
   Use a profile with only the `review` role. Verify `--plan` against your CLI;
   this flag is the template's proposed read-only review mode.
+- Subscription-signed-in agy (the `native-antigravity-agy` route the standard
+  profiles name) is not covered by a template. agy 1.2 and later reads its
+  sign-in from the macOS login keychain first; its token file is only a
+  fallback. The keychain is found through `$HOME/Library/Keychains`. A worker
+  starts without `HOME` unless the route sets `runtime_home`, and the boundary
+  denies `~/Library/Keychains`. Such a route cannot sign in, and in the owner's
+  logged-in GUI session agy shows a "Keychain Not Found — Reset To Defaults"
+  dialog (click Cancel, never Reset). Keychain access works only from that GUI
+  session, not from a LaunchDaemon or an ssh session. Do not declare this route
+  until its runtime home and read grants are verified on the host.
 - `deepseek-review`: use an inspection-only profile with `roles: ["review"]`
   and `tools: ["inspect-packet", "report"]`. Replace `SET_HTTPS_ENDPOINT` with
   the configured API endpoint. This route gives the transport a packet, not a

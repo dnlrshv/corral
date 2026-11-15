@@ -149,3 +149,8 @@ def test_magic_numbers_hook_cli_skips_without_constants(
 
     assert main(["hooks", "magic-numbers", "--root", str(tmp_path)]) == 0
     assert "constants-membership checks skipped" in capsys.readouterr().out
+
+
+def test_instructions_lint_registered_under_corral(capsys):
+    assert main(['instructions', 'lint', '--list-checks']) == 0
+    assert 'double-bang' in capsys.readouterr().out

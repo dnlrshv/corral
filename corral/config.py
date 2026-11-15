@@ -83,6 +83,15 @@ Layout::
         demote_days: 180
         min_sessions: 30
         demote_target_glob: null
+    instructions:
+      lint:
+        include: [...]
+        extend_include: []
+        exclude: [...]
+        use_governance_globs: true
+        max_file_bytes: 1048576
+        min_severity: warning
+        checks: {}  # Per-check enabled, severity, severity_by_kind, exclude and options.
 """
 
 from __future__ import annotations
@@ -93,6 +102,7 @@ from pathlib import Path
 import yaml
 
 from corral.governance.config import GovernanceConfig, governance_config_from_mapping
+from corral.instructions.config import InstructionsConfig, instructions_config_from_mapping
 from corral.preflight.auth import DEFAULT_PREFLIGHT_MODEL
 
 CONFIG_FILENAME = "corral.yaml"
@@ -363,6 +373,7 @@ class Config:
     telemetry: TelemetryConfig = field(default_factory=TelemetryConfig)
     retro: RetroConfig = field(default_factory=RetroConfig)
     governance: GovernanceConfig = field(default_factory=GovernanceConfig)
+    instructions: InstructionsConfig = field(default_factory=InstructionsConfig)
     #: Repo-root-relative registry used by retrospective model seats.
     seats_file: str = DEFAULT_SEATS_FILE
     #: Resolved path of the loaded ``corral.yaml``; ``None`` when no file
@@ -496,6 +507,7 @@ def load_config(path: Path | str | None = None) -> Config:
     telemetry_raw = _as_section(document, "telemetry")
     retro_raw = _as_section(document, "retro")
     governance_raw = _as_section(document, "governance")
+    instructions_raw = _as_section(document, "instructions")
 
     codemap = CodemapConfig()
     if "output_dir" in codemap_raw:
@@ -738,6 +750,7 @@ def load_config(path: Path | str | None = None) -> Config:
         telemetry=telemetry,
         retro=retro,
         governance=governance,
+        instructions=instructions_config_from_mapping(instructions_raw),
         seats_file=seats_file,
         source_path=config_path.resolve(),
     )

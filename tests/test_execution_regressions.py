@@ -107,11 +107,11 @@ def test_spool_sequence_collisions_and_sparse_values(tmp_path):
 
 
 def test_parent_exit_term_resistant_child_and_sentinel(tmp_path):
-    sentinel = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"], start_new_session=True)
+    sentinel = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(7200)"], start_new_session=True)
     code = """import os,pathlib,signal,time
 pid=os.fork()
 if pid:
-    while not pathlib.Path('ready').exists(): time.sleep(.01)
+    while not pathlib.Path('ready').exists() or not pathlib.Path('ready').read_text().strip(): time.sleep(.01)
     os._exit(0)
 signal.signal(signal.SIGTERM,signal.SIG_IGN)
 pathlib.Path('ready').write_text(str(os.getpid()))
@@ -140,6 +140,7 @@ while not pathlib.Path('stop').exists(): time.sleep(.01)
         # leader exit the production path must leave ownership uncertain.
         (tmp_path / "stop").write_text("done")
     finally:
+        (tmp_path / "stop").write_text("done")
         sentinel.terminate()
         sentinel.wait()
 

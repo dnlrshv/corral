@@ -9,6 +9,7 @@ Subcommands:
 - ``corral preflight``      — generate a per-task preflight brief.
 - ``corral memory validate``— validate agent-memory files against schemas.
 - ``corral telemetry ...``  — capture/roll up agent session telemetry.
+- ``corral instructions ...`` — sync and lint agent instruction files.
 - ``corral governance ...`` — instruction gate, replay, corpus, budgets, and
   the staleness report.
 
@@ -611,6 +612,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     governance_staleness.set_defaults(handler=_cmd_governance_staleness)
 
+    from corral.instructions.cli import add_instructions_parser
+
+    add_instructions_parser(sub)
     return parser
 
 

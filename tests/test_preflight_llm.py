@@ -92,8 +92,9 @@ def test_llm_happy_path(monkeypatch, repo: Path, capsys) -> None:
 
     assert rc == 0
     assert len(mock.calls) == 1
+    assert mock.calls[0]["effort"] == "low"
     assert mock.calls[0]["model"] == auth.DEFAULT_PREFLIGHT_MODEL
-    assert auth.DEFAULT_PREFLIGHT_MODEL == "claude-haiku-4-5-20251001"
+    assert auth.DEFAULT_PREFLIGHT_MODEL == "claude-haiku-5-5"
 
     import yaml
 
@@ -130,7 +131,7 @@ def test_auth_precedence_matches_reference(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "auth-token")
     monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "oauth-token")
 
-    response = auth._call_anthropic("configured-model", "prompt", 123)
+    response = auth._call_anthropic("configured-model", "prompt", 123, effort=None)
 
     assert auth.get_llm_auth_token() == "auth-token"
     assert auth.has_llm_auth() is True
@@ -151,7 +152,7 @@ def test_auth_precedence_matches_reference(monkeypatch: pytest.MonkeyPatch) -> N
 
     monkeypatch.delenv("ANTHROPIC_API_KEY")
     client_kwargs.clear()
-    auth._call_anthropic("configured-model", "prompt", 123)
+    auth._call_anthropic("configured-model", "prompt", 123, effort=None)
     assert client_kwargs == [{"timeout": auth.API_TIMEOUT, "auth_token": "auth-token"}]
 
 
@@ -361,3 +362,62 @@ def test_unexpected_stop_reason_falls_back(monkeypatch, repo, capsys):
     brief = yaml.safe_load(capsys.readouterr().out.partition("\n")[2])
     assert brief["fallback_reason"] == "llm_response_invalid"
     assert len(mock.calls) == 1
+
+
+def test_request_sends_configured_effort(fake_sdk):
+    from corral.preflight.contract import BRIEF_SCHEMA
+    _, calls = fake_sdk
+    auth.call_llm_with_meta("prompt", 16000, output_schema=BRIEF_SCHEMA, effort="high")
+    assert calls[0]["output_config"] == {
+        "format": {"type": "json_schema", "schema": BRIEF_SCHEMA}, "effort": "high",
+    }
+
+
+def test_request_has_no_sampling_thinking_or_fallback_params(fake_sdk):
+    from corral.preflight.contract import BRIEF_SCHEMA
+    _, calls = fake_sdk
+    auth.call_llm_with_meta("prompt", 16000, output_schema=BRIEF_SCHEMA)
+    assert set(calls[0]) == {"model", "max_tokens", "messages", "output_config"}
+    assert calls[0]["output_config"]["effort"] == "low"
+    assert calls[0]["model"] == "claude-haiku-5-5"
+    assert calls[0]["messages"] == [{"role": "user", "content": "prompt"}]
+
+
+def test_null_effort_omits_effort_parameter(monkeypatch, repo, fake_sdk, capsys):
+    from corral.preflight.contract import BRIEF_SCHEMA
+    message, calls = fake_sdk
+    message.content = [SimpleNamespace(type="text", text=VALID_BRIEF_JSON)]
+    config = repo / "corral.yaml"
+    config.write_text("preflight:\n  effort: null\n  recognized_modules: [src, tests]\n")
+    assert main(["preflight", "--config", str(config), "--task", "Update src/real.py"]) == 0
+    assert calls[0]["output_config"] == {"format": {"type": "json_schema", "schema": BRIEF_SCHEMA}}
+    assert yaml.safe_load(capsys.readouterr().out.partition("\n")[2])["preflight_status"] == "generated"
+
+
+def test_effort_flag_overrides_config(monkeypatch, repo):
+    mock = MockAnthropic([(VALID_BRIEF_JSON, "end_turn")])
+    run_preflight(monkeypatch, repo, mock, "--effort", "high")
+    assert mock.calls[0]["effort"] == "high"
+
+
+@pytest.mark.parametrize("strict", [False, True])
+def test_bad_request_falls_back_with_request_rejected(monkeypatch, repo, capsys, strict):
+    class BadRequest(Exception):
+        status_code = 400
+    calls = []
+    error = BadRequest("unsupported effort")
+    def reject(*args, **kwargs):
+        calls.append(kwargs)
+        raise error
+    if strict:
+        with pytest.raises(BadRequest) as caught:
+            run_preflight(monkeypatch, repo, reject, "--strict")
+        assert caught.value is error
+    else:
+        assert run_preflight(monkeypatch, repo, reject) == 0
+        captured = capsys.readouterr()
+        brief = yaml.safe_load(captured.out.partition("\n")[2])
+        assert brief["fallback_reason"] == "llm_request_rejected"
+        assert "check that preflight.model supports structured outputs" in captured.err
+        assert "effort parameter" in captured.err
+    assert len(calls) == 1

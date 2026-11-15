@@ -250,8 +250,14 @@ preflight:
   # `corral memory validate`. Relative to the repository root.
   gotchas: agent_memory/gotchas.json
 
-  # Anthropic model ID used for LLM brief generation.
-  model: claude-haiku-4-5-20251001
+  # Anthropic model ID used for LLM brief generation. The model must support
+  # structured outputs; the brief's shape is enforced with a JSON schema.
+  model: claude-haiku-5-5
+
+  # Effort level sent with the request (low, medium, high, xhigh, max). It sets
+  # how much the model thinks before answering. null omits the parameter, for
+  # models that do not accept it.
+  effort: low
 
   # Maximum output tokens for the LLM call. Thinking counts toward this limit,
   # so keep it well above the size of the brief itself.

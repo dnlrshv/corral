@@ -20,6 +20,7 @@ import yaml
 from corral.preflight import gotcha_budget
 from corral.preflight.auth import (
     DEFAULT_PREFLIGHT_MODEL,
+    DEFAULT_PREFLIGHT_EFFORT,
     call_llm_with_meta,
     has_llm_auth,
 )
@@ -305,12 +306,13 @@ def generate_brief(
     repo_root: Path,
     max_tokens: int = DEFAULT_MAX_TOKENS,
     model: str = DEFAULT_PREFLIGHT_MODEL,
+    effort: str | None = DEFAULT_PREFLIGHT_EFFORT,
     recognized_modules: frozenset[str] = frozenset(),
     workflow_kinds: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     response = call_llm_with_meta(
         build_prompt(issue, surfaces_yaml), max_tokens,
-        model=model, effort=None, output_schema=BRIEF_SCHEMA,
+        model=model, effort=effort, output_schema=BRIEF_SCHEMA,
     )
     if response.stop_reason == "refusal":
         raise BriefRefusalError(response.refusal_category)
@@ -455,6 +457,7 @@ def _generate_brief_with_fallback(
     gotchas_path: Path,
     repo_root: Path,
     model: str,
+    effort: str | None = DEFAULT_PREFLIGHT_EFFORT,
     recognized_modules: frozenset[str],
     workflow_kinds: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
@@ -466,6 +469,7 @@ def _generate_brief_with_fallback(
             repo_root=repo_root,
             max_tokens=max_tokens,
             model=model,
+            effort=effort,
             recognized_modules=recognized_modules,
             workflow_kinds=workflow_kinds,
         )
@@ -487,16 +491,23 @@ def _generate_brief_with_fallback(
             brief["fallback_reason"] = "llm_truncated"
         elif isinstance(exc, BriefResponseError):
             brief["fallback_reason"] = "llm_response_invalid"
+        elif getattr(exc, "status_code", None) == 400:
+            brief["fallback_reason"] = "llm_request_rejected"
         else:
             brief["fallback_reason"] = "preflight_llm_unavailable"
-        if not has_llm_auth():
+        if not has_llm_auth() and brief["fallback_reason"] != "llm_request_rejected":
             print(
                 "::notice::Preflight LLM authentication is not configured; "
                 "using deterministic fallback.",
                 file=sys.stderr,
             )
         else:
-            print(f"::warning::Preflight LLM failed; using fallback: {error}", file=sys.stderr)
+            hint = (
+                "; check that preflight.model supports structured outputs and, when "
+                "preflight.effort is set, the effort parameter"
+                if brief["fallback_reason"] == "llm_request_rejected" else ""
+            )
+            print(f"::warning::Preflight LLM failed; using fallback: {error}{hint}", file=sys.stderr)
         return brief
 
 

@@ -13,6 +13,8 @@ from corral.config import find_config_file, load_config
 def test_defaults_when_no_config_file(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     cfg = load_config()
+    assert cfg.preflight.model == "claude-haiku-5-5"
+    assert cfg.preflight.effort == "low"
     assert cfg.source_path is None
     assert cfg.root == Path.cwd()
     assert cfg.codemap.output_dir == "code_map"
@@ -172,3 +174,25 @@ def test_preflight_max_tokens_must_be_positive(tmp_path, value):
     config.write_text(f"preflight: {{max_tokens: {value}}}\n")
     with pytest.raises(ValueError, match="preflight.max_tokens must be > 0"):
         load_config(config)
+
+
+@pytest.mark.parametrize("value,expected", [("medium", "medium"), ("null", None), ("xhigh", "xhigh"), ("max", "max")])
+def test_preflight_effort_override_and_null(tmp_path, value, expected):
+    path = tmp_path / "corral.yaml"
+    path.write_text(f"preflight: {{effort: {value}}}\n")
+    assert load_config(path).preflight.effort == expected
+
+
+@pytest.mark.parametrize("value", ["fast", "true", "false", "5", "[]", "{}"])
+def test_preflight_effort_rejects_unknown_value(tmp_path, value):
+    path = tmp_path / "corral.yaml"
+    path.write_text(f"preflight: {{effort: {value}}}\n")
+    with pytest.raises(ValueError, match="preflight.effort must be one of high, low, max, medium, xhigh, or null"):
+        load_config(path)
+
+
+def test_example_config_preflight_matches_defaults():
+    cfg = load_config(Path(__file__).resolve().parents[1] / "corral.example.yaml")
+    assert cfg.preflight.model == "claude-haiku-5-5"
+    assert cfg.preflight.effort == "low"
+    assert cfg.preflight.max_tokens == 16000

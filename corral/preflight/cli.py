@@ -53,6 +53,10 @@ def add_preflight_arguments(parser: argparse.ArgumentParser) -> None:
         help="Maximum output tokens for the LLM call (default: preflight.max_tokens)",
     )
     parser.add_argument(
+        "--effort", choices=auth.PREFLIGHT_EFFORTS, default=None,
+        help="Effort level for the model call (default: preflight.effort)",
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         default=None,
@@ -120,6 +124,7 @@ def run(args: argparse.Namespace) -> int:
     )
     gotchas_path = root / cfg.preflight.gotchas
     max_tokens = args.max_tokens if args.max_tokens is not None else cfg.preflight.max_tokens
+    effort = args.effort if args.effort is not None else cfg.preflight.effort
     recognized_modules = (
         frozenset(cfg.preflight.recognized_modules)
         if cfg.preflight.recognized_modules is not None
@@ -145,6 +150,7 @@ def run(args: argparse.Namespace) -> int:
             strict=args.strict,
             repo_root=root,
             model=cfg.preflight.model,
+            effort=effort,
             recognized_modules=recognized_modules,
             **common,
         )
@@ -157,6 +163,7 @@ def run(args: argparse.Namespace) -> int:
             strict=args.strict,
             repo_root=root,
             model=cfg.preflight.model,
+            effort=effort,
             recognized_modules=recognized_modules,
             **common,
         )

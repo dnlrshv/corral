@@ -34,7 +34,9 @@ except ImportError:  # pragma: no cover - optional dependency
 #: latency-sensitive and runs per-task, so it stays on the cheapest capable
 #: model; import this constant rather than re-hardcoding it elsewhere.
 #: Overridable via the ``preflight.model`` key in ``corral.yaml``.
-DEFAULT_PREFLIGHT_MODEL = "claude-haiku-4-5-20251001"
+DEFAULT_PREFLIGHT_MODEL = "claude-haiku-5-5"
+DEFAULT_PREFLIGHT_EFFORT = "low"
+PREFLIGHT_EFFORTS = ("low", "medium", "high", "xhigh", "max")
 API_TIMEOUT = 120.0
 _DOTENV_LOADED = False
 
@@ -77,7 +79,7 @@ def _call_anthropic(
     prompt: str,
     max_tokens: int,
     *,
-    effort: str | None = None,
+    effort: str | None = DEFAULT_PREFLIGHT_EFFORT,
     output_schema: dict | None = None,
 ) -> PreflightLLMResponse:
     _load_dotenv_once()
@@ -124,7 +126,7 @@ def call_llm_with_meta(
     max_tokens: int,
     *,
     model: str = DEFAULT_PREFLIGHT_MODEL,
-    effort: str | None = None,
+    effort: str | None = DEFAULT_PREFLIGHT_EFFORT,
     output_schema: dict | None = None,
 ) -> PreflightLLMResponse:
     """Make one model call with the requested response schema."""

@@ -66,6 +66,19 @@ def _cmd_rules_show(args: argparse.Namespace) -> int:
         return 1
 
 
+def _cmd_executor_brief_check(args: argparse.Namespace) -> int:
+    from corral.execution.executor_brief import validate
+    from corral.redaction import redact_text
+    try:
+        errors = validate(json.loads(args.file.read_text()))
+        for error in errors:
+            print(redact_text(error))
+        return 1 if errors else 0
+    except (ValueError, PermissionError, OSError) as exc:
+        print(redact_text(str(exc)), file=sys.stderr)
+        return 1
+
+
 def _cmd_version(args: argparse.Namespace) -> int:
     print(json.dumps({"version": __version__, "commit": installed_commit(),
                       "protocol": PROTOCOL_VERSION,
@@ -658,6 +671,12 @@ def build_parser() -> argparse.ArgumentParser:
     show.add_argument("--harness")
     show.add_argument("--json", action="store_true")
     show.set_defaults(handler=_cmd_rules_show)
+
+    executor_brief = sub.add_parser("executor-brief", help="Validate or preview executor contracts")
+    executor_brief_sub = executor_brief.add_subparsers(dest="executor_brief_command", required=True)
+    check = executor_brief_sub.add_parser("check", help="Validate an executor brief JSON file")
+    check.add_argument("file", type=Path)
+    check.set_defaults(handler=_cmd_executor_brief_check)
 
     return parser
 

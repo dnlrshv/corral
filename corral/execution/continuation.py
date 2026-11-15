@@ -160,13 +160,13 @@ def _validated_binding(amendment: dict) -> dict:
     This is an allow-list, not a deny-list: an unlisted key is refused whether or not it looks
     like authority, so nothing can be smuggled in under a name this module never considered.
     """
-    unknown = sorted(set(amendment) - set(BINDING_KEYS) - {"objective"})
+    unknown = sorted(set(amendment) - set(BINDING_KEYS) - {"objective", "brief"})
     if unknown:
         raise PermissionError(
             "continuation cannot grant or replace execution authority; refused keys: "
             f"{', '.join(unknown)}. Host, endpoint, workspace, profile/model/route, role, "
             "resources, dependencies and credentials stay bound to the immutable submitted "
-            f"request; only objective and {', '.join(BINDING_KEYS)} are rebound per generation.")
+            f"request; only objective, brief and {', '.join(BINDING_KEYS)} are rebound per generation.")
     binding = {key: json.loads(json.dumps(amendment[key])) for key in BINDING_KEYS if key in amendment}
     for key in ("candidate_paths", "verifier_paths"):
         if key in binding:
@@ -293,7 +293,7 @@ def checkpoint_for(store, task_id: str, generation: int):
 # --------------------------------------------------------------------------- scheduling
 
 def _schedule_atomically(store, task_id: str, continuation_id: str, record: dict,
-                         objective: str) -> bool:
+                         amendment_value: dict) -> bool:
     """Write the generation and its objective amendment in one transaction, or deduplicate.
 
     The generation slot is recomputed inside the write fence, so two different continuation
@@ -335,13 +335,13 @@ def _schedule_atomically(store, task_id: str, continuation_id: str, record: dict
         db.execute("INSERT INTO records VALUES(?,?,?)", (KIND, key, canonical(record)))
         old = db.execute("SELECT value FROM records WHERE kind='amendment' AND key=?", (key,)).fetchone()
         if old:
-            if json.loads(old[0])["value"] != {"objective": objective}:
+            if json.loads(old[0])["value"] != amendment_value:
                 raise ValueError("conflicting amendment identity")
         else:
             sequence = db.execute("SELECT COUNT(*) FROM records WHERE kind='amendment'").fetchone()[0] + 1
             db.execute("INSERT INTO records VALUES(?,?,?)",
                        ("amendment", key,
-                        canonical({"sequence": sequence, "value": {"objective": objective}})))
+                        canonical({"sequence": sequence, "value": amendment_value})))
         return True
 
 
@@ -360,18 +360,23 @@ def schedule(controller, token, task_id: str, continuation_id: str, amendment: d
         raise ValueError("continuation_id must be a non-empty string")
     if not isinstance(amendment, dict):
         raise ValueError("continuation must be an object")
+    from .executor_brief import normalize_spec
+    amendment = json.loads(json.dumps(amendment))
+    normalize_spec(amendment)
     objective = amendment.get("objective")
     if not isinstance(objective, str) or not objective.strip():
         raise ValueError("continuation requires an explicit non-empty objective; nothing is inferred")
     if amendment.get("native_resume") or amendment.get("resume") or amendment.get("session_resume"):
         raise PermissionError("native session resume is unsupported; fresh checkpoint-based generations are supported")
+    amendment_value = {key: amendment[key] for key in ("objective", "brief") if key in amendment}
     binding = _validated_binding(amendment)
     # A repeated request deduplicates on its own id whatever happened afterwards: a lost ack
     # must never become a second worker, and a reused id must never carry a different payload.
     already = _scheduled_by_id(controller.store, task_id, continuation_id)
     if already is not None:
-        if ((already["objective_digest"], already["binding_digest"])
-                != (digest(objective), digest(binding))):
+        requested_brief_digest = digest(amendment["brief"]) if "brief" in amendment else None
+        if ((already["objective_digest"], already["binding_digest"], already.get("brief_digest"))
+                != (digest(objective), digest(binding), requested_brief_digest)):
             raise ValueError("conflicting continuation identity")
         # Ensure we still send the remote intent if we are continuing via remote executor,
         # in case the previous request lost the ACK or dropped before reaching the executor.
@@ -414,8 +419,11 @@ def schedule(controller, token, task_id: str, continuation_id: str, amendment: d
                   "binding_digest": digest(binding), "verifier_policy": {}, "prior": checkpoint,
                   "executor_task": binding_info["task"]}
 
+        if "brief" in amendment:
+            record["brief_digest"] = digest(amendment["brief"])
+
         # Durable fenced controller continuation intent before remote side effects
-        created = _schedule_atomically(controller.store, task_id, continuation_id, record, objective)
+        created = _schedule_atomically(controller.store, task_id, continuation_id, record, amendment_value)
 
         # Lost ack replay safe: remote continue is idempotent on continuation_id
         remote_client = Client(host_cfg["executor"])
@@ -439,7 +447,9 @@ def schedule(controller, token, task_id: str, continuation_id: str, amendment: d
     record = {"task": task_id, "continuation_id": continuation_id, "generation": prior + 1,
               "objective_digest": digest(objective), "binding": binding,
               "binding_digest": digest(binding), "verifier_policy": policy, "prior": checkpoint}
-    created = _schedule_atomically(controller.store, task_id, continuation_id, record, objective)
+    if "brief" in amendment:
+        record["brief_digest"] = digest(amendment["brief"])
+    created = _schedule_atomically(controller.store, task_id, continuation_id, record, amendment_value)
     return {"scheduled": created, "generation": record["generation"], "continuation": record,
             "dispatch": "explicit operational action required; nothing is retried automatically",
             **controller.status(token, task_id)}

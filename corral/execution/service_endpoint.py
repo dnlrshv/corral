@@ -35,7 +35,7 @@ def main(argv: list[str] | None = None) -> int:
         result = service.tick(request.get("now"))
     elif action == "amend":
         result = service.amend(request["event_id"], request["amendment_id"],
-                               request["objective"])
+                               request.get("objective"), brief=request.get("brief"))
     elif action == "pause":
         result = service.pause(request["event_id"], request["amendment_id"],
                                request.get("paused", True))
@@ -43,7 +43,7 @@ def main(argv: list[str] | None = None) -> int:
         result = service.cancel(request["event_id"])
     elif action == "continue":
         result = service.continue_event(request["event_id"], request["continuation_id"],
-                                        request["objective"])
+                                        request.get("objective"), brief=request.get("brief"))
     elif action == "reconcile":
         service.tick(request.get("now"))
         result = service.status(request["event_id"])

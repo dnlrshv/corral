@@ -19,8 +19,10 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("version")
     sub.add_parser("validate")
     submit = sub.add_parser("submit")
-    for flag in ("event-id", "repository", "objective"):
+    for flag in ("event-id", "repository"):
         submit.add_argument("--" + flag, required=True)
+    submit.add_argument("--objective")
+    submit.add_argument("--brief", type=Path)
     submit.add_argument("--host")
     submit.add_argument("--mode", default="interactive")
     submit.add_argument("--role")
@@ -75,12 +77,16 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if result["valid"] else 1
     service = Service(args.config)
     if args.command == "submit":
+        if args.objective is None and args.brief is None:
+            parser.error("--objective or --brief is required")
+        from .executor_brief import read_file
+        brief_args = {"brief": read_file(args.brief)} if args.brief else {}
         snapshot = json.loads(args.snapshot.read_text()) if args.snapshot else None
         result = service.submit(args.event_id, args.repository, args.objective, host=args.host,
                                 mode=args.mode, role=args.role, profile_id=args.profile,
                                 candidate_paths=args.candidate or None, source_snapshot=snapshot,
                                 inspection_paths=args.inspection_path, diff_path=args.diff_path,
-                                workspace_kind=args.workspace_kind)
+                                workspace_kind=args.workspace_kind, **brief_args)
     elif args.command == "review-pr":
         result = service.submit_pr_review(
             args.repository, args.pr, args.policy, expected_head=args.expected_head,

@@ -47,6 +47,7 @@ include = ["corral*"]
 exclude = ["tests*", "_import*"]
 
 [tool.setuptools.package-data]
+"corral.execution" = ["schemas/*.json"]
 "corral.rules" = ["defaults.yaml", "schemas/*.json"]
 "corral.memory" = ["schemas/*.json"]
 "corral.governance" = ["schemas/*.json"]

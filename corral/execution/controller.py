@@ -76,6 +76,8 @@ class Controller:
         self.authorize(token)
         spec = json.loads(json.dumps(spec))
         spec = workspace_contract.resolve_spec(self.store, spec)
+        from .executor_brief import normalize_spec
+        normalize_spec(spec)
         if spec.get("native_resume") or spec.get("resume") or spec.get("session_resume"):
             raise PermissionError("native session resume is unsupported; fresh checkpoint-based generations are supported")
         spec.setdefault("host", self.default_host)
@@ -168,8 +170,11 @@ class Controller:
         self.authorize(token)
         if not self.store.get("request", task_id):
             raise KeyError(task_id)
-        if set(amendment) - {"objective", "mode", "pause_dispatch", "stop_monitoring"}:
+        if set(amendment) - {"objective", "brief", "mode", "pause_dispatch", "stop_monitoring"}:
             raise PermissionError("steering cannot grant authority or replace execution")
+        from .executor_brief import normalize_spec
+        amendment = json.loads(json.dumps(amendment))
+        normalize_spec(amendment)
         if amendment.get("mode", "interactive") not in ("interactive", "wave"):
             raise ValueError("invalid mode")
         self.store.append_ordered("amendment", task_id + ":" + amendment_id, amendment)

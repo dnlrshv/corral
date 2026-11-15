@@ -120,13 +120,18 @@ class Service:
         return selected
 
     def submit(
-        self, event_id: str, repository: str, objective: str, *, host: str | None = None,
+        self, event_id: str, repository: str, objective: str | None = None, *,
+        brief: dict | None = None, host: str | None = None,
         mode: str = "interactive", role: str | None = None, profile_id: str | None = None,
         candidate_paths: list[str] | None = None, source_snapshot: dict | None = None,
         source_reason: str = "interactive-cli", inspection_paths: list[str] | None = None,
         diff_path: str | None = None, workspace_kind: str = "checkout",
     ) -> dict[str, Any]:
-        if not event_id or not objective.strip():
+        from .executor_brief import normalize_spec
+        supplied = {"objective": objective, **({"brief": brief} if brief is not None else {})}
+        normalize_spec(supplied)
+        objective = supplied["objective"]
+        if not event_id or not isinstance(objective, str) or not objective.strip():
             raise ValueError("event_id and objective are required")
         if mode not in ("interactive", "wave", "scheduled"):
             raise ValueError("invalid service mode")
@@ -155,6 +160,8 @@ class Service:
                 "source_reason": source_reason, "source_confidence": "controller-registered",
                 "workspace_kind": workspace_kind, "inspection_paths": inspected,
                 "diff_path": diff_path}
+        if brief is not None:
+            spec["brief"] = brief
         if selected_profile:
             spec["profile_id"] = selected_profile
         spec["service_event_id"] = event_id
@@ -247,12 +254,15 @@ class Service:
                 "provenance": (task.get("result") or {}).get("provenance") if task else None,
                 "blackout": blackout(self.blackout_windows, time.time() if now is None else now)}
 
-    def amend(self, event_id: str, amendment_id: str, objective: str) -> dict[str, Any]:
+    def amend(self, event_id: str, amendment_id: str, objective: str | None = None, *,
+              brief: dict | None = None) -> dict[str, Any]:
+        if brief is None and (not isinstance(objective, str) or not objective.strip()):
+            raise ValueError("objective or brief is required")
         event = self.store.get("service_event", event_id)
         if not event or not event.get("task_id"):
             raise KeyError(event_id)
         self.controller.steer(self.token, event["task_id"], amendment_id,
-                              {"objective": objective})
+                              {"objective": objective, **({"brief": brief} if brief is not None else {})})
         return self.status(event_id)
 
     def pause(self, event_id: str, amendment_id: str, paused: bool) -> dict[str, Any]:
@@ -275,12 +285,12 @@ class Service:
         return self.status(event_id)
 
     def continue_event(self, event_id: str, continuation_id: str,
-                       objective: str) -> dict[str, Any]:
+                       objective: str | None = None, *, brief: dict | None = None) -> dict[str, Any]:
         event = self.store.get("service_event", event_id)
         if not event or not event.get("task_id"):
             raise KeyError(event_id)
         self.controller.continue_task(self.token, event["task_id"], continuation_id,
-                                      {"objective": objective})
+                                      {"objective": objective, **({"brief": brief} if brief is not None else {})})
         self.store.replace("service_event", event_id, {**event, "status": "prepared"})
         return self.status(event_id)
 

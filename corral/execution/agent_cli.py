@@ -17,7 +17,8 @@ def _parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
     submit = sub.add_parser("submit")
     submit.add_argument("--repository", required=True)
-    submit.add_argument("--objective", required=True)
+    submit.add_argument("--objective")
+    submit.add_argument("--brief", type=Path)
     submit.add_argument("--event-id")
     submit.add_argument("--source-root", type=Path)
     submit.add_argument("--input", action="append", default=[])
@@ -44,7 +45,8 @@ def _parser() -> argparse.ArgumentParser:
     amend = sub.add_parser("amend")
     amend.add_argument("--event-id", required=True)
     amend.add_argument("--amendment-id", required=True)
-    amend.add_argument("--objective", required=True)
+    amend.add_argument("--objective")
+    amend.add_argument("--brief", type=Path)
     pause = sub.add_parser("pause")
     pause.add_argument("--event-id", required=True)
     pause.add_argument("--amendment-id", required=True)
@@ -56,7 +58,8 @@ def _parser() -> argparse.ArgumentParser:
     continued = sub.add_parser("continue")
     continued.add_argument("--event-id", required=True)
     continued.add_argument("--continuation-id", required=True)
-    continued.add_argument("--objective", required=True)
+    continued.add_argument("--objective")
+    continued.add_argument("--brief", type=Path)
     wave = sub.add_parser("wave")
     wave.add_argument("--wave-id", required=True)
     source = wave.add_mutually_exclusive_group(required=True)
@@ -78,6 +81,13 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    brief_args = {}
+    if args.command in ("submit", "amend", "continue"):
+        if args.objective is None and args.brief is None:
+            raise SystemExit("--objective or --brief is required")
+        if args.brief is not None:
+            from .executor_brief import read_file
+            brief_args["brief"] = read_file(args.brief)
     client = from_path(args.config)
     if args.command == "submit":
         if args.input and args.source_root is None:
@@ -88,7 +98,7 @@ def main(argv: list[str] | None = None) -> int:
                              objective=args.objective, host=args.host, role=args.role,
                              profile_id=args.profile, candidate_paths=args.candidate or None,
                              source_snapshot=snapshot, inspection_paths=args.inspection_path,
-                             diff_path=args.diff_path, workspace_kind=args.workspace_kind)
+                             diff_path=args.diff_path, workspace_kind=args.workspace_kind, **brief_args)
         if args.run:
             client.call("tick")
             while True:
@@ -110,7 +120,7 @@ def main(argv: list[str] | None = None) -> int:
         result = client.call("status", event_id=args.event_id)
     elif args.command == "amend":
         result = client.call("amend", event_id=args.event_id,
-                             amendment_id=args.amendment_id, objective=args.objective)
+                             amendment_id=args.amendment_id, objective=args.objective, **brief_args)
     elif args.command == "pause":
         result = client.call("pause", event_id=args.event_id,
                              amendment_id=args.amendment_id, paused=not args.resume)
@@ -120,7 +130,7 @@ def main(argv: list[str] | None = None) -> int:
         result = client.call("reconcile", event_id=args.event_id)
     elif args.command == "continue":
         result = client.call("continue", event_id=args.event_id,
-                             continuation_id=args.continuation_id, objective=args.objective)
+                             continuation_id=args.continuation_id, objective=args.objective, **brief_args)
     elif args.command == "wave":
         if args.plan:
             result = client.call("wave-plan", wave_id=args.wave_id, plan=args.plan,

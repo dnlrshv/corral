@@ -81,8 +81,9 @@ class CorralAgent:
     def submit(
         self,
         repo: str | Path,
-        objective: str,
+        objective: str | None = None,
         *,
+        brief: dict | None = None,
         request_id: str | None = None,
         candidate_paths: list[str] | None = None,
         verifier_paths: list[str] | None = None,
@@ -118,6 +119,12 @@ class CorralAgent:
             "result_file": result_file,
             "usage_file": usage_file,
         }
+        if brief is not None:
+            spec["brief"] = brief
+        from .executor_brief import normalize_spec
+        normalize_spec(spec)
+        if not isinstance(spec.get("objective"), str) or not spec["objective"].strip():
+            raise ValueError("objective or brief is required")
         if target_host:
             spec["host"] = target_host
         if profile_id and self.config.profiles and profile_id in self.config.profiles:

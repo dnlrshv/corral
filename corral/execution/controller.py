@@ -401,7 +401,9 @@ class Controller:
             if checkpoint:
                 (output / "continuation-checkpoint.json").write_text(
                     json.dumps(checkpoint, indent=2, sort_keys=True))
-            def update_context_and_usage():
+            brief_fields, brief_record = {}, None
+
+            def context_payload():
                 amendments = [{"amendment_id": key.split(":", 1)[1], "sequence": value["sequence"],
                                "value": value["value"]}
                               for key, value in sorted(self.store.records("amendment").items())
@@ -414,7 +416,11 @@ class Controller:
                     payload["prompt_extras"] = "\n\n".join(
                         part for part in (spec.get("prompt_extras"),
                                           continuation.checkpoint_text(checkpoint)) if part)
-                write_json(context_path, payload)
+                payload.update(brief_fields)
+                return payload
+
+            def update_context_and_usage():
+                write_json(context_path, context_payload())
                 usage_file = usage_path
                 if usage_file.is_file():
                     try:
@@ -458,6 +464,14 @@ class Controller:
             run_env = {"CORRAL_CONTEXT_PATH": str(context_path), "CORRAL_USAGE_PATH": str(usage_path)}
             run_cwd, seatbelt, label, native_evidence = workspace, None, None, None
             verifier_seatbelt = verifier_evidence = verifier_env = None
+            if native_run and not inspection_only:
+                from . import executor_brief_policy
+                state["brief_mode"] = "brief" if spec.get("brief") is not None else "legacy-objective"
+                brief_fields, brief_record = executor_brief_policy.prepare(
+                    context=context_payload(), workspace=workspace, profile=profile, route=route,
+                    task=task_id, generation=generation, attempt=attempt)
+                state["brief_mode"] = brief_record["mode"]
+                write_json(output / "brief.json", brief_record)
             if native_run:
                 # Inspection-only preparation copies the controller-bound objective and
                 # invocation identity into an immutable packet.  Persist that trusted
@@ -621,10 +635,8 @@ class Controller:
                     "envelope_schema": route.envelope, "envelope_sha256": None,
                     "corral_version": __version__, "corral_commit": installed_commit(),
                 }
-            from .result_schema import assess
-            brief_report = ({"report": assess(structured, spec.get("brief"))}
-                            if native_run and not inspection_only else None)
-            result = {"brief": brief_report, "structured": structured,
+            from .executor_brief_policy import result_record
+            result = {"brief": result_record(brief_record, structured), "structured": structured,
                       "accepted": accepted, "receipt": receipt,
                       "identity_mismatch": identity_mismatch,
                       "artifact_directory": str(output), "endpoint": "local", "usage": usage,

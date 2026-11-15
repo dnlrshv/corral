@@ -164,6 +164,28 @@ def validate(config: str | Path) -> dict:
             store["compatible"] = False
             errors.append(f"store cannot be read: {exc}")
 
+    from corral.rules import load_rules_file, overlay_path
+    from corral.redaction import redact_text
+    overlay = overlay_path()
+    try:
+        for repo in repositories.values():
+            if not isinstance(repo, dict):
+                continue
+            workspaces = repo.get("workspaces") or {}
+            if not isinstance(workspaces, dict):
+                continue
+            for workspace in workspaces.values():
+                if not isinstance(workspace, str):
+                    continue
+                if overlay.resolve().is_relative_to(Path(workspace).resolve()):
+                    raise PermissionError("overlay must not live inside a repository workspace")
+        if not overlay.exists():
+            warnings.append(f"personal overlay is absent: {overlay}")
+        else:
+            load_rules_file(overlay, source="overlay")
+    except (OSError, ValueError, PermissionError) as exc:
+        errors.append(f"personal overlay: {redact_text(str(exc))}")
+    warnings = sorted(set(warnings))
     return {"valid": not errors, "errors": errors, "warnings": warnings, "store": store}
 
 

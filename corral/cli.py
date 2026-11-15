@@ -32,6 +32,7 @@ from corral.protocol import PROTOCOL_VERSION, STORE_SCHEMA_VERSION, installed_co
 def _cmd_rules_show(args: argparse.Namespace) -> int:
     from dataclasses import asdict
     from corral.rules import load_layers
+    from corral.config import Config
     import yaml
 
     try:
@@ -40,18 +41,9 @@ def _cmd_rules_show(args: argparse.Namespace) -> int:
             root = cfg.root
         else:
             root = args.root.resolve()
-            if (root / "corral.yaml").exists():
-                load_config(root / "corral.yaml")
-        # The executor_brief config dataclass lands with dispatch policy; read its
-        # rules declaration here so this standalone command is useful immediately.
-        path = root / "corral.yaml"
-        doc = yaml.safe_load(path.read_text()) if path.exists() else {}
-        section = (doc or {}).get("executor_brief", {}) or {}
-        if not isinstance(section, dict):
-            raise ValueError("executor_brief must be a mapping")
-        rules_file = section.get("rules_file")
-        if rules_file is not None and not isinstance(rules_file, str):
-            raise ValueError("executor_brief.rules_file must be a string or null")
+            path = root / "corral.yaml"
+            cfg = load_config(path) if path.exists() else Config()
+        rules_file = cfg.executor_brief.rules_file
         rules = load_layers(workspace=root, repo_rules_file=rules_file).applicable(
             repo=args.repo, workspace=str(root), tier=args.tier, phase=args.phase, harness=args.harness)
         if args.json:

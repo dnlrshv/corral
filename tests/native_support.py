@@ -135,7 +135,7 @@ def fake_profile() -> Profile:
     return Profile(id="fixture-native-high", model=FAKE_MODEL, effort=FAKE_EFFORT,
                    harness=FAKE_HARNESS, version="0.0.0-fixture", route=FAKE_ROUTE,
                    roles=("implementation", "review", "repair", "adjudication"),
-                   tools=("read", "search", "edit", "shell", "test"), context=100000,
+                   tools=("read", "search", "edit", "shell", "test"), context=100000, tier="small",
                    provider="fixture", family="fixture", account_ref="fixture-account")
 
 

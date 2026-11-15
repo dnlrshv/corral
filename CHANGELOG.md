@@ -7,6 +7,8 @@ Every release section must include a `### Consumer action` subsection, even when
 
 ### Added
 
+- Profile tiers and executor-brief launch policy, input budgets, layered-rule provenance in `brief.json`, and result/status assessment records.
+
 - Typed executor briefs (`corral-executor-brief-v1`) with contract validation, submit/steer/continue plumbing, `--brief FILE`, and `corral executor-brief check`.
 
 - A rules layer (`corral.rules`) with packaged defaults, repository rules, an external personal overlay, and `corral rules show`.

@@ -281,6 +281,17 @@ preflight:
   #   "CI: Fix Issue": fix-issue
   #   "CI: PR Review": pr-review
 
+executor_brief:
+  # Repository rules merge between generic defaults and the external personal
+  # overlay so repository policy and personal preferences stay distinct.
+  rules_file: null
+  # Objective-only native dispatches proceed with a recorded warning (warn)
+  # or are refused before launch (refuse), allowing gradual contract adoption.
+  legacy_objective: warn
+  # Input character bound protecting the executor context window. Null uses
+  # profile tier defaults: small 40000, standard 80000, frontier 120000.
+  max_prompt_chars: null
+
 telemetry:
   # Spool directory for session records written by the Claude Code Stop hook
   # (`corral telemetry capture` / `corral-telemetry-capture`). Resolution

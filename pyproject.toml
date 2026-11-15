@@ -33,6 +33,7 @@ memory = ["jsonschema>=4"]
 corral = "corral.cli:main"
 corral-surface-check = "corral.hooks.surface_check:main"
 corral-surface-reminder = "corral.hooks.surface_reminder:main"
+corral-instructions-sync = "corral.instructions.cli:sync_main"
 corral-instructions-lint = "corral.instructions.cli:lint_main"
 corral-magic-numbers = "corral.hooks.magic_numbers:main"
 corral-telemetry-capture = "corral.telemetry.capture:main"

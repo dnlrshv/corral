@@ -84,6 +84,14 @@ Layout::
         min_sessions: 30
         demote_target_glob: null
     instructions:
+      sync:
+        canonical: AGENTS.md
+        pointers:
+          claude: {path: CLAUDE.md, style: import}
+          gemini: {path: GEMINI.md, style: import}
+        foreign_content: warn
+        skills: {enabled: true, canonical: auto, mode: copy}
+        user: {layers: [overlay]}
       lint:
         include: [...]
         extend_include: []

@@ -154,3 +154,10 @@ def test_magic_numbers_hook_cli_skips_without_constants(
 def test_instructions_lint_registered_under_corral(capsys):
     assert main(['instructions', 'lint', '--list-checks']) == 0
     assert 'double-bang' in capsys.readouterr().out
+
+
+def test_instructions_sync_is_registered(capsys):
+    with pytest.raises(SystemExit) as exc:
+        main(['instructions', 'sync', '--help'])
+    assert exc.value.code == 0
+    assert '--scope' in capsys.readouterr().out

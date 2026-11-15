@@ -36,6 +36,7 @@ def add_instructions_parser(sub: argparse._SubParsersAction) -> None:
     parser = sub.add_parser('instructions', help='Sync and lint agent instruction files')
     commands = parser.add_subparsers(dest='instructions_command')
     add_lint_parser(commands)
+    add_sync_parser(commands)
 
 
 def _redact_error(value: str, root: Path | None = None) -> str:
@@ -110,3 +111,52 @@ def lint_main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog='corral-instructions-lint')
     _lint_flags(parser)
     return run_lint(parser.parse_args(argv))
+
+
+def _sync_flags(parser):
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument('--check', action='store_true')
+    modes.add_argument('--dry-run', action='store_true')
+    parser.add_argument('--scope', choices=('repo', 'user', 'all'), default='repo')
+    parser.add_argument('--only', action='append')
+    for flag in ('force', 'prune', 'strict', 'json', 'allow-empty-overlay'):
+        parser.add_argument('--' + flag, action='store_true')
+    parser.add_argument('--overlay', type=Path)
+    parser.add_argument('--user-target', action='append', default=[])
+    parser.add_argument('--allow-target-repo', type=Path, action='append', default=[])
+    parser.add_argument('--root', type=Path)
+    parser.add_argument('--config', type=Path)
+
+
+def add_sync_parser(sub):
+    parser = sub.add_parser('sync', help='Synchronize managed agent instruction targets')
+    _sync_flags(parser)
+    parser.set_defaults(handler=run_sync)
+
+
+def run_sync(args) -> int:
+    from corral.config import load_config
+    from .sync import SyncOptions, run_sync as synchronize
+    root = None
+    try:
+        config = load_config(args.config)
+        root = (args.root or config.root).absolute()
+        if not root.is_dir():
+            raise ValueError('--root is not a directory')
+        only = {s.strip() for value in args.only for s in value.split(',')} if args.only is not None else None
+        if only is not None and only - {'pointers', 'skills', 'user'}:
+            raise ValueError('unknown instructions sync target: ' + ', '.join(sorted(only - {'pointers', 'skills', 'user'})))
+        options = SyncOptions(check=args.check, dry_run=args.dry_run, scope=args.scope, only=only,
+                              force=args.force, prune=args.prune, strict=args.strict)
+        report = synchronize(root, config.instructions.sync, options)
+        print(json.dumps(report.to_json(), sort_keys=True) if args.json else report.render_text())
+        return report.exit_code()
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        print('instructions sync: ' + _redact_error(str(exc), root), file=sys.stderr)
+        return 2
+
+
+def sync_main(argv=None) -> int:
+    parser = argparse.ArgumentParser(prog='corral-instructions-sync')
+    _sync_flags(parser)
+    return run_sync(parser.parse_args(argv))

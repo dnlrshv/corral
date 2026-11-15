@@ -9,6 +9,8 @@ Every release section must include a `### Consumer action` subsection, even when
 
 - `corral instructions lint`: deterministic checks for agent instruction files (caps emphasis without a reason, repeated exclamation emphasis, retired model IDs, thinking scaffolds, numeric word caps, history narratives, migration-relative phrasing, grader vocabulary, dead paths, dead make/package-script targets, skill trigger-description bloat), with suppression comments, JSON output and the `instructions-lint` pre-commit hook.
 
+- `corral instructions sync`: repo-scope managed pointer blocks, digest-based edit protection, check/dry-run reports, and byte-preserving atomic writes. The command is opt-in.
+
 ### Consumer action
 
 None. The command and hook are opt-in; add `- id: instructions-lint` to `.pre-commit-config.yaml` to enable the hook.

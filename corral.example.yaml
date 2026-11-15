@@ -75,6 +75,27 @@ governance:
     demote_target_glob: null
 
 instructions:
+  sync:
+    # Shared repository instructions; corral never writes this file.
+    canonical: AGENTS.md
+    # This mapping replaces the default pointer set; {} disables pointers.
+    pointers:
+      claude: {path: CLAUDE.md, style: import}
+      gemini: {path: GEMINI.md, style: import}
+      # cursor: {path: .cursorrules, style: reference}
+      # copilot: {path: .github/copilot-instructions.md, style: reference}
+    # Text outside a managed pointer block: allow, warn, or error.
+    foreign_content: warn
+    skills:
+      # Skill mirroring is not available in this build.
+      enabled: true
+      canonical: auto
+      mode: copy
+      sides: {claude: .claude/skills, agents: .agents/skills}
+    user:
+      # User scope is not available in this build.
+      layers: [overlay]
+      harnesses: {claude: [claude], codex: [codex], gemini: [gemini, agy]}
   lint:
     # Additional instruction paths, appended to the default include list.
     extend_include: []

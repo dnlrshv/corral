@@ -86,6 +86,7 @@ def render_summary(
     severity_issues: list[tuple[GotchaCandidate, str, str | None]],
     dry_run: bool,
     verification_status: str,
+    min_root_incidents: int = 2,
     proposals_enabled: bool = False,
     proposal_run: "DocProposalRunView | None" = None,
 ) -> str:
@@ -93,7 +94,7 @@ def render_summary(
         f"# Agent Retrospective — {since} to {until}",
         "",
         f"- Evidence groups found: {total_groups}",
-        f"- Groups meeting the >=2-distinct-root-incident bar: {qualified_groups}",
+        f"- Groups meeting the >={min_root_incidents}-distinct-root-incident bar: {qualified_groups}",
         f"- Groups skipped as duplicates of existing gotchas/open issues: {dedup_skipped}",
         f"- Independent verification: {verification_status}",
         f"- Candidates drafted and accepted (confirmed or unverified): {len(entries_with_verification)}",
@@ -124,10 +125,10 @@ def render_summary(
             ]
     elif not _capacity_skips(llm_skipped):
         lines += [
-            "_Zero proposals this week is a successful outcome — this job is "
-            "not scored by how many rules it produces. It means no repeated agent "
-            "mistake pattern cleared the >=2-distinct-root-incident evidence bar this "
-            "week, not that mining failed._",
+            f"_No new candidates this week. That is an acceptable outcome: no "
+            f"repeated agent mistake pattern cleared the {min_root_incidents}-"
+            "distinct-root-incident evidence bar, which does not mean mining "
+            "failed._",
             "",
         ]
     if refuted:

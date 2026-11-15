@@ -265,6 +265,7 @@ def build_prompt(
     *,
     allowed_severities: Sequence[str] = DEFAULT_SEVERITIES,
     severe_severities: Sequence[str] = (),
+    min_root_incidents: int = MIN_ROOT_INCIDENTS,
 ) -> str:
     """Build the drafter prompt from a qualifying evidence group's compact
     excerpts.
@@ -299,36 +300,43 @@ def build_prompt(
             "rather than wait for the weekly PR"
         )
     return (
-        "You extract durable AI-agent gotchas from fix-up PR evidence for a weekly "
-        f"retrospective. This candidate has already met a >={MIN_ROOT_INCIDENTS}-"
-        "distinct-root-incident bar (co-editing correlation is a LEAD, not proof "
-        "of a defect) -- your job is to decide whether the evidence below actually "
-        "supports one concrete, reusable rule, and to draft it precisely. This "
-        "retrospective is not scored by how many rules it produces -- if the "
-        "evidence is weak or coincidental, say so with low confidence rather than "
-        "inventing a rule to justify the evidence group.\n\n"
+        "You draft durable guidance for AI coding agents from fix-up pull-request "
+        "evidence, for a weekly retrospective whose output a maintainer reviews. "
+        f"This evidence group passed a {min_root_incidents}-distinct-root-incident "
+        "floor. Shared files between an original PR and a later fix-up PR are a lead, "
+        "not proof of a defect, so first decide whether the excerpts below show one "
+        "concrete, repeated agent mistake that a written rule would prevent. If they "
+        "do not, still return the JSON object, with a low confidence and a rationale "
+        "that says why; a week without new rules is an acceptable result.\n\n"
         f"Agent: `{group.agent}` | Area: `{group.area}`\n\n"
         "## Fix-up pairs\n" + "\n".join(pair_blocks) + "\n\n"
         f"## SessionLearning notes on these PRs\n{notes_block}\n\n"
         f"## Sanitized file-backed bridge evidence\n{bridge_block}\n\n"
-        "Return ONLY a JSON object with these fields:\n"
-        "- rule: one precise, actionable sentence (what an agent should ALWAYS or "
-        "NEVER do)\n"
+        "Return one JSON object and nothing else, because the reply is parsed as "
+        "JSON. Fields:\n"
+        "- rule: one sentence that tells an agent what to do in the situation the "
+        "evidence shows, with the reason in the same sentence after 'because' or a "
+        "similar connective. Example of the shape: \"Add new user-scoped tables to "
+        "the export registry, because the export test asserts that every "
+        "user-scoped table is listed.\" Agents see this sentence verbatim and "
+        "nothing else, so write it in plain sentence case, with no capitalised "
+        "emphasis words.\n"
         "- workflow_kinds: array of applicable agent workflow kinds, e.g. "
         '["fix-issue", "pr-review"]\n'
         "- repo_paths: array of repo-relative file path globs this rule applies to "
-        "(use the shared files above as a starting point)\n"
-        "- surface_ids: array of surfaces.yaml keys this rule applies to, "
-        "if any are clearly implicated (else [])\n"
+        "(the shared files above are a starting point)\n"
+        "- surface_ids: array of surfaces.yaml keys this rule applies to when the "
+        "evidence clearly implicates them, else []\n"
         f"- control_type: one of {allowed_controls}\n"
         "- control_path: repo-relative path to the control file if one already "
         "exists, else null\n"
         "- inject_into_briefer: boolean\n"
-        "- confidence: float 0.0-1.0 -- use LOW confidence when the evidence is "
-        "only a file-overlap correlation without a clear causal story\n"
-        "- rationale: one or two sentences citing the specific evidence above\n"
+        "- confidence: number from 0.0 to 1.0; use a low value when the evidence is "
+        "only a shared-file correlation without a clear causal story\n"
+        "- rationale: one or two sentences citing the specific evidence above, for "
+        "the reviewer\n"
         f"- severity: one of {allowed_severity_list}{severity_note}\n\n"
-        "Do not invent facts not present in the evidence above."
+        "Do not invent facts that the evidence above does not contain."
     )
 
 

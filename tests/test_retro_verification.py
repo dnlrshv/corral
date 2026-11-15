@@ -233,3 +233,14 @@ def test_missing_drafter_only_blocks_when_distinctness_enforced() -> None:
     )
     assert blocked.verdict == "UNVERIFIED"
     assert "drafter" in (blocked.unverified_reason or "")
+
+
+
+def test_verification_prompt_keeps_labeled_verdict_contract():
+    from corral.retro.verification import build_verification_prompt, parse_verdict
+    prompt = build_verification_prompt(candidate(), {})
+    assert prompt.index("VERDICT:") < prompt.index("REASONING:") < prompt.index("SHARPENED:")
+    verdict = parse_verdict("VERDICT: CONFIRM\nREASONING: Repeated evidence supports it.\nSHARPENED: Check the boundary because it protects state.")
+    assert verdict.verdict == "CONFIRM"
+    assert verdict.reasoning == "Repeated evidence supports it."
+    assert verdict.sharpened_rule == "Check the boundary because it protects state."

@@ -269,6 +269,7 @@ def draft_and_verify_candidates(
                 created_on=created_on,
                 allowed_severities=retro.allowed_severities,
                 severe_severities=retro.severe_severities,
+                min_root_incidents=retro.evidence.min_root_incidents,
             )
         except retry.RetriableLLMError as exc:
             skipped.append(
@@ -580,6 +581,7 @@ def run_retro(
         severity_issues=severity_issues,
         dry_run=args.dry_run,
         verification_status=verification_status,
+        min_root_incidents=retro.evidence.min_root_incidents,
         proposals_enabled=retro.proposals.enabled,
         proposal_run=proposal_run,
     )

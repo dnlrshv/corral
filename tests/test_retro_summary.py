@@ -105,6 +105,7 @@ def test_summary_zero_week_message_and_proposals_stub() -> None:
     text = render_summary(
         since="2026-08-03",
         until="2026-08-09",
+        min_root_incidents=3,
         total_groups=0,
         qualified_groups=0,
         dedup_skipped=0,
@@ -115,7 +116,9 @@ def test_summary_zero_week_message_and_proposals_stub() -> None:
         dry_run=False,
         verification_status="available (vendor-b/verify-model)",
     )
-    assert "Zero proposals this week is a successful outcome" in text
+    assert "No new candidates this week. That is an acceptable outcome" in text
+    assert "3-distinct-root-incident evidence bar" in text
+    assert ">=3-distinct-root-incident bar" in text
     assert "retro.proposals.enabled: false" in text
 
 

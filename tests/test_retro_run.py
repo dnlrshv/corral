@@ -245,7 +245,7 @@ def test_two_root_floor_blocks_single_incident_groups(tmp_path: Path, capsys) ->
     )
     assert code == 0
     assert drafter.calls == 0
-    assert "Zero proposals this week is a successful outcome" in capsys.readouterr().out
+    assert "No new candidates this week. That is an acceptable outcome" in capsys.readouterr().out
 
 
 def test_candidate_cap_drops_lowest_evidence_group(tmp_path: Path, capsys) -> None:
@@ -782,3 +782,24 @@ def test_run_cli_requires_repository(tmp_path: Path, capsys) -> None:
     (root / "corral.yaml").write_text("retro: {}\n", encoding="utf-8")
     assert main(["retro", "run", "--config", str(root / "corral.yaml")]) == 1
     assert "retro.repository" in capsys.readouterr().err
+
+
+
+def test_configured_root_incident_floor_reaches_prompt_and_summary(tmp_path):
+    import yaml
+    root, config = standard_repo(tmp_path)
+    document = yaml.safe_load(config.read_text())
+    document["retro"]["evidence"] = {"min_root_incidents": 3}
+    config.write_text(yaml.safe_dump(document))
+    write_fixup_parquet(root, [
+        fixup_rows(original_pr=11, fixup_pr=12, shared_files=["src/orders.py"]),
+        fixup_rows(original_pr=13, fixup_pr=14, shared_files=["src/orders.py"]),
+        fixup_rows(original_pr=15, fixup_pr=16, shared_files=["src/orders.py"]),
+    ], WEEK)
+    code, drafter, verifier, _ = run_pipeline(
+        config, drafter_outputs=[candidate_json()], verifier_outputs=[CONFIRM],
+    )
+    assert code == 0
+    assert drafter.calls == verifier.calls == 1
+    assert "3-distinct-root-incident floor" in drafter.prompts[0]
+    assert ">=3-distinct-root-incident bar" in summary_text(root)

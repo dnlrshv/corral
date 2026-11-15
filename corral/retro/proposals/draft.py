@@ -15,6 +15,7 @@ from typing import Any, TypeVar
 from corral.retro.bridge.readers import render_bridge_evidence
 from corral.retro.json_util import extract_json_payload
 from corral.retro.types import EvidenceGroup
+from corral.retro.proposals.models import DEFAULT_MIN_ROOT_INCIDENTS
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +28,7 @@ def build_doc_proposal_prompt(
     *,
     candidate_rules: Sequence[Mapping[str, Any]],
     tiers: Sequence[str],
+    min_incidents: int = DEFAULT_MIN_ROOT_INCIDENTS,
 ) -> str:
     """Prompt the drafter to propose one instruction-file diff, or decline.
 
@@ -50,22 +52,22 @@ def build_doc_proposal_prompt(
     )
     ladder = " > ".join(tiers) if tiers else "(no tiers configured)"
     return (
-        "You maintain agent instruction files for this repository. From the "
-        "repeated fix-up evidence below (already past a >=2-distinct-root-incident "
-        "bar), decide whether agents keep MISREADING or LACKING a written rule, and "
-        "if so propose ONE concrete instruction-file diff. Prefer SHARPENING an "
-        "existing rule (below) over adding a near-duplicate. Respect the placement "
-        f"ladder (strongest control first): {ladder}. A lower tier is only chosen "
-        "when a higher one is not applicable. This job is not scored by output "
-        "volume; if no clear written-guidance gap exists, decline "
-        "(should_propose=false).\n\n"
+        "You maintain the agent instruction files of this repository. The repeated "
+        f"fix-up evidence below passed a {min_incidents}-distinct-root-incident "
+        "floor. Decide whether agents keep missing or misreading a written rule. If "
+        "they do, propose one concrete instruction-file edit; if they do not, "
+        "decline with should_propose=false, which is an acceptable result. Prefer "
+        "sharpening an existing rule listed below over adding a near-duplicate, "
+        "because two rules on one concern drift apart. Place the edit on the "
+        f"strongest applicable tier of this ladder (strongest first): {ladder}; "
+        "choose a lower tier only when no higher tier applies.\n\n"
         f"Agent: `{group.agent}` | Area: `{group.area}`\n\n"
         "## Fix-up evidence\n" + ("\n".join(pair_blocks) or "(none)") + "\n\n"
         "## Sanitized file-backed bridge evidence\n"
         + render_bridge_evidence(group.bridge_evidence)
         + "\n\n"
         f"## Existing registry rules to consider sharpening\n{existing}\n\n"
-        "Return ONLY a JSON object:\n"
+        "Return one JSON object and nothing else, because the reply is parsed as JSON. Fields:\n"
         "- should_propose: boolean\n"
         "- operation: one of add_rule, sharpen, add_skill\n"
         "- target_tier: the tier this edit belongs to (from the ladder above)\n"
@@ -73,8 +75,9 @@ def build_doc_proposal_prompt(
         "file the existing rule lives in; for add_skill, the new skill file)\n"
         "- concern_key: kebab-case slug for the concern this rule governs\n"
         "- modality: one of MUST, MUST NOT, ASK, READ\n"
-        "- statement: the rule sentence (imperative, concrete); MUST contain the "
-        "anchor verbatim\n"
+        "- statement: the rule as one plain sentence that says what to do and why, "
+        "with the reason after 'because' or a similar connective, in sentence case; "
+        "it contains `anchor` verbatim\n"
         "- anchor: a distinctive >=8-char verbatim substring of statement\n"
         "- selectors: object with optional paths/workflows/surfaces arrays\n"
         "- sharpen_rule_id: (sharpen only) the existing rule id being sharpened\n"
@@ -93,16 +96,13 @@ def build_retry_prompt(original_prompt: str, first_response: str, error: str) ->
     """Feed one invalid response and its validation error back to the drafter."""
     return (
         f"{original_prompt}\n\n"
-        "--- RETRY: your previous response failed validation ---\n"
+        "--- Correction: the previous response failed validation ---\n"
         f"Previous response:\n{first_response}\n\n"
         f"Validation error: {error}\n\n"
-        'Reminder: if `operation` is "sharpen", `sharpen_rule_id` MUST be set '
-        'to exactly one of the existing rule ids listed above under "Existing '
-        'registry rules to consider sharpening" -- never null, never omitted, '
-        "and never an invented id. If none of those rules actually fit, use "
-        '`"operation": "add_rule"` instead of `"sharpen"`. Return ONLY the '
-        "corrected JSON object matching the schema above. Do not include any "
-        "explanation, markdown fences, or text outside the JSON object."
+        'If `operation` is "sharpen", set `sharpen_rule_id` to one of the rule ids '
+        'listed under "Existing registry rules to consider sharpening"; if none of '
+        'them fits, use "operation": "add_rule" instead. Return the corrected JSON '
+        "object and nothing else, because the reply is parsed as JSON."
     )
 
 

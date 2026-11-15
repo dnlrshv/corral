@@ -41,6 +41,8 @@ from corral.retro.bridge.readers import group_repo_paths, render_group_evidence
 from corral.retro.github import GitHubClient
 from corral.retro.providers import runner_for_seat
 from corral.retro.seats import SeatRegistry
+from corral.retro.providers.base import complete_with_format
+from corral.retro.response_formats import ResponseFormat, doc_proposal_format
 from corral.retro.types import EvidenceGroup
 
 from . import draft
@@ -360,6 +362,7 @@ def _drafter_complete(
     config: object,
     *,
     runner_factory: Callable[..., Any] | None = None,
+    response_format: ResponseFormat | None = None,
 ) -> Callable[[str], str]:
     """Drafter callable: the configured seat's complete wrapped in bounded retry."""
     retro = getattr(config, "retro")
@@ -368,8 +371,9 @@ def _drafter_complete(
 
     def complete(prompt: str) -> str:
         return retry.call_with_retry(
-            lambda p: runner.complete(
-                seat, p, timeout=retro.drafting_timeout_s, max_tokens=retro.max_tokens
+            lambda p: complete_with_format(
+                runner, seat, p, timeout=retro.drafting_timeout_s, max_tokens=retro.max_tokens,
+                response_format=response_format,
             ),
             prompt,
             context="doc-proposal drafting",
@@ -507,7 +511,10 @@ def draft_and_verify_proposals(
     run.new_registry_text = ensure_registry_document(registry_text)
 
     allocate = make_rule_id_allocator(base_registry)
-    complete = _drafter_complete(seat_registry, config, runner_factory=runner_factory)
+    complete = _drafter_complete(
+        seat_registry, config, runner_factory=runner_factory,
+        response_format=doc_proposal_format(governance.modalities, governance.proposals.tiers),
+    )
     budget_ok = make_budget_check(
         root=root,
         manifest_path=root / governance.replay.manifest,

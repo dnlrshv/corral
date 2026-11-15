@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from typing import Any
 
@@ -15,6 +16,7 @@ from corral.retro.providers.base import (
     result,
 )
 from corral.retro.seats import Seat
+from corral.retro.response_formats import ResponseFormat
 
 
 def _auth(seat: Seat) -> str | None:
@@ -64,6 +66,24 @@ class AnthropicSeatRunner(SeatRunner):
         timeout: float,
         max_tokens: int,
     ) -> SeatResult:
+        return self._create(seat, prompt, timeout=timeout, max_tokens=max_tokens)
+
+    def complete_structured(
+        self, seat: Seat, prompt: str, *, timeout: float, max_tokens: int,
+        response_format: ResponseFormat,
+    ) -> SeatResult:
+        """Use an opt-in schema and render back into the shared text contract."""
+        if seat.options.get("structured_output") is not True:
+            return self.complete(seat, prompt, timeout=timeout, max_tokens=max_tokens)
+        if response_format.prompt_note:
+            prompt += "\n\n" + response_format.prompt_note
+        return self._create(seat, prompt, timeout=timeout, max_tokens=max_tokens,
+                            response_format=response_format)
+
+    def _create(
+        self, seat: Seat, prompt: str, *, timeout: float, max_tokens: int,
+        response_format: ResponseFormat | None = None,
+    ) -> SeatResult:
         max_tokens = _seat_max_tokens(seat, max_tokens)
         probe = self.probe(seat)
         if not probe.available:
@@ -76,11 +96,21 @@ class AnthropicSeatRunner(SeatRunner):
             return result(seat, SeatStatus.UNAVAILABLE, detail="configured credential disappeared")
         try:
             client = anthropic.Anthropic(api_key=token, timeout=timeout)
-            message = client.messages.create(
-                model=seat.model,
-                max_tokens=max_tokens,
-                messages=[{"role": "user", "content": prompt}],
-            )
+            create_kwargs: dict[str, Any] = {
+                "model": seat.model,
+                "max_tokens": max_tokens,
+                "messages": [{"role": "user", "content": prompt}],
+            }
+            output_config: dict[str, Any] = {}
+            if "effort" in seat.options:
+                output_config["effort"] = seat.options["effort"]
+            if response_format is not None:
+                output_config["format"] = {
+                    "type": "json_schema", "schema": dict(response_format.schema),
+                }
+            if output_config:
+                create_kwargs["output_config"] = output_config
+            message = client.messages.create(**create_kwargs)
             stop_reason = getattr(message, "stop_reason", None)
             if stop_reason == "refusal":
                 details = getattr(message, "stop_details", None)
@@ -103,6 +133,18 @@ class AnthropicSeatRunner(SeatRunner):
             text = "".join(parts).strip()
             if not text and stop_reason == "end_turn":
                 return result(seat, SeatStatus.INCOMPLETE, detail="reply contained no text block")
+            if response_format is not None:
+                try:
+                    payload = json.loads(parts[0] if parts else "")
+                    if not isinstance(payload, dict):
+                        raise ValueError("expected a JSON object")
+                    for key in response_format.schema.get("required", []):
+                        if key not in payload:
+                            raise KeyError(key)
+                    text = response_format.render(payload)
+                except (ValueError, KeyError, TypeError) as exc:
+                    return result(seat, SeatStatus.ERROR, detail=(
+                        f"structured output did not match the response schema: {exc}"))
             return result(seat, SeatStatus.OK, text=text)
         except Exception as exc:
             if _is_timeout(exc, anthropic):

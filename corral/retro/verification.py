@@ -23,7 +23,8 @@ from pathlib import Path
 from typing import Any, Literal
 
 from corral.retro.providers import runner_for_seat
-from corral.retro.providers.base import SeatResult, SeatRunner, SeatStatus
+from corral.retro.response_formats import GOTCHA_VERDICT_FORMAT, ResponseFormat
+from corral.retro.providers.base import SeatResult, SeatRunner, SeatStatus, complete_with_format
 from corral.retro.seats import Seat, SeatRegistry
 
 DEFAULT_VERIFICATION_TIMEOUT_S = 900
@@ -209,6 +210,7 @@ def invoke_verifier_with_fallback(
     timeout_s: float = DEFAULT_VERIFICATION_TIMEOUT_S,
     max_tokens: int = DEFAULT_MAX_TOKENS,
     runner_factory: RunnerFactory | None = None,
+    response_format: ResponseFormat | None = None,
 ) -> VerifierOutcome:
     """Try verifier seats in configured order, advancing on every degradation."""
     factory = runner_factory or runner_for_seat
@@ -256,11 +258,12 @@ def invoke_verifier_with_fallback(
             continue
 
         try:
-            completion = runner.complete(
-                seat,
+            completion = complete_with_format(
+                runner, seat,
                 prompt,
                 timeout=timeout_s,
                 max_tokens=max_tokens,
+                response_format=response_format,
             )
         except Exception as exc:
             last_reason = f"error: verifier seat {name!r} raised: {exc}"
@@ -359,6 +362,7 @@ def verify_candidate(
         timeout_s=timeout,
         max_tokens=max_tokens,
         runner_factory=runner_factory,
+        response_format=GOTCHA_VERDICT_FORMAT,
     )
     if outcome.raw_output is None or outcome.seat is None:
         return _failure(
@@ -371,11 +375,12 @@ def verify_candidate(
     provenance_result = outcome.result
     if verdict.verdict == "UNVERIFIED":
         try:
-            retry = outcome.runner.complete(
-                outcome.seat,
+            retry = complete_with_format(
+                outcome.runner, outcome.seat,
                 _retry_prompt(prompt, outcome.raw_output),
                 timeout=timeout,
                 max_tokens=max_tokens,
+                response_format=GOTCHA_VERDICT_FORMAT,
             ) if outcome.runner is not None else None
         except Exception as exc:
             retry = SeatResult(

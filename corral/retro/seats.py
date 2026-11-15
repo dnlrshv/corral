@@ -120,6 +120,12 @@ def _parse_seat(name: str, raw: object, path: Path) -> Seat:
         raise _error(path, f"seat {name!r} field 'options' must be a mapping")
     options: dict[str, Any] = dict(options_raw)
 
+    if adapter == "anthropic-sdk":
+        if "structured_output" in options and not isinstance(options["structured_output"], bool):
+            raise _error(path, f"seat {name!r} options.structured_output must be a boolean")
+        if "effort" in options and options["effort"] not in ("low", "medium", "high", "xhigh", "max"):
+            raise _error(path, f"seat {name!r} options.effort must be one of low, medium, high, xhigh, max")
+
     if adapter in {"anthropic-sdk", "openai-compatible-endpoint"} and "max_tokens" in options:
         budget = options["max_tokens"]
         if isinstance(budget, bool) or not isinstance(budget, int) or budget <= 0:

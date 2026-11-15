@@ -5,8 +5,12 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
+from typing import TYPE_CHECKING
 
 from corral.retro.seats import Seat
+
+if TYPE_CHECKING:
+    from corral.retro.response_formats import ResponseFormat
 
 
 class SeatStatus(str, Enum):
@@ -83,11 +87,24 @@ class SeatRunner(ABC):
         """Complete *prompt*, folding all expected adapter failures into status."""
 
 
+def complete_with_format(
+    runner: SeatRunner, seat: Seat, prompt: str, *, timeout: float,
+    max_tokens: int, response_format: ResponseFormat | None = None,
+) -> SeatResult:
+    structured = getattr(runner, "complete_structured", None)
+    if (response_format is not None and callable(structured)
+            and seat.options.get("structured_output") is True):
+        return structured(seat, prompt, timeout=timeout, max_tokens=max_tokens,
+                          response_format=response_format)
+    return runner.complete(seat, prompt, timeout=timeout, max_tokens=max_tokens)
+
+
 __all__ = [
     "Availability",
     "SeatResult",
     "SeatRunner",
     "SeatStatus",
     "availability",
+    "complete_with_format",
     "result",
 ]

@@ -22,7 +22,8 @@ from corral.config import load_config
 from corral.retro import drafting, evidence, mining, registry, retry, summary
 from corral.retro.github import GhCliGitHub, GitHubClient, GitHubError
 from corral.retro.providers import runner_for_seat
-from corral.retro.providers.base import SeatRunner, SeatStatus
+from corral.retro.providers.base import SeatRunner, SeatStatus, complete_with_format
+from corral.retro.response_formats import ResponseFormat, gotcha_candidate_format
 from corral.retro.seats import SeatRegistry, SeatRegistryError
 from corral.retro.types import EvidenceGroup, VerifiedCandidate
 from corral.retro.verification import verify_candidate
@@ -201,6 +202,7 @@ def _drafter_complete(
     config: object,
     *,
     runner_factory: RunnerFactory | None,
+    response_format: ResponseFormat | None = None,
 ) -> Callable[[str], str]:
     """Build the drafter callable: SeatRunner.complete wrapped in bounded retry."""
     retro = getattr(config, "retro")
@@ -209,8 +211,9 @@ def _drafter_complete(
 
     def complete(prompt: str) -> str:
         return retry.call_with_retry(
-            lambda p: runner.complete(
-                seat, p, timeout=retro.drafting_timeout_s, max_tokens=retro.max_tokens
+            lambda p: complete_with_format(
+                runner, seat, p, timeout=retro.drafting_timeout_s, max_tokens=retro.max_tokens,
+                response_format=response_format,
             ),
             prompt,
             context="gotcha candidate drafting",
@@ -256,7 +259,10 @@ def draft_and_verify_candidates(
             {"key": group.key, "reason": f"dropped: candidate cap ({max_candidates}) reached"}
         )
 
-    complete = _drafter_complete(seat_registry, config, runner_factory=runner_factory)
+    complete = _drafter_complete(
+        seat_registry, config, runner_factory=runner_factory,
+        response_format=gotcha_candidate_format(retro.allowed_severities),
+    )
 
     verified: list[VerifiedCandidate] = []
     for group_index, group in enumerate(capped_groups):

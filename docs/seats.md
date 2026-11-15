@@ -34,6 +34,10 @@ export CORRAL_DRAFTER_API_KEY='…'
 
 `options.max_tokens` overrides `retro.max_tokens` for this seat. Set a positive integer within the model's output ceiling; corral does not know model ceilings, so a provider rejection is reported as an error.
 
+`options.structured_output` is an optional boolean, off by default. Enable it only for models that support structured outputs; the adapter renders the JSON back into the same text contract, so verifier and drafter parsing is identical across providers. Unsupported models return a provider error, which is retried and then reported.
+
+`options.effort` accepts `low`, `medium`, `high`, `xhigh`, or `max`. Leave it unset for models that reject effort; it is sent for both plain and structured completions when configured.
+
 ## OpenAI-compatible endpoint adapter
 
 ```yaml

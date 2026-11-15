@@ -121,3 +121,28 @@ def test_registry_rejects_bad_max_tokens(tmp_path, adapter, value):
         "provider": "p", "model": "m", "auth_env": None, "adapter": adapter, "options": options}}}))
     with pytest.raises(SeatRegistryError, match="options.max_tokens must be a positive integer"):
         SeatRegistry(path)
+
+
+@pytest.mark.parametrize("key,value", [
+    ("structured_output", "true"), ("structured_output", 1), ("structured_output", None),
+    ("effort", "fast"), ("effort", True), ("effort", None), ("effort", []),
+])
+def test_registry_rejects_bad_anthropic_output_options(tmp_path, key, value):
+    import yaml
+    path = tmp_path / "seats.yaml"
+    path.write_text(yaml.safe_dump({"schema_version": 1, "seats": {"x": {
+        "provider": "p", "model": "m", "auth_env": None, "adapter": "anthropic-sdk", "options": {key: value}}}}))
+    with pytest.raises(SeatRegistryError, match=f"options.{key} must be"):
+        SeatRegistry(path)
+
+
+@pytest.mark.parametrize("effort", ["low", "medium", "high", "xhigh", "max"])
+def test_registry_accepts_anthropic_output_options(tmp_path, effort):
+    import yaml
+    path = tmp_path / "seats.yaml"
+    path.write_text(yaml.safe_dump({"schema_version": 1, "seats": {"x": {
+        "provider": "p", "model": "m", "auth_env": None, "adapter": "anthropic-sdk",
+        "options": {"structured_output": True, "effort": effort}}}}))
+    configured = SeatRegistry(path).require("x")
+    assert configured.options["structured_output"] is True
+    assert configured.options["effort"] == effort

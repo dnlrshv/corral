@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from corral.retro.providers.base import SeatStatus
+from corral.retro.response_formats import DOC_VERDICT_FORMAT
 from corral.retro.seats import SeatRegistry
 from corral.retro.verification import (
     DEFAULT_MAX_TOKENS,
@@ -158,6 +159,7 @@ def verify(
         timeout_s=timeout,
         max_tokens=max_tokens,
         runner_factory=runner_factory,
+        response_format=DOC_VERDICT_FORMAT,
     )
     if outcome.raw_output is None or outcome.seat is None:
         return VerificationResult(

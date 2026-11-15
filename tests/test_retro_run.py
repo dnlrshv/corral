@@ -833,3 +833,52 @@ def test_incomplete_drafter_answer_skips_group_and_continues(tmp_path, monkeypat
     entries = json.loads((root / "agent_memory" / "gotchas.json").read_text())["gotchas"]
     assert len(entries) == 1
     assert entries[0]["source_prs"] == [21, 22, 23, 24]
+
+
+@pytest.mark.parametrize("structured_drafter", [False, True])
+def test_structured_verifier_seat_confirms_candidate(tmp_path, monkeypatch, structured_drafter):
+    import sys
+    import yaml
+    from types import SimpleNamespace
+    from corral.retro.providers.anthropic import AnthropicSeatRunner
+    from corral.retro.response_formats import GOTCHA_VERDICT_FORMAT
+    root, config = standard_repo(tmp_path)
+    seats_file = root / "seats.yaml"
+    document = yaml.safe_load(seats_file.read_text())
+    document["seats"]["verify"].update(adapter="anthropic-sdk", auth_env="VERIFY_KEY",
+                                        options={"structured_output": True})
+    if structured_drafter:
+        document["seats"]["draft"].update(adapter="anthropic-sdk", auth_env="DRAFT_KEY",
+                                           options={"structured_output": True})
+    seats_file.write_text(yaml.safe_dump(document))
+    monkeypatch.setenv("VERIFY_KEY", "test-token")
+    monkeypatch.setenv("DRAFT_KEY", "draft-token")
+    calls = []
+    class Client:
+        def __init__(self, **kwargs):
+            self.messages = self
+        def create(self, **kwargs):
+            calls.append(kwargs)
+            schema = kwargs["output_config"]["format"]["schema"]
+            payload = json.loads(candidate_json(rule=rule)) if "rule" in schema["properties"] else {
+                "verdict": "CONFIRM", "reasoning": "Two independent incidents support it.", "sharpened": None,
+            }
+            return SimpleNamespace(stop_reason="end_turn", content=[
+                SimpleNamespace(type="thinking", thinking="thought"),
+                SimpleNamespace(type="text", text=json.dumps(payload)),
+            ])
+    monkeypatch.setitem(sys.modules, "anthropic", SimpleNamespace(Anthropic=Client))
+    rule = "Confirm the order because retries can duplicate it."
+    drafter = FakeSeatRunner([candidate_json(rule=rule)])
+    code = run_retro(make_args(config), github=FakeGitHub(), runner_factory=lambda s: (
+        drafter if s.name == "draft" and not structured_drafter else AnthropicSeatRunner()
+    ))
+    assert code == 0
+    assert drafter.calls == (0 if structured_drafter else 1)
+    assert len(calls) == (2 if structured_drafter else 1)
+    assert calls[-1]["output_config"]["format"]["schema"] == GOTCHA_VERDICT_FORMAT.schema
+    assert GOTCHA_VERDICT_FORMAT.prompt_note in calls[-1]["messages"][0]["content"]
+    gotchas_path = root / "agent_memory" / "gotchas.json"
+    assert memory_registry.validate_gotchas_file(gotchas_path) == []
+    assert json.loads(gotchas_path.read_text())["gotchas"][0]["rule"] == rule
+    assert "confirmed by vendor-b/verify-model" in summary_text(root)

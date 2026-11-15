@@ -425,3 +425,97 @@ def test_seat_max_tokens_option_overrides_global(monkeypatch, anthropic_response
     result = OpenAICompatibleSeatRunner().complete(configured, "prompt", timeout=900, max_tokens=16000)
     assert result.ok
     assert bodies[0]["max_tokens" if protocol == "chat-completions" else "max_output_tokens"] == 8000
+
+
+def test_anthropic_structured_output_off_by_default(anthropic_response):
+    from corral.retro.response_formats import GOTCHA_VERDICT_FORMAT
+    _, calls = anthropic_response
+    configured = seat("anthropic-sdk", auth_env="NAMED_KEY")
+    result = AnthropicSeatRunner().complete_structured(
+        configured, "prompt", timeout=900, max_tokens=16000, response_format=GOTCHA_VERDICT_FORMAT,
+    )
+    assert result.ok and result.text == "answer"
+    assert "output_config" not in calls[0]
+    assert calls[0]["messages"] == [{"role": "user", "content": "prompt"}]
+
+
+def test_anthropic_structured_output_sends_schema(anthropic_response):
+    from corral.retro.response_formats import GOTCHA_VERDICT_FORMAT
+    from corral.retro.verification import parse_verdict
+    message, calls = anthropic_response
+    message.content = [SimpleNamespace(type="thinking", thinking="thought"),
+                       {"type": "text", "text": json.dumps({"verdict": "CONFIRM", "reasoning": "two\nincidents", "sharpened": None})},
+                       SimpleNamespace(type="text", text="ignored after the first text block")]
+    configured = seat("anthropic-sdk", auth_env="NAMED_KEY", options={"structured_output": True})
+    result = AnthropicSeatRunner().complete_structured(
+        configured, "prompt", timeout=900, max_tokens=16000, response_format=GOTCHA_VERDICT_FORMAT,
+    )
+    assert result.ok
+    parsed = parse_verdict(result.text)
+    assert parsed.verdict == "CONFIRM" and parsed.reasoning == "two incidents"
+    assert calls == [{"model": configured.model, "max_tokens": 16000,
+                      "messages": [{"role": "user", "content": "prompt\n\n" + GOTCHA_VERDICT_FORMAT.prompt_note}],
+                      "output_config": {"format": {"type": "json_schema", "schema": GOTCHA_VERDICT_FORMAT.schema}}}]
+
+
+@pytest.mark.parametrize("text", ["invalid JSON", "{}", "[]", '{"verdict":"CONFIRM"}'])
+def test_structured_json_mismatch_is_error(anthropic_response, text):
+    from corral.retro.response_formats import GOTCHA_VERDICT_FORMAT
+    message, _ = anthropic_response
+    message.content = [SimpleNamespace(type="text", text=text)]
+    configured = seat("anthropic-sdk", auth_env="NAMED_KEY", options={"structured_output": True})
+    result = AnthropicSeatRunner().complete_structured(
+        configured, "prompt", timeout=900, max_tokens=16000, response_format=GOTCHA_VERDICT_FORMAT,
+    )
+    assert result.status is SeatStatus.ERROR
+    assert result.detail.startswith("structured output did not match the response schema:")
+
+
+def test_complete_with_format_falls_back():
+    from corral.retro.providers.base import complete_with_format, result
+    from corral.retro.response_formats import GOTCHA_VERDICT_FORMAT
+    calls = []
+    class PlainRunner:
+        def complete(self, configured, prompt, **kwargs):
+            calls.append((prompt, kwargs))
+            return result(configured, SeatStatus.OK, text="plain")
+    configured = seat("shell-command", options={"structured_output": True})
+    completion = complete_with_format(PlainRunner(), configured, "prompt", timeout=900, max_tokens=16000,
+                                      response_format=GOTCHA_VERDICT_FORMAT)
+    assert completion.text == "plain"
+    assert calls == [("prompt", {"timeout": 900, "max_tokens": 16000})]
+
+
+@pytest.mark.parametrize("structured", [False, True])
+def test_anthropic_effort_option(anthropic_response, structured):
+    from corral.retro.providers.base import complete_with_format
+    from corral.retro.response_formats import GOTCHA_VERDICT_FORMAT
+    message, calls = anthropic_response
+    message.content = [SimpleNamespace(type="text", text=json.dumps({"verdict": "CONFIRM", "reasoning": "supported", "sharpened": None}))]
+    configured = seat("anthropic-sdk", auth_env="NAMED_KEY", options={"structured_output": structured, "effort": "high", "max_tokens": 8000})
+    completion = complete_with_format(AnthropicSeatRunner(), configured, "prompt", timeout=900,
+                                      max_tokens=16000, response_format=GOTCHA_VERDICT_FORMAT)
+    assert completion.ok
+    assert calls[0]["max_tokens"] == 8000
+    assert calls[0]["output_config"]["effort"] == "high"
+    assert ("format" in calls[0]["output_config"]) is structured
+    assert set(calls[0]) == {"model", "max_tokens", "messages", "output_config"}
+
+
+@pytest.mark.parametrize("stop_reason", ["refusal", "max_tokens"])
+def test_structured_stop_is_checked_before_content(anthropic_response, stop_reason):
+    from corral.retro.response_formats import GOTCHA_VERDICT_FORMAT
+    message, _ = anthropic_response
+    class Stopped:
+        @property
+        def content(self):
+            raise AssertionError("stopped content must not be read")
+    stopped = Stopped()
+    stopped.stop_reason = stop_reason
+    message.current = stopped
+    completion = AnthropicSeatRunner().complete_structured(
+        seat("anthropic-sdk", auth_env="NAMED_KEY", options={"structured_output": True}),
+        "prompt", timeout=900, max_tokens=16000, response_format=GOTCHA_VERDICT_FORMAT,
+    )
+    assert completion.status is SeatStatus.INCOMPLETE
+    assert completion.text == ""

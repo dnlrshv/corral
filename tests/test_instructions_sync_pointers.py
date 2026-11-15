@@ -237,8 +237,10 @@ def test_pointer_symlink_loop_is_unsafe(repo):
     assert (repo / 'CLAUDE.md').is_symlink()
 
 
-def test_explicit_skills_selection_is_not_available_in_s1(repo):
-    assert invoke(repo, '--only', 'skills') == 2
+def test_explicit_skills_selection_skips_pointers(repo):
+    assert invoke(repo, '--only', 'skills') == 0
+    assert not (repo / 'CLAUDE.md').exists()
+    assert not (repo / 'GEMINI.md').exists()
 
 
 def test_decode_errors_do_not_stop_other_pointers(repo):
@@ -246,3 +248,20 @@ def test_decode_errors_do_not_stop_other_pointers(repo):
     assert invoke(repo, '--force') == 2
     assert (repo / 'CLAUDE.md').read_bytes() == b'\xff\xff'
     assert (repo / 'GEMINI.md').exists()
+
+
+def test_canonical_case_alias_is_never_rewritten(repo):
+    alias = repo / 'agents.md'
+    if not alias.exists():
+        pytest.skip('requires a case-insensitive filesystem')
+    before = repo.joinpath('AGENTS.md').read_bytes()
+    config = SyncConfig(pointers=[PointerSpec('claude', 'agents.md', 'import')])
+    assert run_sync(repo, config, SyncOptions(force=True)).exit_code() == 2
+    assert repo.joinpath('AGENTS.md').read_bytes() == before
+
+
+def test_canonical_hardlink_is_never_rewritten(repo):
+    os.link(repo / 'AGENTS.md', repo / 'CLAUDE.md')
+    before = repo.joinpath('AGENTS.md').read_bytes()
+    assert invoke(repo, '--force') == 2
+    assert repo.joinpath('AGENTS.md').read_bytes() == before

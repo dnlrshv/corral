@@ -87,7 +87,7 @@ instructions:
     # Text outside a managed pointer block: allow, warn, or error.
     foreign_content: warn
     skills:
-      # Skill mirroring is not available in this build.
+      # Mirror shared skills between the two agent directories.
       enabled: true
       canonical: auto
       mode: copy

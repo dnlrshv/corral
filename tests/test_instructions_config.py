@@ -86,3 +86,14 @@ def test_user_harness_override_preserves_other_defaults():
     assert cfg.user.harnesses['claude'] == ['custom-claude']
     assert cfg.user.harnesses['gemini'] == ['gemini', 'agy']
     assert cfg.user.layers == ['packaged', 'overlay']
+
+
+def test_default_instruction_configs_do_not_share_option_lists():
+    first = instructions_config_from_mapping({})
+    second = instructions_config_from_mapping({})
+    first.lint.checks['caps-emphasis'].options['reason_markers'].append('a custom reason')
+    first.sync.user.harnesses['claude'].append('a custom harness')
+    assert 'a custom reason' not in second.lint.checks['caps-emphasis'].options['reason_markers']
+    assert 'a custom harness' not in second.sync.user.harnesses['claude']
+    third = instructions_config_from_mapping({})
+    assert 'a custom reason' not in third.lint.checks['caps-emphasis'].options['reason_markers']

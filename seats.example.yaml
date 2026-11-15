@@ -13,6 +13,11 @@ seats:
     model: model-id
     auth_env: CORRAL_DRAFTER_API_KEY
     adapter: anthropic-sdk
+    options:
+      # Enable only for models that support structured outputs.
+      # structured_output: true
+      # Set only for models that accept effort; otherwise use the model default.
+      # effort: low
 
   # Stdlib HTTP against an OpenAI-compatible endpoint. The configured base URL
   # receives /chat/completions or /responses unless it already has that suffix.

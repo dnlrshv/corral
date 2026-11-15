@@ -804,3 +804,47 @@ def test_incomplete_proposal_drafter_skips_group(tmp_path, monkeypatch):
     assert run.accepted == []
     assert run.skipped[0]["kind"] == "incomplete"
     assert "no usable answer" in run.skipped[0]["reason"]
+
+
+def test_structured_doc_drafter_correction_and_verifier_round_trip(tmp_path, monkeypatch):
+    import sys
+    import yaml
+    from types import SimpleNamespace
+    from corral.retro.seats import SeatRegistry
+    from corral.retro.response_formats import DOC_VERDICT_FORMAT
+    from tests.retro_support import FakeGitHub
+    root = make_repo(tmp_path)
+    config = load_config(root / "corral.yaml")
+    document = yaml.safe_load((root / "seats.yaml").read_text())
+    for configured in document["seats"].values():
+        configured.update(adapter="anthropic-sdk", auth_env="RETRO_KEY", options={"structured_output": True})
+    (root / "seats.yaml").write_text(yaml.safe_dump(document))
+    monkeypatch.setenv("RETRO_KEY", "test-token")
+    calls = []
+    draft_calls = []
+    class Client:
+        def __init__(self, **kwargs):
+            self.messages = self
+        def create(self, **kwargs):
+            calls.append(kwargs)
+            schema = kwargs["output_config"]["format"]["schema"]
+            if "should_propose" in schema["properties"]:
+                draft_calls.append(kwargs)
+                payload = dict(PROPOSAL_PAYLOAD, sharpen_rule_id=None, skill_slug=None, skill_body=None)
+                payload["selectors"] = {"paths": ["src/orders.py"], "workflows": [], "surfaces": []}
+                if len(draft_calls) == 1:
+                    payload["anchor"] = "short"
+            else:
+                assert schema == DOC_VERDICT_FORMAT.schema
+                payload = {"verdict": "confirm", "reason": "Both incidents support the edit.", "confidence": 0.9}
+            return SimpleNamespace(stop_reason="end_turn", content=[SimpleNamespace(type="text", text=json.dumps(payload))])
+    monkeypatch.setitem(sys.modules, "anthropic", SimpleNamespace(Anthropic=Client))
+    run = plan.draft_and_verify_proposals(
+        [make_group()], github=FakeGitHub(), seat_registry=SeatRegistry.from_config(config), config=config,
+    )
+    assert run.pass_failure is None
+    assert len(run.accepted) == 1 and len(run.planned_edits) == 2
+    assert len(calls) == 3 and len(draft_calls) == 2
+    assert all(len(call["messages"]) == 1 and call["messages"][0]["role"] == "user" for call in calls)
+    assert "previous response failed validation" in draft_calls[1]["messages"][0]["content"]
+    assert (root / "docs/instructions/core.md").read_text() == "# Core instructions\n"

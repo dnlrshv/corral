@@ -42,6 +42,8 @@ Every release section must include a `### Consumer action` subsection, even when
 
 ### Added
 
+- Optional structured outputs for `anthropic-sdk` seats (`options.structured_output`), plus `options.effort`; replies are rendered back into the existing text contracts.
+
 - Seat status `incomplete` for refusals and output-limit stops; per-seat `options.max_tokens`.
 
 - `preflight.effort` config key and `corral preflight --effort`. `null` omits the parameter for models that reject it.

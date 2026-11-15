@@ -11,6 +11,7 @@ import yaml
 
 from .config import CheckConfig, LintConfig, SEVERITIES, fail, strings
 from .text_model import TextModel
+from . import lint_refs
 
 
 @dataclass(frozen=True)
@@ -322,4 +323,10 @@ CHECKS.update({spec.slug: spec for spec in [
     CheckSpec('migration-relative', 'Rules phrased relative to old behaviour', check_migration_relative, no_options),
     CheckSpec('grader-vocabulary', 'Grading rather than requirements', check_grader_vocabulary, no_options),
     CheckSpec('missing-reason', 'Generated rule without its reason', check_missing_reason, no_options, 'warning', 'warning'),
+]})
+
+
+CHECKS.update({spec.slug: spec for spec in [
+    CheckSpec("dead-path", "Unresolved local paths", lint_refs.check_dead_path, lint_refs.validate_dead_path_options, "warning", "warning", True),
+    CheckSpec("dead-command", "Missing make targets and package scripts", lint_refs.check_dead_command, no_options, "error", "warning", True),
 ]})

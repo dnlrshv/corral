@@ -71,6 +71,32 @@ def _cmd_executor_brief_check(args: argparse.Namespace) -> int:
         return 1
 
 
+def _cmd_executor_brief_render(args: argparse.Namespace) -> int:
+    from dataclasses import asdict
+    from corral.execution import executor_brief, executor_brief_render, result_schema
+    from corral.redaction import redact_text
+    from corral.rules import load_layers
+    import yaml
+    try:
+        brief = json.loads(args.file.read_text())
+        errors = executor_brief.validate(brief)
+        if errors:
+            raise ValueError("brief: " + "; ".join(errors))
+        root = args.root.resolve() if args.root else load_config().root
+        cfg = executor_brief.config_for_workspace(root)
+        rules = load_layers(workspace=root, repo_rules_file=cfg.rules_file).applicable(
+            repo=None, workspace=str(root), tier=args.tier, phase=args.phase, harness=args.harness)
+        print(executor_brief_render.render(brief=brief, objective=brief["goal"],
+            rules=[asdict(rule) for rule in rules], prompt_extras=None, amendment_history=[],
+            schema_delivery="inline" if args.inline_schema else "harness-flag",
+            schema_file_hint="{schema_file}", result_file_hint="{result_file}",
+            result_schema=result_schema.for_harness(args.harness), legacy_notice=None), end="")
+        return 0
+    except (ValueError, PermissionError, OSError, yaml.YAMLError) as exc:
+        print(redact_text(str(exc)), file=sys.stderr)
+        return 1
+
+
 def _cmd_version(args: argparse.Namespace) -> int:
     print(json.dumps({"version": __version__, "commit": installed_commit(),
                       "protocol": PROTOCOL_VERSION,
@@ -669,6 +695,15 @@ def build_parser() -> argparse.ArgumentParser:
     check = executor_brief_sub.add_parser("check", help="Validate an executor brief JSON file")
     check.add_argument("file", type=Path)
     check.set_defaults(handler=_cmd_executor_brief_check)
+
+    render = executor_brief_sub.add_parser("render", help="Preview the controller-rendered executor prompt")
+    render.add_argument("file", type=Path)
+    render.add_argument("--root", type=Path)
+    render.add_argument("--tier", choices=("small", "standard", "frontier"), default="standard")
+    render.add_argument("--phase", default="implementation")
+    render.add_argument("--harness")
+    render.add_argument("--inline-schema", action="store_true")
+    render.set_defaults(handler=_cmd_executor_brief_render)
 
     return parser
 

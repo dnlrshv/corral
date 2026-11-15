@@ -195,3 +195,29 @@ def test_native_continuation_repeats_and_restarts_without_a_second_worker(tmp_pa
     assert [line["attempt"] for line in ns.attempts(second)] == [second["state"]["attempt"]]
     assert [line["attempt"] for line in ns.attempts(first)] == [first["state"]["attempt"]]
     assert (generation_dir / "attempts.jsonl").stat().st_size > 0
+
+
+@requires_sandbox
+def test_native_continuation_brief_amendment_reaches_the_generation_two_prompt(tmp_path, monkeypatch):
+    from .executor_brief_support import sample_brief
+    monkeypatch.setenv("CORRAL_OVERLAY_FILE", str(tmp_path / "absent-overlay"))
+    env = native_env(tmp_path)
+    controller = env["controller"]
+    spec = stage1_spec(env)
+    spec["brief"] = sample_brief(spec["objective"])
+    task = controller.submit("owner", "brief-continuation", spec)
+    first = controller.run("owner", task, execution_host=ns.FAKE_HOST)
+    assert first["result"]["accepted"] is True
+    first_path = env["state"] / "scratch" / task / "prompt.md"
+    original = first_path.read_bytes()
+    payload = stage2_payload(env)
+    value = sample_brief(payload.pop("objective"))
+    value["acceptance"][0]["id"] = "AC2"
+    payload["brief"] = value
+    controller.continue_task("owner", task, "brief-stage2", payload)
+    second = controller.run("owner", task, execution_host=ns.FAKE_HOST)
+    assert second["result"]["accepted"] is True
+    text = (env["state"] / "scratch" / f"{task}-g2" / "prompt.md").read_text()
+    assert value["goal"] in text and "AC2. Addition returns the sum." in text
+    assert "brief-stage2" in text and "Prior amendments for this same task identity" in text
+    assert first_path.read_bytes() == original

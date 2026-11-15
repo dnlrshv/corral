@@ -346,3 +346,19 @@ def test_adapter_honours_a_spec_result_schema_override(tmp_path):
     path.write_text(json.dumps(context))
     run_adapter(task_dir, env["workspace"])
     assert json.loads((Path(prepared.boundary.scratch) / "result-schema.json").read_text()) == schema
+
+
+def test_adapter_writes_the_controller_rendered_prompt_verbatim(tmp_path):
+    from corral.execution.adapter import _write_prompt
+    text = "# Task\n\n  Preserve spaces and {workspace}.\n\n"
+    path = _write_prompt(tmp_path, {"prompt_markdown": text})
+    assert path.read_bytes() == text.encode()
+
+
+def test_adapter_falls_back_to_legacy_composition_without_prompt_markdown(tmp_path):
+    from corral.execution.adapter import _write_prompt
+    context = {"objective": "Legacy objective.", "prompt_extras": "Checkpoint.",
+               "amendment_history": [{"sequence": 1, "value": {"objective": "Changed."}}]}
+    path = _write_prompt(tmp_path, context)
+    assert path.read_text().startswith("Legacy objective.\n\nCheckpoint.")
+    assert "Prior amendments for this same task identity (continue, do not restart):" in path.read_text()

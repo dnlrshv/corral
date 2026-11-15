@@ -7,6 +7,8 @@ Every release section must include a `### Consumer action` subsection, even when
 
 ### Added
 
+- `corral executor-brief render` previews deterministic executor prompts with reasoned constraints and command-linked criteria.
+
 - Profile tiers and executor-brief launch policy, input budgets, layered-rule provenance in `brief.json`, and result/status assessment records.
 
 - Typed executor briefs (`corral-executor-brief-v1`) with contract validation, submit/steer/continue plumbing, `--brief FILE`, and `corral executor-brief check`.
@@ -14,6 +16,8 @@ Every release section must include a `### Consumer action` subsection, even when
 - A rules layer (`corral.rules`) with packaged defaults, repository rules, an external personal overlay, and `corral rules show`.
 
 ### Changed
+
+- Native executor prompts are rendered once by the controller into `context.json`; the adapter writes them verbatim.
 
 - The default executor result schema is `corral-executor-result-v1`; native results include an informational per-criterion assessment. Task-specific schemas still override it.
 - The maintained Codex argv and route template pass `--output-schema` alongside `--output-last-message`.

@@ -344,3 +344,15 @@ def read_file(path) -> dict:
     if errors:
         raise ValueError("brief: " + "; ".join(errors))
     return value
+
+
+def config_for_workspace(workspace):
+    """Read only the dispatch workspace's config; a parent checkout has no policy here."""
+    from pathlib import Path
+    import yaml
+    from corral.config import CONFIG_FILENAME, Config, load_config
+    path = Path(workspace) / CONFIG_FILENAME
+    try:
+        return (load_config(path) if path.exists() else Config()).executor_brief
+    except yaml.YAMLError as exc:
+        raise ValueError(f"{path}: malformed corral.yaml") from exc

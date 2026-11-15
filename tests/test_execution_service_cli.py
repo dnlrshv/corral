@@ -384,3 +384,27 @@ def test_installed_service_client_uses_isolated_python_and_safe_cwd(monkeypatch)
                    "service_config": "/etc/corral/service.json"}).call("tick")
     assert observed["command"][:3] == ["/opt/corral/bin/python", "-I", "-m"]
     assert observed["kwargs"]["cwd"] == "/"
+
+
+def test_service_validate_reports_tier_and_overlay_problems(tmp_path, monkeypatch):
+    from corral.execution.service_validation import validate
+    from . import native_support as ns
+    from dataclasses import asdict
+    config_path = configs(tmp_path, git_repo(tmp_path / "workspace"))
+    monkeypatch.setenv("CORRAL_OVERLAY_FILE", str(tmp_path / "absent"))
+    result = validate(config_path)
+    assert result["valid"] is True
+    assert sum("personal overlay is absent" in w for w in result["warnings"]) == 1
+    overlay = tmp_path / "overlay.yaml"
+    overlay.write_text("[]")
+    monkeypatch.setenv("CORRAL_OVERLAY_FILE", str(overlay))
+    result = validate(config_path)
+    assert result["valid"] is False and any(str(overlay) in e for e in result["errors"])
+    monkeypatch.setenv("CORRAL_OVERLAY_FILE", str(tmp_path / "workspace/absent.yaml"))
+    assert any("inside a repository workspace" in e for e in validate(config_path)["errors"])
+    controller_path = tmp_path / "controller.json"
+    controller = json.loads(controller_path.read_text())
+    controller["profiles"] = [{**asdict(ns.fake_profile()), "tier": "unknown"}]
+    controller_path.write_text(json.dumps(controller))
+    result = validate(config_path)
+    assert any("tier must be one of" in e for e in result["errors"])

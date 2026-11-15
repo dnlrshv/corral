@@ -22,6 +22,7 @@ class Profile:
     account_ref: str | None = None
     subscription_product: str | None = None
     quota_pool: str | None = None
+    tier: str = "standard"
 
 
 # Only routes/models actually observed on this host are registered: a profile needs an
@@ -45,6 +46,7 @@ STANDARD_NATIVE_PROFILES = (
         roles=("implementation", "repair", "adjudication"),
         tools=("read", "search", "edit", "shell", "test"),
         context=235849,
+        tier="small",
         speed="normal",
         provider="google",
         family="gemini",
@@ -62,6 +64,7 @@ STANDARD_NATIVE_PROFILES = (
         roles=("implementation", "repair", "adjudication"),
         tools=("read", "search", "edit", "shell", "test"),
         context=235849,
+        tier="small",
         speed="normal",
         provider="google",
         family="gemini",
@@ -79,6 +82,7 @@ STANDARD_NATIVE_PROFILES = (
         roles=("implementation", "repair", "adjudication"),
         tools=("read", "search", "edit", "shell", "test"),
         context=258400,
+        tier="standard",
         speed="normal",
         provider="alibaba",
         family="qwen",
@@ -94,6 +98,9 @@ def registered_profiles(profiles=()):
     for profile in profiles:
         parsed = profile if isinstance(profile, Profile) else Profile(**profile)
         registered[parsed.id] = parsed
+    for profile in registered.values():
+        if profile.tier not in ("small", "standard", "frontier"):
+            raise ValueError(f"profile {profile.id} tier must be one of small, standard, frontier")
     return list(registered.values())
 
 

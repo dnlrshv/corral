@@ -565,7 +565,8 @@ print(json.dumps({"schema": "corral-inspection-report-v1", "status": "completed"
 
 
 @pytest.mark.skipif(containment.sandbox_exec() is None, reason="macOS Seatbelt required")
-def test_controller_adapter_denies_candidate_execution_and_workspace_access(tmp_path, monkeypatch):
+@pytest.mark.parametrize("legacy_refuse", [False, True])
+def test_controller_adapter_denies_candidate_execution_and_workspace_access(tmp_path, monkeypatch, legacy_refuse):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     marker = workspace / "candidate-executed"
@@ -593,7 +594,11 @@ def test_controller_adapter_denies_candidate_execution_and_workspace_access(tmp_
     monkeypatch.setenv("FIXTURE_INSPECTION_KEY", "fixture-only")
     controller = Controller(tmp_path / "state", "owner", {"fixture": host},
                             default_host="fixture", profiles=[profile])
-    export_spec, _store = _register_export(workspace, controller.store.path)
+    if legacy_refuse:
+        (workspace / "corral.yaml").write_text("executor_brief: {legacy_objective: refuse}")
+        monkeypatch.setenv("CORRAL_OVERLAY_FILE", str(workspace / "absent-overlay.yaml"))
+    export_spec, _store = _register_export(workspace, controller.store.path,
+        extra_paths=("corral.yaml",) if legacy_refuse else ())
     epoch = controller.store.acquire("pr:example/repo#12", "corral")
     spec = {"trusted_export_id": export_spec["trusted_export_id"], "host": "fixture",
             "pr_owner": "corral", "pr_owner_epoch": epoch,
@@ -602,6 +607,8 @@ def test_controller_adapter_denies_candidate_execution_and_workspace_access(tmp_
             "tools": ["inspect-packet", "report"]}
     task = controller.submit("owner", "inspection-fixture", spec)
     run = controller.run("owner", task, execution_host="fixture")
+    assert run["result"]["brief"] is None
+    assert not (Path(run["result"]["artifact_directory"]) / "brief.json").exists()
     assert run["result"]["accepted"] is True
     assert run["result"]["structured"]["verdict"] == "CHANGES_REQUIRED"
     assert run["result"]["receipt"]["accepted"] is True

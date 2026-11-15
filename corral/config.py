@@ -31,6 +31,10 @@ Layout::
       output: null
       recognized_modules: null
       workflow_kinds: {}
+    executor_brief:
+      rules_file: null
+      legacy_objective: warn
+      max_prompt_chars: null
     telemetry:
       spool_dir: null
       rollup_output_dir: agent_telemetry
@@ -193,6 +197,18 @@ class HooksConfig:
     #: Repo-root-relative registry used by both surface hooks.
     surfaces: str = DEFAULT_SURFACES_PATH
     magic_numbers: MagicNumbersConfig = field(default_factory=MagicNumbersConfig)
+
+
+DEFAULT_EXECUTOR_BRIEF_LEGACY_OBJECTIVE = "warn"
+DEFAULT_EXECUTOR_BRIEF_BUDGET_CHARS = {"small": 40_000, "standard": 80_000, "frontier": 120_000}
+
+
+@dataclass
+class ExecutorBriefConfig:
+    """Settings for executor briefs rendered by the execution controller."""
+    rules_file: str | None = None
+    legacy_objective: str = DEFAULT_EXECUTOR_BRIEF_LEGACY_OBJECTIVE
+    max_prompt_chars: int | None = None
 
 
 @dataclass
@@ -360,6 +376,7 @@ class Config:
     lineage: LineageConfig = field(default_factory=LineageConfig)
     hooks: HooksConfig = field(default_factory=HooksConfig)
     preflight: PreflightConfig = field(default_factory=PreflightConfig)
+    executor_brief: ExecutorBriefConfig = field(default_factory=ExecutorBriefConfig)
     telemetry: TelemetryConfig = field(default_factory=TelemetryConfig)
     retro: RetroConfig = field(default_factory=RetroConfig)
     governance: GovernanceConfig = field(default_factory=GovernanceConfig)
@@ -493,6 +510,7 @@ def load_config(path: Path | str | None = None) -> Config:
     hooks_raw = _as_section(document, "hooks")
     magic_numbers_raw = _as_section(hooks_raw, "magic_numbers")
     preflight_raw = _as_section(document, "preflight")
+    executor_brief_raw = _as_section(document, "executor_brief")
     telemetry_raw = _as_section(document, "telemetry")
     retro_raw = _as_section(document, "retro")
     governance_raw = _as_section(document, "governance")
@@ -563,6 +581,16 @@ def load_config(path: Path | str | None = None) -> Config:
         preflight.workflow_kinds = _as_str_map(
             preflight_raw["workflow_kinds"], "preflight.workflow_kinds"
         )
+
+    executor_brief = ExecutorBriefConfig()
+    if "rules_file" in executor_brief_raw:
+        executor_brief.rules_file = _as_optional_str(executor_brief_raw["rules_file"], "executor_brief.rules_file")
+    if "legacy_objective" in executor_brief_raw:
+        executor_brief.legacy_objective = _as_choice(executor_brief_raw["legacy_objective"], "executor_brief.legacy_objective", {"warn", "refuse"})
+    if executor_brief_raw.get("max_prompt_chars") is not None:
+        executor_brief.max_prompt_chars = _as_int(executor_brief_raw["max_prompt_chars"], "executor_brief.max_prompt_chars")
+        if executor_brief.max_prompt_chars <= 0:
+            raise ValueError("corral.yaml: executor_brief.max_prompt_chars must be positive")
 
     telemetry = TelemetryConfig()
     if "spool_dir" in telemetry_raw:
@@ -735,6 +763,7 @@ def load_config(path: Path | str | None = None) -> Config:
         lineage=lineage,
         hooks=hooks,
         preflight=preflight,
+        executor_brief=executor_brief,
         telemetry=telemetry,
         retro=retro,
         governance=governance,

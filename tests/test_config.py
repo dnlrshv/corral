@@ -159,3 +159,21 @@ def test_retro_root_incident_floor_cannot_be_lowered(tmp_path: Path) -> None:
     config_path.write_text("retro:\n  evidence:\n    min_root_incidents: 1\n")
     with pytest.raises(ValueError, match=r"min_root_incidents must be >= 2"):
         load_config(config_path)
+
+
+def test_executor_brief_section_defaults(tmp_path):
+    path = tmp_path / "corral.yaml"
+    path.write_text("executor_brief: {}")
+    cfg = load_config(path).executor_brief
+    assert cfg.rules_file is None and cfg.legacy_objective == "warn" and cfg.max_prompt_chars is None
+    path.write_text("executor_brief: {rules_file: rules.yaml, legacy_objective: refuse, max_prompt_chars: 12345}")
+    cfg = load_config(path).executor_brief
+    assert cfg.rules_file == "rules.yaml" and cfg.legacy_objective == "refuse" and cfg.max_prompt_chars == 12345
+
+
+@pytest.mark.parametrize("section", ["legacy_objective: ignore", "max_prompt_chars: 0", "max_prompt_chars: -1", "max_prompt_chars: true", "max_prompt_chars: 1.5", "rules_file: []"])
+def test_executor_brief_section_rejects_bad_policy_and_budget(tmp_path, section):
+    path = tmp_path / "corral.yaml"
+    path.write_text("executor_brief: {" + section + "}")
+    with pytest.raises(ValueError, match="executor_brief"):
+        load_config(path)

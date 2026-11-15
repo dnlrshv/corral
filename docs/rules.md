@@ -39,3 +39,11 @@ consumers. Credential-shaped rule text is refused because rules enter prompts.
 
 Repository paths cannot escape the workspace or cross symlinks. File digests
 make the selected repository and overlay contents auditable.
+
+Preview the selected rules with `corral rules show --root . --json`, or preview
+their placement in a task with `corral executor-brief render task.json --root .`.
+See the [executor-brief contract](executor-brief.md) for policy, launchd environment
+configuration, prompt budgets and per-attempt records. A launch record includes
+the merged rules digest, applicable records and repository/overlay file hashes,
+so a repository rule change between generations is visible. A declared repository
+file must exist because silently omitting it would hide a misspelled policy path.

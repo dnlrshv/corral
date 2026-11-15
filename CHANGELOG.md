@@ -7,24 +7,22 @@ Every release section must include a `### Consumer action` subsection, even when
 
 ### Added
 
-- `corral executor-brief render` previews deterministic executor prompts with reasoned constraints and command-linked criteria.
-
-- Profile tiers and executor-brief launch policy, input budgets, layered-rule provenance in `brief.json`, and result/status assessment records.
-
-- Typed executor briefs (`corral-executor-brief-v1`) with contract validation, submit/steer/continue plumbing, `--brief FILE`, and `corral executor-brief check`.
-
-- A rules layer (`corral.rules`) with packaged defaults, repository rules, an external personal overlay, and `corral rules show`.
+- Typed, versioned executor briefs (`corral-executor-brief-v1`) with goal, sources, numbered acceptance criteria mapped to verification commands, reasoned constraints, scope and a structured result contract; submitted as `brief` through the client, service and `corral-agent submit --brief`.
+- A rules layer (`corral.rules`): packaged generic defaults, a repository rules file declared by `executor_brief.rules_file` in `corral.yaml`, and a personal overlay outside any repository (`CORRAL_OVERLAY_FILE`, default `~/.config/corral/overlay.yaml`), merged in that order and rendered as constraints.
+- `corral rules show`, `corral executor-brief check` and `corral executor-brief render`.
+- Profile `tier` (`small`, `standard`, `frontier`) controlling the prompt budget and rule applicability.
+- `brief.json` and `result.brief` records: brief and rules digests, prompt digest, and a per-criterion assessment of the executor's structured result.
+- Executor-brief and rules documentation covering the contract, rendering, policy, overlay setup and migration.
 
 ### Changed
 
-- Native executor prompts are rendered once by the controller into `context.json`; the adapter writes them verbatim.
-
-- The default executor result schema is `corral-executor-result-v1`; native results include an informational per-criterion assessment. Task-specific schemas still override it.
-- The maintained Codex argv and route template pass `--output-schema` alongside `--output-last-message`.
+- The default executor result schema is `corral-executor-result-v1` (per-criterion status and evidence, commands run with exit codes, files changed, open questions, blockers) instead of an open object. A task's own `result_schema` still overrides it.
+- The maintained Codex argv contract passes `--output-schema` alongside `--output-last-message`.
+- Native prompts are rendered by the controller into `context.json`; the adapter writes them verbatim.
 
 ### Consumer action
 
-Add `"--output-schema", "{schema_file}"` to previously copied Codex routes to enforce the result shape in the harness. Protocol and store schema remain at version 1.
+Optional but recommended: submit briefs instead of bare objectives; objective-only native dispatches continue with a recorded warning until a repository sets `executor_brief.legacy_objective: refuse`. Codex routes copied from the template should add `"--output-schema", "{schema_file}"` to their argv to have the harness enforce the result shape; without it the result is requested in the prompt and assessed, not enforced. Set `tier` on configured profiles whose budget should differ from `standard`. Protocol and store schema remain at version 1.
 
 ## [0.2.1] - 2026-09-28
 

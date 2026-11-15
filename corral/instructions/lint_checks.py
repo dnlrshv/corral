@@ -151,7 +151,7 @@ def validate_caps_options(options):
         fail(key + '.' + str(name), 'is an unknown key')
     result = {**defaults, **options}
     for name in ('tokens', 'booster_labels', 'reason_markers'):
-        strings(result[name], key + '.' + name)
+        result[name] = strings(result[name], key + '.' + name)
         if any(not value.strip() for value in result[name]):
             fail(key + '.' + name, 'must contain non-empty strings')
     for name in ('paragraph_threshold', 'file_min_count', 'file_density_per_1000_words'):

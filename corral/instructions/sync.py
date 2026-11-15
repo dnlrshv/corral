@@ -83,7 +83,7 @@ def run_sync(root: Path, config, options: SyncOptions) -> SyncReport:
     root = root.resolve()
     mode = 'check' if options.check else 'dry-run' if options.dry_run else 'write'
     report = SyncReport(mode, options.scope, config.canonical, strict=options.strict)
-    if options.scope != 'repo' or (options.only and options.only - {'pointers'}):
+    if options.scope != 'repo' or (options.only and options.only - {'pointers', 'skills'}):
         raise ValueError('requested instructions sync scope or target is not available yet')
     canonical_error = validate_canonical(root, config)
     if canonical_error:
@@ -95,6 +95,11 @@ def run_sync(root: Path, config, options: SyncOptions) -> SyncReport:
         report.targets.extend(targets)
         if plan:
             planned.append(plan)
+    if options.only is None or 'skills' in options.only:
+        from .skills import evaluate_skills
+        targets, skill_plans = evaluate_skills(root, config.skills, options)
+        report.targets.extend(targets)
+        planned.extend(skill_plans)
     if mode == 'write':
         for plan in planned:
             try:

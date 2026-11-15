@@ -11,6 +11,8 @@ Every release section must include a `### Consumer action` subsection, even when
 
 - `corral instructions sync`: repo-scope managed pointer blocks, digest-based edit protection, check/dry-run reports, and byte-preserving atomic writes. The command is opt-in.
 
+- Repo instruction sync mirrors skills byte for byte with executable bits, provenance-based drift protection, optional relative symlinks, and explicit pruning of owned extras and orphans.
+
 ### Consumer action
 
 None. The command and hook are opt-in; add `- id: instructions-lint` to `.pre-commit-config.yaml` to enable the hook.

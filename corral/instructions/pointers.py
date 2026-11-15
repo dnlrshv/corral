@@ -50,7 +50,8 @@ def evaluate_pointer(root, spec, cfg, options):
     target = TargetResult('pointer', spec.executor, spec.path)
     try:
         path = safe_path(root, spec.path)
-        if path == safe_path(root, cfg.canonical):
+        canonical = safe_path(root, cfg.canonical)
+        if path == canonical or (path.exists() and canonical.exists() and path.samefile(canonical)):
             raise ValueError('pointer resolves to the canonical file')
         target.resolved_path = path.relative_to(root).as_posix() if path != root / spec.path else None
         missing = not path.exists()

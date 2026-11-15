@@ -11,6 +11,7 @@ this layer maps STATUSES instead of parsing vendor error objects:
 - ``SeatStatus.OK``        -> success, return the text.
 - ``SeatStatus.ERROR`` and ``SeatStatus.TIMEOUT`` -> transient capacity-style
   failures: retried on the same bounded backoff schedule.
+- ``SeatStatus.INCOMPLETE`` -> unusable answer; group-local, never retried.
 - ``SeatStatus.UNAVAILABLE`` -> configuration-level failure (missing seat,
   missing auth): never retried, wrapped in :class:`NonRetriableLLMError`.
 - Any exception escaping the completion callable -> :class:`NonRetriableLLMError`.
@@ -36,7 +37,8 @@ RETRY_MAX_ATTEMPTS = 4
 RETRY_BACKOFF_SECONDS: tuple[float, ...] = (15.0, 60.0, 180.0)
 RETRY_JITTER_MAX_SECONDS = 3.0
 #: A scheduled delay is capped so a degraded seat cannot consume the whole
-#: weekly workflow deadline. The four-attempt budget stays below ~16 minutes.
+#: weekly workflow deadline. Completion timeouts are separate: four 900-second
+#: attempts plus backoff take about an hour.
 RETRY_MAX_DELAY_SECONDS = 300.0
 
 #: Seat statuses treated as transient capacity failures worth retrying.
@@ -52,6 +54,14 @@ class LLMCallError(RuntimeError):
         super().__init__(message)
         self.status = status
         self.attempts = attempts
+
+
+class IncompleteLLMError(LLMCallError):
+    """The seat answered but the answer is unusable (refusal or output limit).
+
+    Group-local: callers skip the group with the reason; retrying the same
+    prompt would repeat the outcome.
+    """
 
 
 class NonRetriableLLMError(LLMCallError):
@@ -125,6 +135,10 @@ def call_with_retry(
         if result.ok:
             return result.text
         status = SeatStatus(result.status)
+        if status is SeatStatus.INCOMPLETE:
+            raise IncompleteLLMError(
+                f"{context}: {result.detail}", status="incomplete", attempts=attempt
+            )
         if status not in RETRIABLE_STATUSES:
             raise NonRetriableLLMError(
                 f"{context}: non-retriable seat failure on attempt {attempt} "
@@ -148,6 +162,7 @@ def call_with_retry(
 
 __all__ = [
     "LLMCallError",
+    "IncompleteLLMError",
     "NonRetriableLLMError",
     "RETRIABLE_STATUSES",
     "RETRY_BACKOFF_SECONDS",

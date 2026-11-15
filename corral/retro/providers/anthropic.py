@@ -10,6 +10,7 @@ from corral.retro.providers.base import (
     SeatResult,
     SeatRunner,
     SeatStatus,
+    _seat_max_tokens,
     availability,
     result,
 )
@@ -63,6 +64,7 @@ class AnthropicSeatRunner(SeatRunner):
         timeout: float,
         max_tokens: int,
     ) -> SeatResult:
+        max_tokens = _seat_max_tokens(seat, max_tokens)
         probe = self.probe(seat)
         if not probe.available:
             return result(seat, SeatStatus.UNAVAILABLE, detail=probe.detail)
@@ -79,6 +81,17 @@ class AnthropicSeatRunner(SeatRunner):
                 max_tokens=max_tokens,
                 messages=[{"role": "user", "content": prompt}],
             )
+            stop_reason = getattr(message, "stop_reason", None)
+            if stop_reason == "refusal":
+                details = getattr(message, "stop_details", None)
+                category = getattr(details, "category", None) or "unspecified"
+                return result(seat, SeatStatus.INCOMPLETE,
+                              detail=f"refusal (category={category})")
+            if stop_reason == "max_tokens":
+                return result(seat, SeatStatus.INCOMPLETE, detail=(
+                    f"stopped at the output limit (max_tokens={max_tokens}) before the "
+                    "reply finished; raise retro.max_tokens or the seat's "
+                    "options.max_tokens"))
             blocks = getattr(message, "content", None) or []
             parts: list[str] = []
             for block in blocks:
@@ -88,6 +101,8 @@ class AnthropicSeatRunner(SeatRunner):
                 elif getattr(block, "type", "text") == "text":
                     parts.append(getattr(block, "text", ""))
             text = "".join(parts).strip()
+            if not text and stop_reason == "end_turn":
+                return result(seat, SeatStatus.INCOMPLETE, detail="reply contained no text block")
             return result(seat, SeatStatus.OK, text=text)
         except Exception as exc:
             if _is_timeout(exc, anthropic):

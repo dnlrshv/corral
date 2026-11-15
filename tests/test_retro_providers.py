@@ -322,3 +322,106 @@ def test_openai_timeout_classified(monkeypatch) -> None:
     )
     result = OpenAICompatibleSeatRunner().complete(configured, "prompt", timeout=4, max_tokens=9)
     assert result.status == SeatStatus.TIMEOUT
+
+
+@pytest.fixture
+def anthropic_response(monkeypatch):
+    captured = []
+    message = SimpleNamespace(content=[SimpleNamespace(type="text", text="answer")], stop_reason="end_turn")
+
+    class Client:
+        def __init__(self, **kwargs):
+            self.messages = self
+
+        def create(self, **kwargs):
+            captured.append(kwargs)
+            return message.current if hasattr(message, "current") else message
+
+    monkeypatch.setitem(sys.modules, "anthropic", SimpleNamespace(Anthropic=Client))
+    monkeypatch.setenv("NAMED_KEY", "secret")
+    return message, captured
+
+
+def _anthropic_complete(options=None):
+    return AnthropicSeatRunner().complete(
+        seat("anthropic-sdk", auth_env="NAMED_KEY", options=options),
+        "prompt", timeout=900, max_tokens=16000,
+    )
+
+
+def test_anthropic_refusal_returns_incomplete_with_category(anthropic_response):
+    message, _ = anthropic_response
+    class Refusal:
+        stop_reason = "refusal"
+        stop_details = SimpleNamespace(category="cyber")
+        @property
+        def content(self):
+            raise AssertionError("refusal content must not be read")
+    message.current = Refusal()
+    result = _anthropic_complete()
+    assert result.status is SeatStatus.INCOMPLETE
+    assert result.text == ""
+    assert "category=cyber" in result.detail
+
+
+@pytest.mark.parametrize("details", [None, SimpleNamespace()])
+def test_anthropic_refusal_without_details(anthropic_response, details):
+    message, _ = anthropic_response
+    message.stop_reason = "refusal"
+    message.stop_details = details
+    assert "category=unspecified" in _anthropic_complete().detail
+
+
+def test_anthropic_max_tokens_stop_returns_incomplete(anthropic_response):
+    message, _ = anthropic_response
+    message.stop_reason = "max_tokens"
+    message.content = [SimpleNamespace(type="text", text="partial")]
+    result = _anthropic_complete({"max_tokens": 8000})
+    assert result.status is SeatStatus.INCOMPLETE
+    assert result.text == ""
+    assert "max_tokens=8000" in result.detail
+    assert "options.max_tokens" in result.detail
+
+
+def test_anthropic_skips_thinking_blocks(anthropic_response):
+    message, _ = anthropic_response
+    message.content = [SimpleNamespace(type="thinking", thinking="thought"),
+                       {"type": "text", "text": "first "},
+                       SimpleNamespace(type="text", text="second")]
+    assert _anthropic_complete().text == "first second"
+
+
+def test_anthropic_empty_end_turn_is_incomplete(anthropic_response):
+    message, _ = anthropic_response
+    message.content = [SimpleNamespace(type="thinking", thinking="thought")]
+    result = _anthropic_complete()
+    assert result.status is SeatStatus.INCOMPLETE
+    assert result.detail == "reply contained no text block"
+
+
+def test_anthropic_sends_no_sampling_parameters(anthropic_response):
+    _, calls = anthropic_response
+    _anthropic_complete()
+    assert set(calls[0]) == {"model", "max_tokens", "messages"}
+    assert calls[0]["messages"] == [{"role": "user", "content": "prompt"}]
+
+
+@pytest.mark.parametrize("adapter,protocol", [("anthropic-sdk", None), ("openai-compatible-endpoint", "chat-completions"), ("openai-compatible-endpoint", "responses")])
+def test_seat_max_tokens_option_overrides_global(monkeypatch, anthropic_response, adapter, protocol):
+    if adapter == "anthropic-sdk":
+        _, calls = anthropic_response
+        _anthropic_complete({"max_tokens": 8000})
+        assert calls[0]["max_tokens"] == 8000
+        return
+    bodies = []
+    def fake_urlopen(request, timeout):
+        bodies.append(json.loads(request.data))
+        return FakeHTTPResponse({"choices": [{"message": {"content": "ok"}}],
+                                 "output": [{"content": [{"type": "output_text", "text": "ok"}]}]})
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setenv("ENDPOINT", "https://provider.invalid/v1")
+    monkeypatch.setenv("TOKEN", "secret")
+    configured = seat(adapter, auth_env="TOKEN", options={"base_url_env": "ENDPOINT", "protocol": protocol, "max_tokens": 8000})
+    result = OpenAICompatibleSeatRunner().complete(configured, "prompt", timeout=900, max_tokens=16000)
+    assert result.ok
+    assert bodies[0]["max_tokens" if protocol == "chat-completions" else "max_output_tokens"] == 8000

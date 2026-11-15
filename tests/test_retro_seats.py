@@ -107,3 +107,17 @@ def test_registry_path_comes_from_corral_config(tmp_path: Path) -> None:
     assert config.retro.require_distinct_provider is False
     assert config.retro.verification_timeout_s == 12
     assert SeatRegistry.from_config(config)["drafter"].model == "draft-model"
+
+
+@pytest.mark.parametrize("adapter", ["anthropic-sdk", "openai-compatible-endpoint"])
+@pytest.mark.parametrize("value", [True, False, 0, -1, 1.5, "42", None])
+def test_registry_rejects_bad_max_tokens(tmp_path, adapter, value):
+    import yaml
+    options = {"max_tokens": value}
+    if adapter == "openai-compatible-endpoint":
+        options.update(base_url_env="URL", protocol="responses")
+    path = tmp_path / "seats.yaml"
+    path.write_text(yaml.safe_dump({"schema_version": 1, "seats": {"x": {
+        "provider": "p", "model": "m", "auth_env": None, "adapter": adapter, "options": options}}}))
+    with pytest.raises(SeatRegistryError, match="options.max_tokens must be a positive integer"):
+        SeatRegistry(path)

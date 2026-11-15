@@ -803,3 +803,33 @@ def test_configured_root_incident_floor_reaches_prompt_and_summary(tmp_path):
     assert drafter.calls == verifier.calls == 1
     assert "3-distinct-root-incident floor" in drafter.prompts[0]
     assert ">=3-distinct-root-incident bar" in summary_text(root)
+
+
+def test_incomplete_drafter_answer_skips_group_and_continues(tmp_path, monkeypatch):
+    from corral.retro import cli as retro_cli
+    root = make_repo(tmp_path)
+    write_fixup_parquet(root, [
+        fixup_rows(original_pr=11, fixup_pr=12, shared_files=["aaa.py"]),
+        fixup_rows(original_pr=13, fixup_pr=14, shared_files=["aaa.py"]),
+        fixup_rows(original_pr=21, fixup_pr=22, shared_files=["zzz.py"]),
+        fixup_rows(original_pr=23, fixup_pr=24, shared_files=["zzz.py"]),
+    ], WEEK)
+    skipped = []
+    original = retro_cli.draft_and_verify_candidates
+    def capture(*args, **kwargs):
+        verified, notes = original(*args, **kwargs)
+        skipped.extend(notes)
+        return verified, notes
+    monkeypatch.setattr(retro_cli, "draft_and_verify_candidates", capture)
+    code, drafter, verifier, _ = run_pipeline(
+        root / "corral.yaml", drafter_outputs=[SeatStatus.INCOMPLETE, candidate_json()],
+        verifier_outputs=[CONFIRM],
+    )
+    assert code == 0
+    assert drafter.calls == 2 and verifier.calls == 1
+    assert skipped[0]["kind"] == "incomplete"
+    assert "drafter returned no usable answer" in skipped[0]["reason"]
+    assert "drafter returned no usable answer" in summary_text(root)
+    entries = json.loads((root / "agent_memory" / "gotchas.json").read_text())["gotchas"]
+    assert len(entries) == 1
+    assert entries[0]["source_prs"] == [21, 22, 23, 24]

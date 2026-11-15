@@ -792,3 +792,15 @@ def test_proposal_pass_forwards_configured_modalities(tmp_path, monkeypatch):
     )
     assert observed == [["REQUIRED", "FORBIDDEN"]]
     assert len(run.accepted) == 1
+
+
+def test_incomplete_proposal_drafter_skips_group(tmp_path, monkeypatch):
+    from corral.retro.providers.base import SeatStatus
+    def unexpected_verification(*args, **kwargs):
+        raise AssertionError("an incomplete draft must not reach verification")
+    monkeypatch.setattr("corral.retro.doc_verification.verify", unexpected_verification)
+    _, _, run = _run_pass(tmp_path, drafter_outputs=[SeatStatus.INCOMPLETE], verifier_output=CONFIRM_JSON)
+    assert run.pass_failure is None
+    assert run.accepted == []
+    assert run.skipped[0]["kind"] == "incomplete"
+    assert "no usable answer" in run.skipped[0]["reason"]

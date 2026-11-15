@@ -14,6 +14,7 @@ class SeatStatus(str, Enum):
     UNAVAILABLE = "unavailable"
     ERROR = "error"
     TIMEOUT = "timeout"
+    INCOMPLETE = "incomplete"
 
     def __str__(self) -> str:
         return self.value
@@ -57,6 +58,10 @@ def availability(seat: Seat, status: SeatStatus, detail: str = "") -> Availabili
 
 def result(seat: Seat, status: SeatStatus, text: str = "", detail: str = "") -> SeatResult:
     return SeatResult(text, seat.provider, seat.model, status, detail, seat.name)
+
+
+def _seat_max_tokens(seat: Seat, max_tokens: int) -> int:
+    return int(seat.options["max_tokens"]) if "max_tokens" in seat.options else max_tokens
 
 
 class SeatRunner(ABC):

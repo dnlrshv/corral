@@ -24,6 +24,8 @@ seats:
     options:
       base_url_env: CORRAL_VERIFIER_BASE_URL
       protocol: chat-completions  # chat-completions or responses
+      # Set when the endpoint caps output below retro.max_tokens.
+      # max_tokens: 8000
 
   # Local command: argv is executed directly, never through a shell. The prompt
   # is sent on stdin unless {prompt_file} appears in argv. Available placeholders

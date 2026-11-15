@@ -120,6 +120,11 @@ def _parse_seat(name: str, raw: object, path: Path) -> Seat:
         raise _error(path, f"seat {name!r} field 'options' must be a mapping")
     options: dict[str, Any] = dict(options_raw)
 
+    if adapter in {"anthropic-sdk", "openai-compatible-endpoint"} and "max_tokens" in options:
+        budget = options["max_tokens"]
+        if isinstance(budget, bool) or not isinstance(budget, int) or budget <= 0:
+            raise _error(path, f"seat {name!r} options.max_tokens must be a positive integer")
+
     if adapter == "openai-compatible-endpoint":
         base_url_env = options.get("base_url_env")
         if not isinstance(base_url_env, str) or not base_url_env.strip():

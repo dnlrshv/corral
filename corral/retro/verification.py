@@ -26,8 +26,8 @@ from corral.retro.providers import runner_for_seat
 from corral.retro.providers.base import SeatResult, SeatRunner, SeatStatus
 from corral.retro.seats import Seat, SeatRegistry
 
-DEFAULT_VERIFICATION_TIMEOUT_S = 300
-DEFAULT_MAX_TOKENS = 1000
+DEFAULT_VERIFICATION_TIMEOUT_S = 900
+DEFAULT_MAX_TOKENS = 16000
 MAX_EXCERPT_CHARS_PER_PR = 1500
 
 Verdict = Literal["CONFIRM", "REFUTE", "UNVERIFIED"]
@@ -319,7 +319,7 @@ def verify_candidate(
     verifier_seats: Sequence[str] | None = None,
     require_distinct_provider: bool | None = None,
     timeout_s: float | None = None,
-    max_tokens: int = DEFAULT_MAX_TOKENS,
+    max_tokens: int | None = None,
     unavailable_policy: str | None = None,
     runner_factory: RunnerFactory | None = None,
 ) -> CandidateVerification:
@@ -344,6 +344,7 @@ def verify_candidate(
         else getattr(retro, "require_distinct_provider", True)
     )
     timeout = timeout_s or getattr(retro, "verification_timeout_s", DEFAULT_VERIFICATION_TIMEOUT_S)
+    max_tokens = max_tokens or getattr(retro, "max_tokens", DEFAULT_MAX_TOKENS)
     policy = unavailable_policy or getattr(
         retro, "gotcha_unavailable_policy", "proceed-unverified"
     )

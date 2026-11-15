@@ -14,6 +14,7 @@ from corral.retro.providers.base import (
     SeatResult,
     SeatRunner,
     SeatStatus,
+    _seat_max_tokens,
     availability,
     result,
 )
@@ -122,6 +123,7 @@ class OpenAICompatibleSeatRunner(SeatRunner):
         if not probe.available:
             return result(seat, SeatStatus.UNAVAILABLE, detail=probe.detail)
 
+        max_tokens = _seat_max_tokens(seat, max_tokens)
         protocol = str(seat.options["protocol"])
         if protocol == "chat-completions":
             body: dict[str, Any] = {

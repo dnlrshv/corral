@@ -582,6 +582,13 @@ def draft_and_verify_proposals(
                 for deferred in groups[group_index + 1 :]
             )
             break
+        except retry.IncompleteLLMError as exc:
+            run.skipped.append({
+                "key": group.key,
+                "reason": f"drafter returned no usable answer: {exc}",
+                "kind": "incomplete",
+            })
+            continue
         except retry.NonRetriableLLMError as exc:
             run.pass_failure = str(exc)
             break

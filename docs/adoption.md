@@ -116,6 +116,8 @@ pre-commit install
 pre-commit run --all-files
 ```
 
+See [instruction lint](instructions.md) for text and reference checks, suppressions, and a full-repository CI run.
+
 `surface-check` reads the staged diff and blocks only matching `needs_human` surfaces. `magic-numbers` compares numeric literals with dataclass-singleton fields in the configured constants module; use named constants, scoped allowlists, or a reasoned inline `# magic-ok` exception.
 
 For Claude Code, merge [`templates/claude-settings.json`](../templates/claude-settings.json) into `.claude/settings.json`:

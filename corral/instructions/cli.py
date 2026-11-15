@@ -91,8 +91,13 @@ def run_lint(args) -> int:
             for f in shown:
                 print(f'{f.path}:{f.line}:{f.column}: {f.severity} {f.check} {f.message}')
             counts = {s: sum(f.severity == s for f in shown) for s in ('error', 'warning', 'info')}
-            hidden = len(report.findings) - len(shown)
-            print(f"instructions lint: {counts['error']} errors, {counts['warning']} warnings, {counts['info']} info shown ({hidden} hidden, {report.suppressed} suppressed) in {report.files_checked} files")
+            totals = report.counts()
+            hidden = [f"{totals[s] - counts[s]} {s} hidden" for s in ('warning', 'info') if SEVERITY_ORDER[s] < SEVERITY_ORDER[minimum]]
+            details = ', '.join([*hidden, f'{report.suppressed} suppressed'])
+            errors = f"{counts['error']} error" + ('s' if counts['error'] != 1 else '')
+            warnings = f"{counts['warning']} warning" + ('s' if counts['warning'] != 1 else '')
+            files = f'{report.files_checked} file' + ('s' if report.files_checked != 1 else '')
+            print(f"instructions lint: {errors}, {warnings}, {counts['info']} info shown ({details}) in {files}")
         for error in report.input_errors:
             print('instructions lint: ' + _redact_error(error, root), file=sys.stderr)
         return code

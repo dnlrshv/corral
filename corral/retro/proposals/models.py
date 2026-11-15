@@ -92,13 +92,14 @@ class DocProposal:
 
     @property
     def rule_text(self) -> str:
-        """The single structured, normative markdown line inserted into a prose file.
+        """The single markdown list item inserted into a prose file.
 
-        Starts with ``-`` and carries a bold modality marker so the gate's
-        normative-line detector recognises it and requires a registry entry
-        (which this proposal supplies) -- and contains the verbatim anchor.
+        The normative classification lives in the registry entry's ``modality``,
+        which is never rendered into agent-facing text, because emphasis markers
+        make agents apply a rule where it does not fit. The line contains the
+        verbatim anchor.
         """
-        return f"- **{self.modality}** {self.statement}"
+        return f"- {self.statement}"
 
 
 @dataclass(frozen=True)

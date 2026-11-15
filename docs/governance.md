@@ -131,6 +131,8 @@ corral governance staleness --dry-run
 
 ## Human-review-only invariant
 
+Retro-proposed rule lines are plain sentences; the registry's `modality` records their classification.
+
 corral may validate, draft, independently verify, replay, and render a commit plan. It does not ratify its own instruction changes:
 
 - `corral retro run` may write schema-validated gotchas and a weekly summary, but doc/skill proposals are rendered separately and never auto-applied.

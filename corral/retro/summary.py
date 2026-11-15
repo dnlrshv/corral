@@ -205,7 +205,7 @@ def _render_proposal_section(
                     f"sharpening `{proposal.rule_id}` (old anchor: {proposal.old_anchor!r})"
                 )
             lines += [
-                f"- concern_key: `{proposal.concern_key}` | modality: {proposal.modality}",
+                f"- concern_key: `{proposal.concern_key}` | registry modality: {proposal.modality}",
                 f"- evidence (distinct root incidents): {proposal.evidence_incidents}",
                 f"- rationale: {proposal.rationale}",
                 f"- confidence: {proposal.confidence:.2f} | review_by: {proposal.review_by}",

@@ -13,6 +13,8 @@ Every release section must include a `### Consumer action` subsection, even when
 
 ### Changed
 
+- Proposal rule lines render as `- <statement>`; `modality` is kept in the registry only.
+
 - Retro prompts ask for one plain rule sentence with its reason and no longer describe scoring; prompts state the configured evidence floor.
 
 - The default preflight model is `claude-haiku-5-5` (was `claude-haiku-4-5-20251001`), sent with `effort: low`.
@@ -24,6 +26,8 @@ Every release section must include a `### Consumer action` subsection, even when
 - The default `preflight.max_tokens` is 16000 (was 1500), because thinking counts toward the limit.
 
 ### Consumer action
+
+- Existing `- **MUST** ...` lines from earlier proposals stay until edited; rewrite them by hand if wanted. Registry entries need no change.
 
 - To keep Claude Haiku 4.5, set `preflight.model: claude-haiku-4-5-20251001` and `preflight.effort: null`, because that model rejects the effort parameter. Briefs on the new default can end with `fallback_reason: llm_refused` when a safety classifier declines; the brief then falls back as it does when the model is unavailable.
 

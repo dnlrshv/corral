@@ -87,6 +87,26 @@ class BriefResponseError(ValueError):
     """
 
 
+class BriefRefusalError(BriefResponseError):
+    """The model or a safety classifier declined the request."""
+
+    def __init__(self, category: str | None):
+        super().__init__(f"model refused (category: {category or 'unknown'})")
+
+
+class BriefTruncatedError(BriefResponseError):
+    """Output ended at the token limit before the brief was complete."""
+
+
+def _check_stop_reason(response: PreflightLLMResponse, max_tokens: int) -> None:
+    if response.stop_reason == "refusal":
+        raise BriefRefusalError(response.refusal_category)
+    if response.stop_reason == "max_tokens":
+        raise BriefTruncatedError(
+            f"output reached max_tokens={max_tokens} before the brief was complete"
+        )
+
+
 def issue_text(issue: dict[str, Any]) -> str:
     return f"Title: {issue.get('title', '')}\n\n{issue.get('body', '')}"
 
@@ -145,6 +165,7 @@ def generate_brief_with_retry(
     """
     prompt = build_prompt(issue, code_map_yaml)
     response = call_llm_with_meta(prompt, max_tokens)
+    _check_stop_reason(response, max_tokens)
     stop_reason = response.stop_reason
     try:
         brief = _parse_and_validate(
@@ -163,6 +184,7 @@ def generate_brief_with_retry(
                 {"role": "assistant", "content": response.text},
             ],
         )
+        _check_stop_reason(retry_response, max_tokens)
         stop_reason = retry_response.stop_reason
         try:
             brief = _parse_and_validate(

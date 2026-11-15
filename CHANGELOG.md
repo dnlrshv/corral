@@ -3,6 +3,21 @@
 All notable changes to Corral are recorded here, following Keep a Changelog.
 Every release section must include a `### Consumer action` subsection, even when no action is required.
 
+## [Unreleased]
+
+### Fixed
+
+- Preflight reads the model's text blocks by type, so responses that begin with thinking blocks no longer fail.
+
+### Changed
+
+- A refused or truncated preflight response falls back to the deterministic brief without a second call, with `fallback_reason` `llm_refused` or `llm_truncated`.
+- The default `preflight.max_tokens` is 16000 (was 1500), because thinking counts toward the limit.
+
+### Consumer action
+
+- Repositories that set `preflight.max_tokens` explicitly to a small value should raise it before moving to a thinking model. Telemetry consumers that enumerate `fallback_reason` values should accept `llm_refused` and `llm_truncated`.
+
 ## [0.2.1] - 2026-09-28
 
 ### Fixed

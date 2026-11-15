@@ -159,3 +159,16 @@ def test_retro_root_incident_floor_cannot_be_lowered(tmp_path: Path) -> None:
     config_path.write_text("retro:\n  evidence:\n    min_root_incidents: 1\n")
     with pytest.raises(ValueError, match=r"min_root_incidents must be >= 2"):
         load_config(config_path)
+
+
+def test_preflight_max_tokens_default_is_generous(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    assert load_config().preflight.max_tokens == 16000
+
+
+@pytest.mark.parametrize("value", [0, -1])
+def test_preflight_max_tokens_must_be_positive(tmp_path, value):
+    config = tmp_path / "corral.yaml"
+    config.write_text(f"preflight: {{max_tokens: {value}}}\n")
+    with pytest.raises(ValueError, match="preflight.max_tokens must be > 0"):
+        load_config(config)

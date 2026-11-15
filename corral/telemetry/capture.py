@@ -378,7 +378,8 @@ def _fallback_reason(payload: Mapping[str, Any], environ: Mapping[str, str]) -> 
     `None`. Populated with `semantic_quality` when post-validation discards a
     majority-hallucinated brief (`BriefQualityError`), or with
     `llm_response_invalid` when the brief response still fails to parse/validate
-    after the one-shot retry (`BriefResponseError`).
+    after the one-shot retry (`BriefResponseError`). Refusals and output-limit
+    stops record `llm_refused` and `llm_truncated`, respectively.
     """
     value = _first_string(payload, ("fallback_reason", "agent_preflight_fallback_reason"))
     if value:

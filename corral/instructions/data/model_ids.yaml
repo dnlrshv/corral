@@ -1,0 +1,41 @@
+schema_version: 1
+as_of: "2026-11-15"
+source: "Anthropic model deprecations page"
+entries:
+  # status: retired -> severity_retired; deprecated -> severity_deprecated
+  - id: claude-opus-4-1
+    status: retired
+    replacement: claude-opus-5-5
+    pattern: '(?<![\w.-])(?:anthropic\.)?claude-opus-4-1(?:-20250805)?(?:@\d{8})?(?:-v\d+(?::\d+)?)?(?![\w-])'
+  - id: claude-opus-4
+    status: retired
+    replacement: claude-opus-5-5
+    pattern: '(?<![\w.-])(?:anthropic\.)?claude-opus-4(?:-0)?(?:-20250514)?(?:@\d{8})?(?:-v\d+(?::\d+)?)?(?![\w-])'
+  - id: claude-sonnet-4
+    status: retired
+    replacement: claude-sonnet-5-5
+    pattern: '(?<![\w.-])(?:anthropic\.)?claude-sonnet-4(?:-0)?(?:-20250514)?(?:@\d{8})?(?:-v\d+(?::\d+)?)?(?![\w-])'
+  - id: claude-3-family
+    status: retired
+    replacement: "the current model of the same tier (claude-haiku-5-5, claude-sonnet-5-5, claude-opus-5-5)"
+    pattern: '(?<![\w.-])(?:anthropic\.)?claude-3(?:-[57])?-(?:haiku|sonnet|opus)(?:-\d{8}|-latest)?(?:@\d{8})?(?:-v\d+(?::\d+)?)?(?![\w-])'
+  - id: claude-2
+    status: retired
+    replacement: claude-opus-5-5
+    pattern: '(?<![\w.-])(?:anthropic\.)?claude-2(?:\.[01])?(?![\w.-])'
+  - id: claude-instant
+    status: retired
+    replacement: claude-haiku-5-5
+    pattern: '(?<![\w.-])(?:anthropic\.)?claude-instant(?:-v?1(?:\.\d)?)?(?![\w.-])'
+  - id: claude-prose-retired
+    status: retired
+    replacement: "the current model of the same tier"
+    pattern: '\bClaude (?:(?:3(?:\.[57])?) (?:Haiku|Sonnet|Opus)|(?:Haiku|Sonnet|Opus) 3(?:\.[57])?|(?:Opus|Sonnet) 4(?:\.[01])?(?![.\d])|2(?:\.[01])?(?![.\d])|Instant)\b'
+  - id: claude-sonnet-4-5
+    status: deprecated
+    replacement: claude-sonnet-5-5
+    pattern: '(?<![\w.-])(?:anthropic\.)?claude-sonnet-4-5(?:-20250929)?(?:@\d{8})?(?:-v\d+(?::\d+)?)?(?![\w-])|\bClaude Sonnet 4\.5\b'
+  - id: claude-mythos-preview
+    status: deprecated
+    replacement: "claude-mythos-5-1 or claude-fable-5-1"
+    pattern: '(?<![\w.-])claude-mythos-preview(?![\w-])'

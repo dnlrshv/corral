@@ -33,6 +33,7 @@ memory = ["jsonschema>=4"]
 corral = "corral.cli:main"
 corral-surface-check = "corral.hooks.surface_check:main"
 corral-surface-reminder = "corral.hooks.surface_reminder:main"
+corral-instructions-lint = "corral.instructions.cli:lint_main"
 corral-magic-numbers = "corral.hooks.magic_numbers:main"
 corral-telemetry-capture = "corral.telemetry.capture:main"
 corral-execution-client = "corral.execution.client:main"
@@ -47,6 +48,7 @@ include = ["corral*"]
 exclude = ["tests*", "_import*"]
 
 [tool.setuptools.package-data]
+"corral.instructions" = ["data/*.yaml"]
 "corral.memory" = ["schemas/*.json"]
 "corral.governance" = ["schemas/*.json"]
 

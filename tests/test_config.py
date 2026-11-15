@@ -159,3 +159,26 @@ def test_retro_root_incident_floor_cannot_be_lowered(tmp_path: Path) -> None:
     config_path.write_text("retro:\n  evidence:\n    min_root_incidents: 1\n")
     with pytest.raises(ValueError, match=r"min_root_incidents must be >= 2"):
         load_config(config_path)
+
+
+def test_instructions_lint_config_defaults_and_overrides(tmp_path):
+    from corral.instructions.config import instructions_config_from_mapping
+    cfg = instructions_config_from_mapping({}).lint
+    assert cfg.max_file_bytes == 1048576 and cfg.use_governance_globs
+    cfg = instructions_config_from_mapping({'lint': {'extend_include': ['rules/**'], 'checks': {'double-bang': {'severity': 'info'}}}}).lint
+    assert cfg.extend_include == ['rules/**']
+    assert cfg.checks['double-bang'].severity == 'info'
+
+
+@pytest.mark.parametrize('lint', [
+    {'checks': {'absent': {}}},
+    {'checks': {'retired-model-id': {'allow': ['[']}}},
+    {'checks': {'double-bang': {'mystery': True}}},
+    {'checks': {'double-bang': {'enabled': 1}}},
+    {'checks': {'double-bang': {'severity_by_kind': {'bad': 'error'}}}},
+    {'max_file_bytes': True}, {'min_severity': 'low'}, {'include': 'AGENTS.md'},
+])
+def test_instructions_lint_config_rejects_unknown_check_and_bad_regex(lint):
+    from corral.instructions.config import instructions_config_from_mapping
+    with pytest.raises(ValueError):
+        instructions_config_from_mapping({'lint': lint})

@@ -3,6 +3,16 @@
 All notable changes to Corral are recorded here, following Keep a Changelog.
 Every release section must include a `### Consumer action` subsection, even when no action is required.
 
+## [Unreleased]
+
+### Added
+
+- `corral instructions lint`: instruction discovery, suppression comments, text and JSON reports, and deterministic repeated-emphasis and retired-model checks.
+
+### Consumer action
+
+None. Instruction lint is opt-in.
+
 ## [0.2.1] - 2026-09-28
 
 ### Fixed

@@ -63,6 +63,7 @@ repos:
     hooks:
       - id: surface-check
       - id: magic-numbers
+      - id: instructions-lint
 ```
 
 Install and run the hooks:
@@ -108,6 +109,7 @@ Set `seats_file: seats.yaml`, `retro.drafter_seat`, and `retro.verifier_seats` i
 | `corral.telemetry` | Capture session records, roll up weekly data, and reconstruct CI outcomes. | `corral telemetry capture`, `rollup`, `ci-outcome` |
 | `corral.retro` | Mine evidence, draft candidates, verify them, and render weekly summaries. | `corral retro seats check`, `run`, `revert-refinement` |
 | `corral.governance` | Enforce the rule/proposal contract, replay retrieval, lint budgets, and report staleness. | `corral governance check`, `replay`, `build-corpus`, `lint-budget`, `staleness` |
+| `corral.instructions` | Sync and lint agent instruction files. | `corral instructions sync`, `corral instructions lint` |
 | `corral.protocol` | Define execution protocol and store schema compatibility versions. | `corral version`, `corral-service version` |
 
 ## Versioning and upgrades

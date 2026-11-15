@@ -9,7 +9,7 @@ Release tags are annotated `vX.Y.Z` tags on the merge commit. The tag and GitHub
 ## Checklist
 
 1. Prepare a `CHANGELOG.md` section with Added, Changed, Fixed, and **Consumer action**. State exact compatibility and pickup work, including when no consumer changes are required.
-2. Bump the package version in both files, and bump protocol or store schema versions when their contracts change. Run the version commands and tests.
+2. Refresh `corral/instructions/data/model_ids.yaml` against the provider deprecation data and update `as_of`, because every model finding reports the snapshot date. Bump the package version in both files, and bump protocol or store schema versions when their contracts change. Run the version commands and tests.
 3. Merge only after required CI is green. Record the exact merge commit SHA.
 4. Create an annotated tag `vX.Y.Z` on that merge commit and publish it. Create a GitHub release for the tag with the corresponding CHANGELOG section as its body.
 5. Notify consumers by opening a pickup issue in each registered consumer repository. Include the tag, SHA, protocol minimum, Consumer action, and a link to [the upgrade procedure](upgrading.md).

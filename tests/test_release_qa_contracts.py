@@ -18,7 +18,7 @@ def test_documented_governance_validation_uses_shipped_examples(capsys) -> None:
 
 
 def test_hook_docs_install_pre_commit_prerequisite() -> None:
-    for relative in ("README.md", "docs/adoption.md"):
+    for relative in ("README.md", "docs/adoption.md", "docs/instructions.md"):
         text = (ROOT / relative).read_text(encoding="utf-8")
         assert "pip install pre-commit" in text
         assert text.index("pip install pre-commit") < text.index("pre-commit install")

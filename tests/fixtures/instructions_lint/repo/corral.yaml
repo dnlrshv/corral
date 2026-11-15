@@ -1,0 +1,8 @@
+governance:
+  registry: registry.yaml
+instructions:
+  lint:
+    include: [good/**, bad/**, docs/migrations/**]
+    checks:
+      retired-model-id:
+        exclude: [docs/migrations/**]

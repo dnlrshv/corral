@@ -7,15 +7,11 @@ Every release section must include a `### Consumer action` subsection, even when
 
 ### Added
 
-- `corral instructions lint`: instruction discovery, suppression comments, text and JSON reports, and deterministic repeated-emphasis and retired-model checks.
-
-- Instruction lint checks unreasoned emphasis, thinking scaffolds, word caps, historical and migration-relative wording, grader vocabulary, and reasons in generated rules; registered governance anchors are exempt from checks that would edit their wording.
-
-- Instruction lint resolves local imports, links and code paths, and checks make targets and package scripts without executing documented commands.
+- `corral instructions lint`: deterministic checks for agent instruction files (caps emphasis without a reason, repeated exclamation emphasis, retired model IDs, thinking scaffolds, numeric word caps, history narratives, migration-relative phrasing, grader vocabulary, dead paths, dead make/package-script targets, skill trigger-description bloat), with suppression comments, JSON output and the `instructions-lint` pre-commit hook.
 
 ### Consumer action
 
-None. Instruction lint is opt-in.
+None. The command and hook are opt-in; add `- id: instructions-lint` to `.pre-commit-config.yaml` to enable the hook.
 
 ## [0.2.1] - 2026-09-28
 

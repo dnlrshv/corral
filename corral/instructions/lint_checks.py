@@ -330,3 +330,39 @@ CHECKS.update({spec.slug: spec for spec in [
     CheckSpec("dead-path", "Unresolved local paths", lint_refs.check_dead_path, lint_refs.validate_dead_path_options, "warning", "warning", True),
     CheckSpec("dead-command", "Missing make targets and package scripts", lint_refs.check_dead_command, no_options, "error", "warning", True),
 ]})
+
+
+def validate_trigger_options(options):
+    defaults = dict(max_chars=1024, warn_chars=600, max_quoted_phrases=5)
+    key = 'lint.checks.trigger-bloat'
+    for name in options.keys() - defaults.keys():
+        fail(key + '.' + str(name), 'is an unknown key')
+    result = {**defaults, **options}
+    for name, value in result.items():
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            fail(key + '.' + name, 'must be a positive integer')
+    return result
+
+
+QUOTED_PHRASES = re.compile(r'''"[^"\n]{1,80}"|“[^”\n]{1,80}”|(?<=[\s(])'[^'\n]{3,80}' ''', re.X)
+
+
+def check_trigger_bloat(doc, ctx):
+    if ctx.kind != 'skill':
+        return []
+    options = validate_trigger_options(ctx.config.checks['trigger-bloat'].options)
+    description = doc.frontmatter.get('description') if isinstance(doc.frontmatter, dict) else None
+    location = re.search(r'''^[ \t]*(?:description|"description"|'description')\s*:''', doc.original[:doc.frontmatter_end], re.M)
+    start = location.start() if location else 0
+    if not isinstance(description, str):
+        return [ctx.finding(doc, 'trigger-bloat', start, start + 12, 'SKILL.md frontmatter has no string "description"; the agent routes on it', 'error')]
+    out = []
+    if len(description) > options['max_chars']:
+        out.append(ctx.finding(doc, 'trigger-bloat', start, start + 12, f'description is {len(description)} characters; the limit is {options["max_chars"]}', 'error'))
+    count = len(QUOTED_PHRASES.findall(description))
+    if count > options['max_quoted_phrases'] or (len(description) > options['warn_chars'] and count > 3):
+        out.append(ctx.finding(doc, 'trigger-bloat', start, start + 12, f'description enumerates {count} example phrases ({len(description)} characters); name the categories of intent instead, ideally tuned against a trigger eval', 'warning'))
+    return out
+
+
+CHECKS['trigger-bloat'] = CheckSpec('trigger-bloat', 'Skill routing description length and example enumeration', check_trigger_bloat, validate_trigger_options, 'warning', 'warning')

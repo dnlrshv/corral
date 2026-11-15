@@ -158,7 +158,7 @@ def test_text_output_format_and_summary_line(tmp_path, capsys):
     assert lint_main(['--root', str(tmp_path)]) == 0
     out = capsys.readouterr().out
     assert 'AGENTS.md:1:5: warning double-bang' in out
-    assert out.splitlines()[-1].startswith('instructions lint: 0 errors, 1 warnings')
+    assert out.splitlines()[-1].startswith('instructions lint: 0 errors, 1 warning, 0 info shown (0 info hidden, 0 suppressed) in 1 file')
 
 
 def test_exit_codes_strict_and_non_strict(tmp_path):

@@ -83,6 +83,26 @@ findings:
   check: retired-model-id
   line: 3
   severity: warning
+- path: bad/skills/bloated/SKILL.md
+  check: trigger-bloat
+  line: 2
+  severity: warning
+- path: bad/skills/missing_desc/SKILL.md
+  check: trigger-bloat
+  line: 1
+  severity: error
+- path: bad/suppressions.md
+  check: unknown-suppression
+  line: 3
+  severity: warning
+- path: bad/suppressions.md
+  check: unused-suppression
+  line: 3
+  severity: info
+- path: bad/suppressions.md
+  check: unused-suppression
+  line: 5
+  severity: info
 - path: bad/thinking.md
   check: thinking-scaffold
   line: 1

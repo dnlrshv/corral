@@ -13,3 +13,11 @@
   language: python
   pass_filenames: false
   always_run: true
+
+- id: instructions-lint
+  name: corral instructions lint
+  description: Flag dated prompting patterns and dead references in agent instruction files.
+  entry: corral-instructions-lint --only-configured
+  language: python
+  types: [text]
+  pass_filenames: true

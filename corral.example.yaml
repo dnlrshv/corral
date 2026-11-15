@@ -74,6 +74,20 @@ governance:
     # proposal blocks are withheld until it is configured.
     demote_target_glob: null
 
+instructions:
+  lint:
+    # Additional instruction paths, appended to the default include list.
+    extend_include: []
+    # Omit this key to retain all default dependency and virtualenv exclusions.
+    # exclude: ["**/node_modules/**", "**/.venv/**", "**/venv/**", ".git/**", ".claude/worktrees/**", "**/vendor/**", "**/site-packages/**"]
+    checks:
+      retired-model-id:
+        # Migration histories may legitimately retain old model identifiers.
+        exclude: ["docs/migrations/**"]
+      dead-path:
+        # Repository-relative globs for generated paths Git does not ignore.
+        ignore: []
+
 retro:
   # Seat used to draft retrospective candidates/proposals.
   drafter_seat: retro-drafter

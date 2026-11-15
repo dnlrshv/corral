@@ -119,7 +119,9 @@ def test_service_endpoint_accepts_supported_request_and_emits_protocol(
         "event": {"status": "completed"}, "protocol": 1}
 
 
-def test_installed_service_validate_command(tmp_path, capsys):
+def test_installed_service_validate_command(tmp_path, capsys, monkeypatch):
+    overlay = tmp_path / "absent-overlay.yaml"
+    monkeypatch.setenv("CORRAL_OVERLAY_FILE", str(overlay))
     controller = tmp_path / "controller.json"
     controller.write_text(json.dumps({
         "state": str(tmp_path / "state"), "token": "fixture",
@@ -129,7 +131,8 @@ def test_installed_service_validate_command(tmp_path, capsys):
     before = {path.relative_to(tmp_path) for path in tmp_path.rglob("*")}
     assert service_command.main(["--config", str(config), "validate"]) == 0
     assert json.loads(capsys.readouterr().out) == {
-        "valid": True, "errors": [], "warnings": [], "protocol": 1,
+        "valid": True, "errors": [],
+        "warnings": [f"personal overlay is absent: {overlay}"], "protocol": 1,
         "store": {"found": None, "supported": 1, "compatible": True}}
     assert {path.relative_to(tmp_path) for path in tmp_path.rglob("*")} == before
 

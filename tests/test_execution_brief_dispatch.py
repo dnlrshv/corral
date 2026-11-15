@@ -71,6 +71,12 @@ def test_profile_tier_defaults_to_standard_and_rejects_unknown_values():
         for p in registered_profiles()
         if p.id.startswith("gemini-3.8-flash-")
     )
+    assert (
+        next(
+            p for p in registered_profiles() if p.id == "qwen3.8-max-high-codex-alibaba"
+        ).tier
+        == "standard"
+    )
 
 
 @requires_sandbox

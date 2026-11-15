@@ -10,8 +10,8 @@ Submodules:
 - :mod:`corral.preflight.brief` — brief assembly (LLM, fallback, general).
 - :mod:`corral.preflight.brief_validation` — post-validation of LLM output.
 - :mod:`corral.preflight.auth` — model calls and env-var auth precedence.
-- :mod:`corral.preflight.retry` — prompt templates and one-shot retry.
-- :mod:`corral.preflight.parser` — YAML parsing and secret redaction.
+- :mod:`corral.preflight.contract` — brief fields, caps, JSON schema and prompt.
+- :mod:`corral.preflight.parser` — JSON parsing and secret redaction.
 - :mod:`corral.preflight.gotcha_budget` — gotcha injection caps.
 - :mod:`corral.preflight.quota` — optional quota-snapshot telemetry.
 - :mod:`corral.preflight.cli` — the ``corral preflight`` entry point.

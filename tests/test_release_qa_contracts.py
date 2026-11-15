@@ -31,7 +31,7 @@ def test_dependency_lower_bounds_are_declared() -> None:
         '"pyyaml>=6"',
         '"pyarrow>=14"',
         '"networkx>=3"',
-        '"anthropic>=0.40"',
+        '"anthropic>=0.88"',
         '"jsonschema>=4"',
     ):
         assert requirement in text

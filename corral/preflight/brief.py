@@ -20,7 +20,6 @@ import yaml
 from corral.preflight import gotcha_budget
 from corral.preflight.auth import (
     DEFAULT_PREFLIGHT_MODEL,
-    PreflightLLMResponse,
     call_llm_with_meta,
     has_llm_auth,
 )
@@ -28,13 +27,15 @@ from corral.preflight.brief_validation import (
     BriefQualityError,
     apply_semantic_validation,
 )
-from corral.preflight.parser import parse_brief, sanitize_preflight_error
-from corral.preflight.retry import (
+from corral.preflight.parser import parse_brief_json, sanitize_preflight_error
+from corral.preflight.contract import (
     LIST_FIELD_CAPS,
     BriefResponseError,
     BriefRefusalError,
     BriefTruncatedError,
-    generate_brief_with_retry,
+    BRIEF_SCHEMA,
+    build_prompt,
+    normalize_model_brief,
     issue_text,
     validate_brief,
 )
@@ -307,19 +308,21 @@ def generate_brief(
     recognized_modules: frozenset[str] = frozenset(),
     workflow_kinds: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
-    def call_model(
-        prompt: str, call_max_tokens: int, history: list[dict[str, str]] | None = None
-    ) -> PreflightLLMResponse:
-        return call_llm_with_meta(prompt, call_max_tokens, history=history, model=model)
-
-    brief, stop_reason = generate_brief_with_retry(
-        issue=issue,
-        code_map_yaml=surfaces_yaml,
-        max_tokens=max_tokens,
-        call_llm_with_meta=call_model,
-        parse_brief=parse_brief,
-        extract_needs_human_paths=extract_needs_human_paths,
+    response = call_llm_with_meta(
+        build_prompt(issue, surfaces_yaml), max_tokens,
+        model=model, effort=None, output_schema=BRIEF_SCHEMA,
     )
+    if response.stop_reason == "refusal":
+        raise BriefRefusalError(response.refusal_category)
+    if response.stop_reason == "max_tokens":
+        raise BriefTruncatedError(
+            f"output reached max_tokens={max_tokens} before the brief was complete"
+        )
+    if response.stop_reason != "end_turn":
+        raise BriefResponseError(f"unexpected stop_reason {response.stop_reason!r}")
+    brief = normalize_model_brief(parse_brief_json(response.text))
+    brief["do_not_touch"] = extract_needs_human_paths(surfaces_yaml)
+    validate_brief(brief)
     apply_semantic_validation(brief, surfaces_yaml, repo_root, recognized_modules)
     brief[AGENT_GOTCHAS_FIELD] = filter_briefer_gotchas(
         load_agent_gotchas(gotchas_path),
@@ -327,7 +330,7 @@ def generate_brief(
         surface_ids=brief.get("surfaces_in_scope"),
         workflow_kinds=workflow_kinds,
     )
-    brief["stop_reason"] = stop_reason
+    brief["stop_reason"] = response.stop_reason
     return brief
 
 

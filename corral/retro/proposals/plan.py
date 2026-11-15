@@ -66,15 +66,18 @@ _MARKER_BEGIN = (
 _MARKER_END = "<!-- retro-proposed-rules:end -->"
 _MARKER_HEADING = "## Retrospective-proposed rules (pending human review)"
 
-#: Independent-verifier contract (source semantics, no private references).
-_VERIFIER_CONTRACT = (
-    "- Evidence must show a REPEATED agent mistake (>=2 distinct root incidents), "
-    "not a one-off.\n"
-    "- Sharpen an existing rule rather than add a near-duplicate; adding is only "
-    "valid if no existing rule covers the concern.\n"
-    "- Placement must be as high on the configured tier ladder as applicable.\n"
-    "- The rule must be concrete and actionable, not narrative or aspirational."
-)
+
+def _verifier_contract(min_incidents: int) -> str:
+    return (
+        f"- The evidence shows the same agent mistake in at least {min_incidents} "
+        "distinct root incidents, not a one-off.\n"
+        "- The edit sharpens an existing rule unless no existing rule covers the "
+        "concern.\n"
+        "- The edit sits on the highest tier of the configured ladder that applies.\n"
+        "- The rule is one concrete, actionable sentence that carries its reason; it "
+        "is not narrative or aspirational."
+    )
+
 
 _REGISTRY_HEADER = "schema_version: 1\nrules:\n"
 
@@ -537,7 +540,8 @@ def draft_and_verify_proposals(
             {"id": rid, **r} for rid, r in base_registry.items() if _overlaps_area(r, group)
         ]
         prompt = draft.build_doc_proposal_prompt(
-            group, excerpts, candidate_rules=candidate_rules, tiers=governance.proposals.tiers
+            group, excerpts, candidate_rules=candidate_rules,
+            tiers=governance.proposals.tiers, min_incidents=min_incidents,
         )
         try:
             proposal = draft.draft_and_normalize_with_retry(
@@ -620,7 +624,7 @@ def draft_and_verify_proposals(
         result = doc_verification.verify(
             subject=_render_subject(proposal),
             evidence=render_group_evidence(group, excerpts),
-            contract=_VERIFIER_CONTRACT,
+            contract=_verifier_contract(min_incidents),
             registry=seat_registry,
             config=config,
             runner_factory=runner_factory,

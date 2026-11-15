@@ -13,6 +13,8 @@ Every release section must include a `### Consumer action` subsection, even when
 
 ### Changed
 
+- Retro prompts ask for one plain rule sentence with its reason and no longer describe scoring; prompts state the configured evidence floor.
+
 - The default preflight model is `claude-haiku-5-5` (was `claude-haiku-4-5-20251001`), sent with `effort: low`.
 
 - Preflight requests the brief with structured outputs (`output_config.format`, a JSON schema) and writes the same YAML brief file from the parsed result. The prompt no longer dictates YAML formatting, and the one-shot retry that replayed an invalid reply is removed: an invalid response falls back to the deterministic brief after one call.

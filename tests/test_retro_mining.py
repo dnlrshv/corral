@@ -151,3 +151,14 @@ def test_prompt_carries_excerpts_and_bounds() -> None:
     plain = build_prompt(group, {})
     assert "(unavailable)" in plain
     assert "immediate review issue" not in plain
+
+
+
+def test_prompt_asks_for_plain_rule_with_reason():
+    group = group_evidence([pair(1, 2)])[0]
+    prompt = build_prompt(group, {})
+    assert "reason in the same sentence" in prompt
+    assert "because" in prompt
+    assert "plain sentence case" in prompt
+    for text in ["ALWAYS or", "NEVER do", "scored", "Return ONLY"]:
+        assert text not in prompt

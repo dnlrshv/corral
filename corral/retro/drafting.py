@@ -16,6 +16,7 @@ from datetime import date
 from corral.retro.json_util import extract_json_payload
 from corral.retro.mining import (
     DEFAULT_SEVERITIES,
+    MIN_ROOT_INCIDENTS,
     EvidenceGroup,
     GotchaCandidate,
     build_prompt,
@@ -30,9 +31,14 @@ def extract_candidate(
     *,
     created_on: date | None = None,
     allowed_severities: Sequence[str] = DEFAULT_SEVERITIES,
+    min_root_incidents: int = MIN_ROOT_INCIDENTS,
 ) -> GotchaCandidate:
     """Call ``llm_complete(prompt) -> str`` and normalize its JSON response."""
-    response = llm_complete(build_prompt(group, excerpts, allowed_severities=allowed_severities))
+    prompt = build_prompt(
+        group, excerpts, allowed_severities=allowed_severities,
+        min_root_incidents=min_root_incidents,
+    )
+    response = llm_complete(prompt)
     return _parse_candidate_response(
         response, group, created_on=created_on, allowed_severities=allowed_severities
     )
@@ -57,11 +63,11 @@ def build_retry_prompt(original_prompt: str, first_response: str, error: str) ->
     """Feed a failed first response and validation error back to the model once."""
     return (
         f"{original_prompt}\n\n"
-        "--- RETRY: your previous response failed schema validation ---\n"
+        "--- Correction: the previous response failed validation ---\n"
         f"Previous response:\n{first_response}\n\n"
         f"Validation error: {error}\n\n"
-        "Return ONLY the corrected JSON object matching the schema above. Do not "
-        "include any explanation, markdown fences, or text outside the JSON object."
+        "Return the corrected JSON object and nothing else, because the reply is "
+        "parsed as JSON."
     )
 
 
@@ -73,6 +79,7 @@ def extract_candidate_with_retry(
     created_on: date | None = None,
     allowed_severities: Sequence[str] = DEFAULT_SEVERITIES,
     severe_severities: Sequence[str] = (),
+    min_root_incidents: int = MIN_ROOT_INCIDENTS,
 ) -> GotchaCandidate:
     """Draft a candidate, retrying once on JSON/schema validation failure."""
     prompt = build_prompt(
@@ -80,6 +87,7 @@ def extract_candidate_with_retry(
         excerpts,
         allowed_severities=allowed_severities,
         severe_severities=severe_severities,
+        min_root_incidents=min_root_incidents,
     )
     response = llm_complete(prompt)
     try:

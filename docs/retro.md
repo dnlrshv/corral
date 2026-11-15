@@ -33,13 +33,15 @@ The cap applies before verification. A refuted candidate does not free a slot fo
 
 The configured `retro.drafter_seat` receives compact evidence: paired pull-request excerpts, session learning notes, and sanitized bridge evidence. The output parser requires the gotcha rule, rationale, severity, applicability dimensions, confidence, and source references. Candidates below `retro.confidence_threshold` are recorded as skipped.
 
+The drafter writes one plain rule sentence with its reason in the same sentence, because preflight shows that rule verbatim to future agents. The separate rationale cites evidence for the maintainer. Drafter prompts and the summary state the configured distinct-root-incident floor, so they agree with the selection policy.
+
 `retro.allowed_severities` defines the vocabulary the drafter may use. `retro.severe_severities` is the subset eligible for immediate review-issue handling through `retro.issue_sink`. Keep the subset empty until maintainers agree on the operational meaning of each severity.
 
 A transient drafting failure is retried within the bounded retry policy. Exhausting retries opens a pass-level capacity circuit: later groups are reported as deferred rather than called blindly.
 
 ## 4. An independent seat challenges the draft
 
-Each drafted gotcha is sent to verifier seats in configured order. With `require_distinct_provider: true`, a seat carrying the drafter's provider label is ineligible. The verifier must return `CONFIRM` or `REFUTE` with evidence-based reasoning and may sharpen the wording. A malformed response receives one constrained retry.
+Each drafted gotcha is sent to verifier seats in configured order. With `require_distinct_provider: true`, a seat carrying the drafter's provider label is ineligible. The verifier must return `CONFIRM` or `REFUTE` with evidence-based reasoning and may sharpen the wording. A sharpened rule keeps its reason in the same sentence. A malformed response receives one constrained retry.
 
 Only an explicit `REFUTE` rejects a gotcha under the default `proceed-unverified` availability policy. When every verifier is unavailable, the candidate may continue marked `UNVERIFIED`, including the reason and provenance gap. Set `gotcha_unavailable_policy: fail-closed` if that degradation is inappropriate for your repository.
 

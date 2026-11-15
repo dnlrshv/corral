@@ -3,6 +3,12 @@
 All notable changes to Corral are recorded here, following Keep a Changelog.
 Every release section must include a `### Consumer action` subsection, even when no action is required.
 
+## [Unreleased]
+
+### Added
+
+- A rules layer (`corral.rules`) with packaged defaults, repository rules, an external personal overlay, and `corral rules show`.
+
 ## [0.2.1] - 2026-09-28
 
 ### Fixed

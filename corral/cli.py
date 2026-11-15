@@ -29,6 +29,43 @@ from corral.config import load_config
 from corral.protocol import PROTOCOL_VERSION, STORE_SCHEMA_VERSION, installed_commit
 
 
+def _cmd_rules_show(args: argparse.Namespace) -> int:
+    from dataclasses import asdict
+    from corral.rules import load_layers
+    import yaml
+
+    try:
+        if args.root is None:
+            cfg = load_config()
+            root = cfg.root
+        else:
+            root = args.root.resolve()
+            if (root / "corral.yaml").exists():
+                load_config(root / "corral.yaml")
+        # The executor_brief config dataclass lands with dispatch policy; read its
+        # rules declaration here so this standalone command is useful immediately.
+        path = root / "corral.yaml"
+        doc = yaml.safe_load(path.read_text()) if path.exists() else {}
+        section = (doc or {}).get("executor_brief", {}) or {}
+        if not isinstance(section, dict):
+            raise ValueError("executor_brief must be a mapping")
+        rules_file = section.get("rules_file")
+        if rules_file is not None and not isinstance(rules_file, str):
+            raise ValueError("executor_brief.rules_file must be a string or null")
+        rules = load_layers(workspace=root, repo_rules_file=rules_file).applicable(
+            repo=args.repo, workspace=str(root), tier=args.tier, phase=args.phase, harness=args.harness)
+        if args.json:
+            print(json.dumps([asdict(rule) for rule in rules], sort_keys=True))
+        else:
+            for rule in rules:
+                print(f"- [{rule.id}] ({rule.source}) {rule.text} — because {rule.reason}")
+        return 0
+    except (ValueError, PermissionError, OSError, yaml.YAMLError) as exc:
+        from corral.redaction import redact_text
+        print(redact_text(str(exc)), file=sys.stderr)
+        return 1
+
+
 def _cmd_version(args: argparse.Namespace) -> int:
     print(json.dumps({"version": __version__, "commit": installed_commit(),
                       "protocol": PROTOCOL_VERSION,
@@ -610,6 +647,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print the report; write nothing, file no issues",
     )
     governance_staleness.set_defaults(handler=_cmd_governance_staleness)
+
+    rules = sub.add_parser("rules", help="Inspect merged executor rules")
+    rules_sub = rules.add_subparsers(dest="rules_command", required=True)
+    show = rules_sub.add_parser("show", help="Show rules used by executor-brief rendering")
+    show.add_argument("--root", type=Path)
+    show.add_argument("--repo")
+    show.add_argument("--tier", choices=("small", "standard", "frontier"), default="standard")
+    show.add_argument("--phase", default="implementation")
+    show.add_argument("--harness")
+    show.add_argument("--json", action="store_true")
+    show.set_defaults(handler=_cmd_rules_show)
 
     return parser
 

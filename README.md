@@ -104,6 +104,7 @@ Set `seats_file: seats.yaml`, `retro.drafter_seat`, and `retro.verifier_seats` i
 | `corral.lineage` | Extract call, SQL, file, config, and manifest lineage edges. | `corral lineage build` |
 | `corral.hooks` | Flag declared surfaces and duplicated configured constants. | `corral hooks surface-check`, `surface-reminder`, `magic-numbers` |
 | `corral.preflight` | Render task briefs with a deterministic no-auth fallback. | `corral preflight` |
+| `corral.rules` | Merge generic, repository and personal executor rules. | `corral rules show` |
 | `corral.memory` | Validate durable gotcha and refinement registries. | `corral memory validate` |
 | `corral.telemetry` | Capture session records, roll up weekly data, and reconstruct CI outcomes. | `corral telemetry capture`, `rollup`, `ci-outcome` |
 | `corral.retro` | Mine evidence, draft candidates, verify them, and render weekly summaries. | `corral retro seats check`, `run`, `revert-refinement` |

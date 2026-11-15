@@ -1,0 +1,14 @@
+schema_version: 1
+rules:
+  - id: corral.evidence-is-command-output
+    text: Report a check as run only with its command, exit code and output tail. A syntax or compile check is not a test run.
+    reason: The controller accepts work on verifier evidence; a claimed run that did not happen is returned, and a syntax check does not exercise the criteria.
+  - id: corral.leave-version-control-to-the-controller
+    text: Do not commit, push, rebase, reset or change branches; edit files in the working copy only.
+    reason: The controller verifies the workspace and records provenance against the checkout it prepared, and exports accepted changes itself.
+  - id: corral.stay-inside-the-declared-scope
+    text: Change only files inside the declared scope. A needed change outside it is a blocker to report, not a change to make.
+    reason: Only declared candidate paths are verified and exported; an undeclared change is discarded.
+  - id: corral.stop-on-ambiguity
+    text: When sources conflict or a criterion cannot be verified with the listed commands, stop and put the question in open_questions instead of choosing.
+    reason: The orchestrator can answer a question in minutes; undoing a guessed decision costs a generation.

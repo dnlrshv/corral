@@ -317,3 +317,32 @@ def test_failed_attempt_is_retained_in_the_attempt_history(tmp_path):
     assert attempts[0]["synthetic"] is True
     assert json.loads((task_dir / ADAPTER_RESULT).read_text())["status"] == "failed"
     assert env["workspace"].is_dir()
+
+
+def test_adapter_writes_the_v1_result_schema_by_default(tmp_path):
+    from corral.execution.result_schema import RESULT_SCHEMA_V1
+    env, prepared, task_dir = _prepared(tmp_path)
+    assert run_adapter(task_dir, env["workspace"]) == 0
+    assert json.loads((Path(prepared.boundary.scratch) / "result-schema.json").read_text()) == RESULT_SCHEMA_V1
+
+
+def test_adapter_writes_the_codex_variant_for_a_codex_harness(tmp_path):
+    from corral.execution.result_schema import for_harness
+    env, prepared, task_dir = _prepared(tmp_path)
+    plan_path = task_dir / "launch-plan.json"
+    plan = json.loads(plan_path.read_text())
+    plan["route"]["harness"] = "codex"
+    plan_path.write_text(json.dumps(plan))
+    run_adapter(task_dir, env["workspace"])
+    assert json.loads((Path(prepared.boundary.scratch) / "result-schema.json").read_text()) == for_harness("codex")
+
+
+def test_adapter_honours_a_spec_result_schema_override(tmp_path):
+    env, prepared, task_dir = _prepared(tmp_path)
+    path = task_dir / "context.json"
+    context = json.loads(path.read_text())
+    schema = {"type": "object", "properties": {"custom": {"type": "string"}}}
+    context["result_schema"] = schema
+    path.write_text(json.dumps(context))
+    run_adapter(task_dir, env["workspace"])
+    assert json.loads((Path(prepared.boundary.scratch) / "result-schema.json").read_text()) == schema

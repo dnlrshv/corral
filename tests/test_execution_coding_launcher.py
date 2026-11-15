@@ -33,3 +33,10 @@ def test_codex_coding_contract_refuses_an_implicit_provider():
 
 def test_prompt_contents_are_not_reinterpreted_as_route_placeholders():
     assert _substitute(["{prompt}"], {"prompt": "preserve {workspace} literally"}) == ["preserve {workspace} literally"]
+
+
+def test_codex_coding_contract_passes_the_result_schema_file():
+    from corral.execution.routes import PLACEHOLDERS
+    argv = argv_for("codex", model_provider="approved_provider")
+    assert argv[argv.index("--output-schema") + 1] == "{schema_file}"
+    assert "{schema_file}" in PLACEHOLDERS

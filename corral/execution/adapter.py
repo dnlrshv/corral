@@ -24,7 +24,7 @@ from corral import __version__
 from corral.protocol import installed_commit
 
 from ..redaction import redact_nested_text
-from . import containment, credential_env, envelopes
+from . import containment, credential_env, envelopes, result_schema
 from .inspection_packet import PACKET_FILE
 from .store import digest
 from .workspace import safe_path
@@ -39,7 +39,7 @@ RESULT_SCHEMA_FILE = "result-schema.json"
 HARNESS_LOG = "harness.log"
 
 BASE_ENV_NAMES = ("PATH", "LANG", "LC_ALL", "TERM")
-DEFAULT_RESULT_SCHEMA = {"type": "object", "additionalProperties": True}
+DEFAULT_RESULT_SCHEMA = result_schema.RESULT_SCHEMA_V1
 
 
 def source_root() -> Path:
@@ -252,7 +252,8 @@ def run_adapter(task_dir: Path, workspace: Path) -> int:
                 raise PermissionError("inspection packet digest is invalid")
         structured_path = scratch / "structured-result.json"
         schema_path = scratch / RESULT_SCHEMA_FILE
-        schema_path.write_text(json.dumps(context.get("result_schema") or DEFAULT_RESULT_SCHEMA, indent=2))
+        schema_path.write_text(json.dumps(
+            context.get("result_schema") or result_schema.for_harness(route.get("harness")), indent=2))
         values = {"workspace": str(workspace), "scratch": str(scratch),
                   "prompt_file": str(prompt_path), "model": str(plan.get("model") or ""),
                   "prompt": prompt_path.read_text(),

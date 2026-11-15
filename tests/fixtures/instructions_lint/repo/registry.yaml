@@ -1,0 +1,8 @@
+schema_version: 1
+rules:
+  R-PAYMENTS-001:
+    file: good/registered_anchor.md
+    anchor: Payment changes MUST include a rollback note.
+    concern_key: payment-rollbacks
+    modality: MUST
+    review_by: maintainers

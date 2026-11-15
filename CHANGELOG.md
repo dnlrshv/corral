@@ -7,14 +7,21 @@ Every release section must include a `### Consumer action` subsection, even when
 
 ### Fixed
 
+- The prompt and validator agree on the `surfaces_in_scope` cap (8); both read it from one constant. Over-cap lists are truncated to their cap instead of failing the brief.
+
 - Preflight reads the model's text blocks by type, so responses that begin with thinking blocks no longer fail.
 
 ### Changed
+
+- Preflight requests the brief with structured outputs (`output_config.format`, a JSON schema) and writes the same YAML brief file from the parsed result. The prompt no longer dictates YAML formatting, and the one-shot retry that replayed an invalid reply is removed: an invalid response falls back to the deterministic brief after one call.
+- The `preflight` extra requires `anthropic>=0.88`.
 
 - A refused or truncated preflight response falls back to the deterministic brief without a second call, with `fallback_reason` `llm_refused` or `llm_truncated`.
 - The default `preflight.max_tokens` is 16000 (was 1500), because thinking counts toward the limit.
 
 ### Consumer action
+
+- Upgrade the `anthropic` package in environments that install `corral[preflight]`. A `preflight.model` override must name a model that supports structured outputs. Code that imported the internal preflight retry module or YAML parser must switch to `corral.preflight.contract`.
 
 - Repositories that set `preflight.max_tokens` explicitly to a small value should raise it before moving to a thinking model. Telemetry consumers that enumerate `fallback_reason` values should accept `llm_refused` and `llm_truncated`.
 

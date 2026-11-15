@@ -76,7 +76,9 @@ def _call_anthropic(
     model: str,
     prompt: str,
     max_tokens: int,
-    history: list[dict[str, str]] | None = None,
+    *,
+    effort: str | None = None,
+    output_schema: dict | None = None,
 ) -> PreflightLLMResponse:
     _load_dotenv_once()
     import anthropic
@@ -91,12 +93,19 @@ def _call_anthropic(
     elif auth_token is not None:
         client_kwargs["auth_token"] = auth_token
     client = anthropic.Anthropic(**client_kwargs)
-    messages = [*(history or []), {"role": "user", "content": prompt}]
-    message = client.messages.create(
-        model=model,
-        max_tokens=max_tokens,
-        messages=messages,
-    )
+    create_kwargs: dict[str, Any] = {
+        "model": model,
+        "max_tokens": max_tokens,
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    output_config: dict[str, Any] = {}
+    if output_schema is not None:
+        output_config["format"] = {"type": "json_schema", "schema": output_schema}
+    if effort is not None:
+        output_config["effort"] = effort
+    if output_config:
+        create_kwargs["output_config"] = output_config
+    message = client.messages.create(**create_kwargs)
     text = "".join(
         getattr(block, "text", "") for block in (message.content or [])
         if getattr(block, "type", None) == "text"
@@ -113,23 +122,13 @@ def _call_anthropic(
 def call_llm_with_meta(
     prompt: str,
     max_tokens: int,
-    history: list[dict[str, str]] | None = None,
     *,
     model: str = DEFAULT_PREFLIGHT_MODEL,
+    effort: str | None = None,
+    output_schema: dict | None = None,
 ) -> PreflightLLMResponse:
-    """Call the preflight model and return both the text and ``stop_reason``.
-
-    ``history`` prepends prior turns (e.g. the model's own malformed reply)
-    ahead of ``prompt`` as the newest user turn -- used by the one-shot retry
-    in brief generation to feed a validation error back to the model within
-    the same conversation instead of a stateless retry.
-    """
-    return _call_anthropic(model, prompt, max_tokens, history=history)
-
-
-def call_llm(prompt: str, max_tokens: int, *, model: str = DEFAULT_PREFLIGHT_MODEL) -> str:
-    """Text-only wrapper around :func:`call_llm_with_meta`."""
-    return call_llm_with_meta(prompt, max_tokens, model=model).text
+    """Make one model call with the requested response schema."""
+    return _call_anthropic(model, prompt, max_tokens, effort=effort, output_schema=output_schema)
 
 
 def warn_deprecated_fallback_on_error() -> None:

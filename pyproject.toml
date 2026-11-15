@@ -25,7 +25,7 @@ Documentation = "https://github.com/dnlrshv/corral/tree/main/docs"
 query = ["networkx>=3"]
 # `corral preflight` LLM brief generation. Without this extra the command
 # still works and emits the deterministic code-map fallback brief.
-preflight = ["anthropic>=0.40", "python-dotenv"]
+preflight = ["anthropic>=0.88", "python-dotenv"]
 # `corral memory validate` JSON-Schema validation.
 memory = ["jsonschema>=4"]
 

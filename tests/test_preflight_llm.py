@@ -1,22 +1,24 @@
 """LLM-path tests with a mocked Anthropic client (no network).
 
 The scripted LLM mock patches ``corral.preflight.auth._call_anthropic`` so
-retry orchestration runs without SDK construction. Auth resolution has a
+brief generation runs without SDK construction. Auth resolution has a
 separate fake-SDK test below.
 """
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
 from corral.cli import main
 from corral.preflight import auth
 from corral.preflight.parser import sanitize_preflight_error
-from corral.preflight.retry import BriefResponseError
+from corral.preflight.contract import BriefResponseError
 
 from .preflight_support import clean_preflight_env  # noqa: F401
 
@@ -28,29 +30,16 @@ surfaces:
     paths: [src/real.py]
 """
 
-VALID_BRIEF_YAML = """
-files_to_touch:
-  - src/real.py
-files_to_read_only:
-  - src/real.py
-surfaces_in_scope:
-  - real-surface
-  - ghost-surface
-cross_cutting_concerns:
-  - Keep threshold semantics stable.
-recent_related_prs:
-  - "#1023"
-invariants_to_preserve:
-  - Preserve threshold behavior.
-test_files:
-  - src/test_real.py
-estimated_blast_radius: medium
-do_not_touch: []
-"""
-
-WRAPPED_BRIEF_YAML = "preflight_brief_v1:\n" + "\n".join(
-    f"  {line}" if line else line for line in VALID_BRIEF_YAML.strip().splitlines()
-)
+VALID_BRIEF_JSON = json.dumps({
+    "files_to_touch": ["src/real.py"],
+    "files_to_read_only": ["src/real.py"],
+    "surfaces_in_scope": ["real-surface", "ghost-surface"],
+    "cross_cutting_concerns": ["Keep threshold semantics stable."],
+    "recent_related_prs": ["#1023"],
+    "invariants_to_preserve": ["Preserve threshold behavior."],
+    "test_files": ["src/test_real.py"],
+    "estimated_blast_radius": "medium",
+})
 
 
 @pytest.fixture
@@ -73,9 +62,9 @@ class MockAnthropic:
         self.responses = list(responses)
         self.calls: list[dict] = []
 
-    def __call__(self, model, prompt, max_tokens, history=None, **kwargs):
+    def __call__(self, model, prompt, max_tokens, **kwargs):
         self.calls.append(
-            {"model": model, "prompt": prompt, "max_tokens": max_tokens, "history": history}
+            {"model": model, "prompt": prompt, "max_tokens": max_tokens, **kwargs}
         )
         text, stop_reason = self.responses.pop(0)
         return auth.PreflightLLMResponse(text=text, stop_reason=stop_reason)
@@ -96,9 +85,8 @@ def run_preflight(monkeypatch, repo: Path, mock: MockAnthropic, *extra: str):
         ]
     )
 
-
 def test_llm_happy_path(monkeypatch, repo: Path, capsys) -> None:
-    mock = MockAnthropic([(VALID_BRIEF_YAML, "end_turn")])
+    mock = MockAnthropic([(VALID_BRIEF_JSON, "end_turn")])
 
     rc = run_preflight(monkeypatch, repo, mock)
 
@@ -117,35 +105,6 @@ def test_llm_happy_path(monkeypatch, repo: Path, capsys) -> None:
     assert brief["files_to_touch"] == ["src/real.py"]
     assert brief["test_files"] == ["src/test_real.py"]
     assert brief["estimated_blast_radius"] == "medium"
-
-
-def test_schema_invalid_response_retries_once_with_error_feedback(
-    monkeypatch, repo: Path, capsys
-) -> None:
-    mock = MockAnthropic(
-        [(WRAPPED_BRIEF_YAML, "end_turn"), (VALID_BRIEF_YAML, "end_turn")]
-    )
-
-    rc = run_preflight(monkeypatch, repo, mock)
-
-    assert rc == 0
-    assert len(mock.calls) == 2
-    retry_call = mock.calls[1]
-    # The retry feeds the validation error and the bad reply back in context.
-    assert "failed validation" in retry_call["prompt"]
-    assert "Missing required fields" in retry_call["prompt"]
-    assert "files_to_touch" in retry_call["prompt"]
-    assert retry_call["max_tokens"] == mock.calls[0]["max_tokens"] == 16000
-    assert retry_call["history"] == [
-        {"role": "user", "content": mock.calls[0]["prompt"]},
-        {"role": "assistant", "content": WRAPPED_BRIEF_YAML},
-    ]
-
-    import yaml
-
-    brief = yaml.safe_load(capsys.readouterr().out.partition("\n")[2])
-    assert brief["preflight_status"] == "generated"
-    assert brief["stop_reason"] == "end_turn"
 
 
 def test_auth_precedence_matches_reference(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -196,37 +155,11 @@ def test_auth_precedence_matches_reference(monkeypatch: pytest.MonkeyPatch) -> N
     assert client_kwargs == [{"timeout": auth.API_TIMEOUT, "auth_token": "auth-token"}]
 
 
-def test_schema_invalid_twice_falls_back(monkeypatch, repo: Path, capsys) -> None:
-    mock = MockAnthropic(
-        [(WRAPPED_BRIEF_YAML, "end_turn"), (WRAPPED_BRIEF_YAML, "end_turn")]
-    )
-
-    rc = run_preflight(monkeypatch, repo, mock)
-
-    assert rc == 0
-    assert len(mock.calls) == 2
-
-    import yaml
-
-    brief = yaml.safe_load(capsys.readouterr().out.partition("\n")[2])
-    assert brief["preflight_status"] == "fallback"
-    assert brief["fallback_reason"] == "llm_response_invalid"
-    assert brief["preflight_error"]
-
-
-def test_schema_invalid_twice_strict_raises(monkeypatch, repo: Path) -> None:
-    mock = MockAnthropic(
-        [(WRAPPED_BRIEF_YAML, "end_turn"), (WRAPPED_BRIEF_YAML, "end_turn")]
-    )
-
-    with pytest.raises(BriefResponseError):
-        run_preflight(monkeypatch, repo, mock, "--strict")
-
 
 def test_semantic_quality_fallback_when_paths_hallucinated(
     monkeypatch, repo: Path, capsys
 ) -> None:
-    hallucinated = VALID_BRIEF_YAML.replace("src/real.py", "src/ghost.py").replace(
+    hallucinated = VALID_BRIEF_JSON.replace("src/real.py", "src/ghost.py").replace(
         "src/test_real.py", "src/ghost_test.py"
     )
     mock = MockAnthropic([(hallucinated, "end_turn")])
@@ -241,11 +174,10 @@ def test_semantic_quality_fallback_when_paths_hallucinated(
     assert brief["preflight_status"] == "fallback"
     assert brief["fallback_reason"] == "semantic_quality"
 
-
 def test_auth_missing_falls_back_with_recorded_error(
     monkeypatch, repo: Path, capsys
 ) -> None:
-    def raise_auth_error(model, prompt, max_tokens, history=None):
+    def raise_auth_error(model, prompt, max_tokens, **kwargs):
         raise RuntimeError("No Anthropic credentials found (api_key=sk-ant-live123)")
 
     monkeypatch.setattr(auth, "_call_anthropic", raise_auth_error)
@@ -262,7 +194,6 @@ def test_auth_missing_falls_back_with_recorded_error(
     # Secret redaction applies to the recorded error.
     assert "sk-ant-live123" not in brief["preflight_error"]
     assert "[REDACTED]" in brief["preflight_error"]
-
 
 def test_sanitize_preflight_error_redacts_secret_patterns() -> None:
     message = (
@@ -284,7 +215,6 @@ def test_sanitize_preflight_error_preserves_token_counters() -> None:
     assert 'secret_abc' not in sanitized
     assert '[REDACTED]' in sanitized
 
-
 def test_sanitize_preflight_error_redacts_disguised_token_counter_strings_and_preserves_json() -> None:
     import json
     from corral.preflight.parser import sanitize_preflight_error
@@ -299,7 +229,6 @@ def test_sanitize_preflight_error_redacts_disguised_token_counter_strings_and_pr
     assert parsed["input_tokens"] == "[REDACTED]"
     assert parsed["total_tokens"] == "[REDACTED]"
     assert parsed["token"] == "[REDACTED]"
-
 
 def test_sanitize_preflight_error_preserves_gemini_token_counters() -> None:
     import json
@@ -337,7 +266,6 @@ def fake_sdk(monkeypatch):
     monkeypatch.setitem(sys.modules, "anthropic", SimpleNamespace(Anthropic=FakeClient))
     return message, calls
 
-
 def test_reads_text_blocks_after_thinking_blocks(fake_sdk):
     message, _ = fake_sdk
     message.content = [
@@ -347,16 +275,14 @@ def test_reads_text_blocks_after_thinking_blocks(fake_sdk):
     ]
     assert auth._call_anthropic("model", "prompt", 16000).text == "ok done"
 
-
 def test_refusal_without_stop_details(fake_sdk):
-    from corral.preflight.retry import BriefRefusalError
+    from corral.preflight.contract import BriefRefusalError
 
     message, _ = fake_sdk
     message.stop_reason = "refusal"
     response = auth._call_anthropic("model", "prompt", 16000)
     assert response.refusal_category is None
     assert str(BriefRefusalError(response.refusal_category)) == "model refused (category: unknown)"
-
 
 def test_refusal_falls_back_without_retry(monkeypatch, repo, capsys):
     calls = []
@@ -373,16 +299,14 @@ def test_refusal_falls_back_without_retry(monkeypatch, repo, capsys):
     assert "cyber" in brief["preflight_error"]
     assert len(calls) == 1
 
-
 def test_refusal_strict_raises(monkeypatch, repo):
-    from corral.preflight.retry import BriefRefusalError
+    from corral.preflight.contract import BriefRefusalError
 
     def refuse(*args, **kwargs):
         return auth.PreflightLLMResponse("", "refusal", "cyber")
 
     with pytest.raises(BriefRefusalError, match="cyber"):
         run_preflight(monkeypatch, repo, refuse, "--strict")
-
 
 def test_max_tokens_falls_back_without_retry(monkeypatch, repo, capsys):
     mock = MockAnthropic([("", "max_tokens")])
@@ -393,11 +317,47 @@ def test_max_tokens_falls_back_without_retry(monkeypatch, repo, capsys):
     assert len(mock.calls) == 1
 
 
-@pytest.mark.parametrize("stop_reason,reason", [("refusal", "llm_refused"), ("max_tokens", "llm_truncated")])
-def test_retry_stop_reason_checked_before_parsing(monkeypatch, repo, capsys, stop_reason, reason):
-    mock = MockAnthropic([(WRAPPED_BRIEF_YAML, "end_turn"), ("", stop_reason)])
-    run_preflight(monkeypatch, repo, mock)
-    import yaml
+
+@pytest.mark.parametrize("text", ["not JSON", "", "```json\n{}\n```", '[]', '{"estimated_blast_radius": "huge"}'])
+def test_invalid_json_falls_back_without_retry(monkeypatch, repo, capsys, text):
+    mock = MockAnthropic([(text, "end_turn")])
+    assert run_preflight(monkeypatch, repo, mock) == 0
     brief = yaml.safe_load(capsys.readouterr().out.partition("\n")[2])
-    assert brief["fallback_reason"] == reason
-    assert len(mock.calls) == 2
+    assert brief["fallback_reason"] == "llm_response_invalid"
+    assert len(mock.calls) == 1
+
+def test_invalid_json_strict_raises(monkeypatch, repo):
+    mock = MockAnthropic([("not JSON", "end_turn")])
+    with pytest.raises(BriefResponseError):
+        run_preflight(monkeypatch, repo, mock, "--strict")
+    assert len(mock.calls) == 1
+
+def test_request_uses_structured_output_format(fake_sdk):
+    from corral.preflight.contract import BRIEF_SCHEMA
+    _, calls = fake_sdk
+    auth.call_llm_with_meta("prompt", 16000, model="model", effort=None, output_schema=BRIEF_SCHEMA)
+    assert calls == [{
+        "model": "model", "max_tokens": 16000,
+        "messages": [{"role": "user", "content": "prompt"}],
+        "output_config": {"format": {"type": "json_schema", "schema": BRIEF_SCHEMA}},
+    }]
+
+def test_model_reply_cannot_set_code_owned_fields(monkeypatch, repo, capsys):
+    payload = json.loads(VALID_BRIEF_JSON)
+    payload.update(preflight_status="general", agent_gotchas=[{"rule": "invented"}],
+                   fallback_reason="invented", stop_reason="invented", do_not_touch=["invented"])
+    mock = MockAnthropic([(json.dumps(payload), "end_turn")])
+    run_preflight(monkeypatch, repo, mock)
+    brief = yaml.safe_load(capsys.readouterr().out.partition("\n")[2])
+    assert brief["preflight_status"] == "generated"
+    assert brief["agent_gotchas"] == []
+    assert brief["do_not_touch"] == []
+    assert brief["stop_reason"] == "end_turn"
+    assert "fallback_reason" not in brief
+
+def test_unexpected_stop_reason_falls_back(monkeypatch, repo, capsys):
+    mock = MockAnthropic([(VALID_BRIEF_JSON, "pause_turn")])
+    run_preflight(monkeypatch, repo, mock)
+    brief = yaml.safe_load(capsys.readouterr().out.partition("\n")[2])
+    assert brief["fallback_reason"] == "llm_response_invalid"
+    assert len(mock.calls) == 1

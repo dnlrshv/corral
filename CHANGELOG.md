@@ -13,6 +13,8 @@ Every release section must include a `### Consumer action` subsection, even when
 
 ### Changed
 
+- The default preflight model is `claude-haiku-5-5` (was `claude-haiku-4-5-20251001`), sent with `effort: low`.
+
 - Preflight requests the brief with structured outputs (`output_config.format`, a JSON schema) and writes the same YAML brief file from the parsed result. The prompt no longer dictates YAML formatting, and the one-shot retry that replayed an invalid reply is removed: an invalid response falls back to the deterministic brief after one call.
 - The `preflight` extra requires `anthropic>=0.88`.
 
@@ -21,9 +23,15 @@ Every release section must include a `### Consumer action` subsection, even when
 
 ### Consumer action
 
+- To keep Claude Haiku 4.5, set `preflight.model: claude-haiku-4-5-20251001` and `preflight.effort: null`, because that model rejects the effort parameter. Briefs on the new default can end with `fallback_reason: llm_refused` when a safety classifier declines; the brief then falls back as it does when the model is unavailable.
+
 - Upgrade the `anthropic` package in environments that install `corral[preflight]`. A `preflight.model` override must name a model that supports structured outputs. Code that imported the internal preflight retry module or YAML parser must switch to `corral.preflight.contract`.
 
 - Repositories that set `preflight.max_tokens` explicitly to a small value should raise it before moving to a thinking model. Telemetry consumers that enumerate `fallback_reason` values should accept `llm_refused` and `llm_truncated`.
+
+### Added
+
+- `preflight.effort` config key and `corral preflight --effort`. `null` omits the parameter for models that reject it.
 
 ## [0.2.1] - 2026-09-28
 

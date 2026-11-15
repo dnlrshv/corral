@@ -46,6 +46,7 @@ Key choices:
 - `lineage.config_loaders` is an allowlist of function name to config path. Only declared loader calls create `reads_config` edges. Use `config_loader_key_prefixes` when a wrapper has already descended into a subtree.
 - `hooks.magic_numbers.constants` is optional. If unset, the lint exits cleanly and says membership checks were skipped.
 - `preflight.output: null` writes briefs to stdout. Set a repository-relative path only when a shared file is part of your workflow.
+- `preflight.model`, `preflight.effort` and `preflight.max_tokens` control the model-backed brief. The model must support structured outputs; corral sends the brief's JSON schema with the request and writes the YAML brief from the result. Any refusal, truncation or invalid response falls back to the deterministic brief and records `fallback_reason`.
 
 Compare the complete annotated defaults in [`corral.example.yaml`](../corral.example.yaml). Then run:
 

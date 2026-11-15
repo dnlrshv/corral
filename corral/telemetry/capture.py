@@ -379,7 +379,8 @@ def _fallback_reason(payload: Mapping[str, Any], environ: Mapping[str, str]) -> 
     majority-hallucinated brief (`BriefQualityError`), or with
     `llm_response_invalid` when the brief response fails to parse/validate
     (`BriefResponseError`). Refusals and output-limit
-    stops record `llm_refused` and `llm_truncated`, respectively.
+    stops record `llm_refused` and `llm_truncated`, respectively. Rejected
+    requests record `llm_request_rejected`.
     """
     value = _first_string(payload, ("fallback_reason", "agent_preflight_fallback_reason"))
     if value:

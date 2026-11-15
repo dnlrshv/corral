@@ -25,7 +25,8 @@ Layout::
         # scan_dirs omitted: inherit codemap.scan_dirs
     preflight:
       gotchas: agent_memory/gotchas.json
-      model: claude-haiku-4-5-20251001
+      model: claude-haiku-5-5
+      effort: low
       max_tokens: 16000
       quota_status_file: null
       output: null
@@ -93,7 +94,9 @@ from pathlib import Path
 import yaml
 
 from corral.governance.config import GovernanceConfig, governance_config_from_mapping
-from corral.preflight.auth import DEFAULT_PREFLIGHT_MODEL
+from corral.preflight.auth import (
+    DEFAULT_PREFLIGHT_MODEL, DEFAULT_PREFLIGHT_EFFORT, PREFLIGHT_EFFORTS,
+)
 
 CONFIG_FILENAME = "corral.yaml"
 
@@ -205,6 +208,8 @@ class PreflightConfig:
     #: Anthropic model ID for LLM brief generation (canonical literal lives
     #: in :mod:`corral.preflight.auth`).
     model: str = DEFAULT_PREFLIGHT_MODEL
+    #: Model effort; None omits the parameter for models that reject it.
+    effort: str | None = DEFAULT_PREFLIGHT_EFFORT
     #: Maximum output tokens for the LLM call.
     max_tokens: int = DEFAULT_PREFLIGHT_MAX_TOKENS
     #: Optional repo-local quota snapshot file. When unset or the file is
@@ -547,6 +552,14 @@ def load_config(path: Path | str | None = None) -> Config:
         preflight.max_tokens = _as_int(preflight_raw["max_tokens"], "preflight.max_tokens")
         if preflight.max_tokens <= 0:
             raise ValueError("corral.yaml: preflight.max_tokens must be > 0")
+    if "effort" in preflight_raw:
+        effort = preflight_raw["effort"]
+        if effort is not None and effort not in PREFLIGHT_EFFORTS:
+            raise ValueError(
+                "corral.yaml: preflight.effort must be one of "
+                f"high, low, max, medium, xhigh, or null, got {effort!r}"
+            )
+        preflight.effort = effort
     if "quota_status_file" in preflight_raw:
         preflight.quota_status_file = _as_optional_str(
             preflight_raw["quota_status_file"], "preflight.quota_status_file"

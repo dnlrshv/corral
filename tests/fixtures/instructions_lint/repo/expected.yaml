@@ -7,6 +7,30 @@ findings:
   check: caps-emphasis
   line: 3
   severity: warning
+- path: bad/dead_refs.md
+  check: dead-path
+  line: 1
+  severity: error
+- path: bad/dead_refs.md
+  check: dead-path
+  line: 3
+  severity: error
+- path: bad/dead_refs.md
+  check: dead-path
+  line: 5
+  severity: warning
+- path: bad/dead_refs.md
+  check: dead-command
+  line: 8
+  severity: error
+- path: bad/dead_refs.md
+  check: dead-command
+  line: 9
+  severity: error
+- path: bad/dead_refs.md
+  check: dead-path
+  line: 10
+  severity: warning
 - path: bad/density.md
   check: caps-emphasis
   line: 1

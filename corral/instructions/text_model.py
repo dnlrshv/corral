@@ -103,10 +103,16 @@ class TextModel:
         for match in re.finditer(r'<!--.*?(?:-->|\Z)', ''.join(prose), re.S):
             self.comments.append(match.span())
             mask(*match.span())
-        for match in re.finditer(r'(?<!!)\[[^\[\]\n]*\]\((<[^>\n]+>|[^)\n]*)\)', ''.join(prose)):
+        link_pattern = re.compile(r'''\[[^\[\]\n]*\]\([ \t]*(<[^>\n]*>|[^\s()\n]*)(?:[ \t]+(?:"[^"\n]*"|'[^'\n]*'|\([^()\n]*\)))?[ \t]*\)''')
+        for match in link_pattern.finditer(''.join(prose)):
             dest = match[1]
-            self.links.append((match.start(1), match.end(1), dest.strip().strip('<>')))
-            mask(match.start(1), match.end(1))
+            a, b = match.span(1)
+            if dest.startswith('<') and dest.endswith('>'):
+                a, b = a + 1, b - 1
+                dest = dest[1:-1]
+            if match.start() == 0 or text[match.start() - 1] != '!':
+                self.links.append((a, b, dest))
+            mask(match.start(1), match.end() - 1)
         for match in re.finditer(r'<https?://[^>\n]*>|https?://[^\s<>]+', ''.join(prose)):
             mask(*match.span())
         self.prose = ''.join(prose)

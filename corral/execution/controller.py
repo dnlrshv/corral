@@ -621,7 +621,11 @@ class Controller:
                     "envelope_schema": route.envelope, "envelope_sha256": None,
                     "corral_version": __version__, "corral_commit": installed_commit(),
                 }
-            result = {"structured": structured, "accepted": accepted, "receipt": receipt,
+            from .result_schema import assess
+            brief_report = ({"report": assess(structured, spec.get("brief"))}
+                            if native_run and not inspection_only else None)
+            result = {"brief": brief_report, "structured": structured,
+                      "accepted": accepted, "receipt": receipt,
                       "identity_mismatch": identity_mismatch,
                       "artifact_directory": str(output), "endpoint": "local", "usage": usage,
                       "selection": spec["selection"], "observed": observed or "unknown",

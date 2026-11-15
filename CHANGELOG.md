@@ -11,6 +11,15 @@ Every release section must include a `### Consumer action` subsection, even when
 
 - A rules layer (`corral.rules`) with packaged defaults, repository rules, an external personal overlay, and `corral rules show`.
 
+### Changed
+
+- The default executor result schema is `corral-executor-result-v1`; native results include an informational per-criterion assessment. Task-specific schemas still override it.
+- The maintained Codex argv and route template pass `--output-schema` alongside `--output-last-message`.
+
+### Consumer action
+
+Add `"--output-schema", "{schema_file}"` to previously copied Codex routes to enforce the result shape in the harness. Protocol and store schema remain at version 1.
+
 ## [0.2.1] - 2026-09-28
 
 ### Fixed

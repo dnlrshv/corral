@@ -53,3 +53,11 @@ exceptions limit the file-read denial. On hosts without working Seatbelt support
 native routes fail before launch; deterministic paths offer no equivalent file-read
 isolation. Run deterministic lanes only with separate OS-level repository and
 credential isolation.
+
+Native executors receive the `corral-executor-result-v1` contract: per-criterion
+status and evidence, commands with exit codes and output tails, changed files,
+open questions and blockers. The maintained Codex argv passes
+`--output-schema {schema_file}` alongside `--output-last-message {result_file}`. Existing routes
+without the schema flag still run; controller assessment reports result coverage
+and shape without changing verifier acceptance. A task's `result_schema` override
+continues to select its own output shape.

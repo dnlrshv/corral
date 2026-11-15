@@ -1,7 +1,9 @@
 {
   "harness": "codex",
   "binary": "codex",
-  "argv": ["exec", "--json", "--sandbox", "workspace-write", "-C", "{workspace}", "--model", "{model}", "-c", "model_reasoning_effort=\"{effort}\"", "--output-last-message", "{result_file}", "{prompt}"],
+  "argv": ["exec", "--json", "--sandbox", "workspace-write", "-C", "{workspace}", "--model", "{model}", "-c", "model_reasoning_effort=\"{effort}\"",
+           "--output-schema", "{schema_file}",
+           "--output-last-message", "{result_file}", "{prompt}"],
   "envelope": "codex-jsonl-v1",
   "provider": "openai",
   "account_ref": "codex-auth-file",

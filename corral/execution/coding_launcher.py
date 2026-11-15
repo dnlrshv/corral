@@ -26,5 +26,6 @@ def argv_for(harness: str, *, model_provider: str | None = None) -> list[str]:
         return ["exec", "--json", "--sandbox", "workspace-write", "-C", "{workspace}",
                 "--model", "{model}", "-c", f'model_provider="{model_provider}"',
                 "-c", 'model_reasoning_effort="{effort}"',
+                "--output-schema", "{schema_file}",
                 "--output-last-message", "{result_file}", "{prompt}"]
     raise PermissionError(f"unsupported coding harness {harness!r}")

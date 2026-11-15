@@ -6,7 +6,11 @@ route id to the file stem, adjust the model, endpoint, account reference, binary
 and launch authorization, then register a matching controller profile. The
 examples keep `launch_authorized: false` until the operator checks them.
 
-- `codex`: the argv shape follows `corral.execution.coding_launcher`. Codex uses
+- `codex`: the argv shape follows `corral.execution.coding_launcher`. The maintained
+  template includes `--output-schema {schema_file}` and
+  `--output-last-message {result_file}` so the harness enforces the selected
+  executor result contract. Add the schema flag to previously copied routes;
+  routes without it receive the schema inline in the prompt. Codex uses
   its own auth file. Configure a dedicated `runtime_home` and a narrow
   `runtime_read` grant to that file for this route; never copy its contents into
   a route or a repository. The example intentionally omits a machine-specific

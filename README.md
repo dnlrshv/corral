@@ -104,6 +104,7 @@ Set `seats_file: seats.yaml`, `retro.drafter_seat`, and `retro.verifier_seats` i
 | `corral.lineage` | Extract call, SQL, file, config, and manifest lineage edges. | `corral lineage build` |
 | `corral.hooks` | Flag declared surfaces and duplicated configured constants. | `corral hooks surface-check`, `surface-reminder`, `magic-numbers` |
 | `corral.preflight` | Render task briefs with a deterministic no-auth fallback. | `corral preflight` |
+| `corral.execution.executor_brief` | Validate and preview versioned executor contracts. | `corral executor-brief check`, `render` |
 | `corral.rules` | Merge generic, repository and personal executor rules. | `corral rules show` |
 | `corral.memory` | Validate durable gotcha and refinement registries. | `corral memory validate` |
 | `corral.telemetry` | Capture session records, roll up weekly data, and reconstruct CI outcomes. | `corral telemetry capture`, `rollup`, `ci-outcome` |
@@ -145,6 +146,14 @@ Near-term roadmap: stabilize configuration and registry schemas, expand portable
 Apache-2.0. See [`LICENSE`](LICENSE).
 
 ### Optional managed execution
+
+Native coding tasks can carry a [versioned executor brief](docs/executor-brief.md)
+with goal, sources, command-linked acceptance criteria, reasoned constraints and
+scope. `corral-agent submit --brief task.json` derives the objective from the goal;
+`corral executor-brief check` and `render` validate and preview it. Generic,
+repository and external personal [rules](docs/rules.md) merge into its constraints.
+The verifier still decides acceptance; the structured executor report is assessed
+for coverage and recorded with prompt and rule digests.
 
 `python -m corral.execution.demo /tmp/corral-example` runs one synthetic worker
 through explicit profile resolution, durable observation, and an exact-candidate

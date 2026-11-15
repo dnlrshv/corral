@@ -61,3 +61,9 @@ open questions and blockers. The maintained Codex argv passes
 without the schema flag still run; controller assessment reports result coverage
 and shape without changing verifier acceptance. A task's `result_schema` override
 continues to select its own output shape.
+
+See [executor briefs](executor-brief.md) for contract submission, input budgets,
+legacy-objective policy and `brief.json` records, and [rules](rules.md) for layer
+precedence and applicability. These controller-written inputs do not change
+containment or verifier authority. Inspection-only routes retain their packet
+contract and deterministic dispatches retain their explicit command contract.

@@ -9,7 +9,7 @@ edit its judge would reject.
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 from corral.governance.config import GovernanceConfig
@@ -32,6 +32,23 @@ WRITABLE_TIERS: frozenset[str] = frozenset(
 )
 
 _RETRO_RULE_ID_RE = re.compile(r"^R-RETRO-(\d{4})$")
+
+
+_EMPHASIS_TOKENS = ("ALWAYS", "NEVER", "IMPORTANT", "CRITICAL")
+
+
+def _opens_with_marker(statement: str, modalities: Sequence[str]) -> bool:
+    tokens = sorted({*modalities, *_EMPHASIS_TOKENS}, key=len, reverse=True)
+    pattern = r"^\s*(?:[-*]\s*)?(?:\*\*)?(?:" + "|".join(map(re.escape, tokens)) + r")\b"
+    return re.match(pattern, statement) is not None  # case-sensitive on purpose
+
+
+def _reject_opening_marker(text: str, modalities: Sequence[str]) -> None:
+    if _opens_with_marker(text, modalities):
+        raise ProposalRejectedError(
+            "statement repeats a modality or emphasis marker; "
+            "the classification belongs in `modality` only"
+        )
 
 
 def _coerce_selectors(value: Any) -> dict[str, list[str]]:
@@ -103,6 +120,8 @@ def normalize_proposal(
         if anchor not in statement:
             raise ProposalRejectedError("anchor is not a verbatim substring of statement")
 
+    _reject_opening_marker(statement, governance.modalities)
+
     incidents = group.root_incident_labels
     if len(incidents) < min_incidents:
         raise ProposalRejectedError(
@@ -136,6 +155,8 @@ def normalize_proposal(
     elif operation == "add_skill":
         skill_slug = str(payload.get("skill_slug", "")).strip()
         skill_body = str(payload.get("skill_body", "")).strip()
+        first_line = next((line for line in skill_body.splitlines() if line.strip()), "")
+        _reject_opening_marker(first_line, governance.modalities)
         if not skill_slug or not re.fullmatch(r"[a-z][a-z0-9-]*", skill_slug):
             raise ProposalRejectedError(f"invalid skill slug {skill_slug!r}")
         if len(anchor) < ANCHOR_MIN_CHARS or anchor not in (skill_body or ""):

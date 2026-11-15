@@ -12,6 +12,7 @@ import logging
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, TypeVar
 
+from corral.governance.config import DEFAULT_MODALITIES
 from corral.retro.bridge.readers import render_bridge_evidence
 from corral.retro.json_util import extract_json_payload
 from corral.retro.types import EvidenceGroup
@@ -29,6 +30,7 @@ def build_doc_proposal_prompt(
     candidate_rules: Sequence[Mapping[str, Any]],
     tiers: Sequence[str],
     min_incidents: int = DEFAULT_MIN_ROOT_INCIDENTS,
+    modalities: Sequence[str] = DEFAULT_MODALITIES,
 ) -> str:
     """Prompt the drafter to propose one instruction-file diff, or decline.
 
@@ -74,7 +76,9 @@ def build_doc_proposal_prompt(
         "- target_file: repo-relative instruction file to edit (for sharpen, the "
         "file the existing rule lives in; for add_skill, the new skill file)\n"
         "- concern_key: kebab-case slug for the concern this rule governs\n"
-        "- modality: one of MUST, MUST NOT, ASK, READ\n"
+        f"- modality: registry classification for governance, one of "
+        f"{', '.join(modalities)}. It is stored in the rule registry and never shown "
+        "to agents, so leave it out of `statement`.\n"
         "- statement: the rule as one plain sentence that says what to do and why, "
         "with the reason after 'because' or a similar connective, in sentence case; "
         "it contains `anchor` verbatim\n"

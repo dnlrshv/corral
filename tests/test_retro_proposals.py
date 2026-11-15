@@ -180,7 +180,7 @@ def test_normalize_add_rule_happy_path(tmp_path: Path) -> None:
     assert proposal.rule_id == "R-RETRO-0001"
     assert proposal.review_by == "platform-team"  # from governance.reviewer
     assert proposal.evidence_incidents == ["#101", "#102"]
-    assert proposal.rule_text.startswith("- **MUST** ")
+    assert proposal.rule_text == "- " + proposal.statement
 
 
 def test_normalize_rejects_short_anchor(tmp_path: Path) -> None:
@@ -424,7 +424,7 @@ def test_apply_prose_edit_marker_block() -> None:
     assert twice.count("retro-proposed-rules:begin") == 1
 
 
-def test_apply_prose_edit_sharpen_replaces_and_errors() -> None:
+def test_sharpen_rewrites_legacy_bold_modality_line() -> None:
     text = "# Core\n- **MUST** old distinctive anchor here\n"
     proposal = _proposal(
         operation="sharpen", old_anchor="old distinctive anchor",
@@ -433,6 +433,8 @@ def test_apply_prose_edit_sharpen_replaces_and_errors() -> None:
     out = plan.apply_prose_edit(text, proposal)
     assert "old distinctive anchor" not in out
     assert proposal.rule_text in out
+    assert "**MUST**" not in out
+    assert "- Sharpened: brand new anchor text" in out
     missing = _proposal(operation="sharpen", old_anchor="not present anchor")
     with pytest.raises(models.ProposalRejectedError, match="not found"):
         plan.apply_prose_edit(text, missing)
@@ -524,11 +526,13 @@ def test_budget_check_flags_over_budget_edit(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _run_pass(tmp_path: Path, *, drafter_outputs: list[str], verifier_output: str):
+def _run_pass(tmp_path: Path, *, drafter_outputs: list[str], verifier_output: str, modalities=None):
     root = make_repo(tmp_path)
     config = load_config(root / "corral.yaml")
     from corral.retro.seats import SeatRegistry
 
+    if modalities is not None:
+        config.governance.modalities = modalities
     seat_registry = SeatRegistry.from_config(config)
     runners = {
         "draft": FakeSeatRunner(drafter_outputs),
@@ -597,6 +601,9 @@ def test_round_trip_drafted_proposal_to_human_review_section(tmp_path: Path) -> 
     assert "R-RETRO-0001" in summary_text
     assert "`docs/instructions/core.md`" in summary_text
     assert "proposals:" in summary_text  # machine-readable block carried through
+    assert "registry modality: MUST" in summary_text
+    assert proposal.rule_text in core_edit.new_text
+    assert "**MUST**" not in core_edit.new_text
 
 
 def test_round_trip_verifier_refute_records_skip(tmp_path: Path) -> None:
@@ -706,3 +713,82 @@ def load_config_from_text(text: str):
         root = Path(temp)
         (root / "corral.yaml").write_text(text, encoding="utf-8")
         return load_config(root / "corral.yaml")
+
+
+
+def test_rule_text_has_no_modality_marker():
+    proposal = _proposal(statement="Confirm the order because retries can duplicate it.")
+    assert proposal.rule_text == "- Confirm the order because retries can duplicate it."
+    assert "**" not in proposal.rule_text
+
+
+def test_registry_entry_keeps_modality(tmp_path):
+    root = make_repo(tmp_path)
+    proposal = _proposal()
+    assert plan.registry_entry(proposal)["modality"] == "MUST"
+    text = plan.apply_registry_edit(plan.ensure_registry_document(""), proposal)
+    registry = parse_registry(text, load_config(root / "corral.yaml").governance)
+    assert registry[proposal.rule_id]["modality"] == "MUST"
+
+
+def test_doc_prompt_lists_configured_modalities():
+    from corral.retro.proposals.draft import build_doc_proposal_prompt
+    prompt = build_doc_proposal_prompt(
+        make_group(), {}, candidate_rules=[], tiers=["core"],
+        modalities=["REQUIRED", "FORBIDDEN"],
+    )
+    line = next(line for line in prompt.splitlines() if line.startswith("- modality:"))
+    assert "REQUIRED, FORBIDDEN" in line
+    assert "MUST" not in line and "ASK" not in line and "READ" not in line
+    assert "leave it out of `statement`" in line
+
+
+@pytest.mark.parametrize("prefix", ["MUST", "**MUST NOT**", "NEVER", "- **MUST**", "ALWAYS", "IMPORTANT", "CRITICAL"])
+def test_normalize_rejects_statement_with_modality_prefix(tmp_path, prefix):
+    root = make_repo(tmp_path)
+    payload = dict(PROPOSAL_PAYLOAD, statement=f"{prefix} use the confirm_order endpoint because retries can duplicate orders.")
+    with pytest.raises(models.ProposalRejectedError, match="classification belongs in `modality` only"):
+        normalize.normalize_proposal(payload, make_group(), **make_norm_args(root))
+
+
+def test_normalize_accepts_sentence_case_always(tmp_path):
+    root = make_repo(tmp_path)
+    proposal = normalize.normalize_proposal(dict(PROPOSAL_PAYLOAD), make_group(), **make_norm_args(root))
+    assert proposal.statement.startswith("Always confirm")
+
+
+def test_normalize_marker_guard_uses_custom_modalities(tmp_path):
+    root = make_repo(tmp_path)
+    args = make_norm_args(root)
+    args["governance"].modalities = ["REQUIRED", "FORBIDDEN"]
+    payload = dict(PROPOSAL_PAYLOAD, modality="REQUIRED", statement="FORBIDDEN use of confirm_order endpoint")
+    with pytest.raises(models.ProposalRejectedError, match="modality or emphasis marker"):
+        normalize.normalize_proposal(payload, make_group(), **args)
+
+
+@pytest.mark.parametrize("prefix", ["MUST", "**NEVER**", "- **MUST NOT**"])
+def test_normalize_rejects_skill_body_opening_marker(tmp_path, prefix):
+    root = make_repo(tmp_path)
+    payload = dict(PROPOSAL_PAYLOAD, operation="add_skill", target_tier="skill",
+                   target_file="skills/recovery/SKILL.md", statement="", skill_slug="recovery",
+                   anchor="run the recovery checklist",
+                   skill_body=f"\n\n{prefix} run the recovery checklist because retries need confirmation.")
+    with pytest.raises(models.ProposalRejectedError, match="modality or emphasis marker"):
+        normalize.normalize_proposal(payload, make_group(), **make_norm_args(root))
+
+
+
+def test_proposal_pass_forwards_configured_modalities(tmp_path, monkeypatch):
+    from corral.retro.proposals import draft
+    observed = []
+    original = draft.build_doc_proposal_prompt
+    def capture(*args, **kwargs):
+        observed.append(kwargs["modalities"])
+        return original(*args, **kwargs)
+    monkeypatch.setattr(draft, "build_doc_proposal_prompt", capture)
+    _, _, run = _run_pass(
+        tmp_path, drafter_outputs=[json.dumps(dict(PROPOSAL_PAYLOAD, modality="REQUIRED"))],
+        verifier_output=CONFIRM_JSON, modalities=["REQUIRED", "FORBIDDEN"],
+    )
+    assert observed == [["REQUIRED", "FORBIDDEN"]]
+    assert len(run.accepted) == 1

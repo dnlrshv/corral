@@ -390,7 +390,7 @@ def _render_subject(p: DocProposal) -> str:
     lines = [
         f"operation: {p.operation}",
         f"target_tier: {p.target_tier} | target_file: {p.target_file}",
-        f"concern_key: {p.concern_key} | modality: {p.modality}",
+        f"concern_key: {p.concern_key} | registry modality: {p.modality}",
     ]
     if p.operation == "add_skill":
         lines.append(f"skill body:\n{p.skill_body}")
@@ -542,6 +542,7 @@ def draft_and_verify_proposals(
         prompt = draft.build_doc_proposal_prompt(
             group, excerpts, candidate_rules=candidate_rules,
             tiers=governance.proposals.tiers, min_incidents=min_incidents,
+            modalities=governance.modalities,
         )
         try:
             proposal = draft.draft_and_normalize_with_retry(

@@ -60,6 +60,8 @@ The Markdown summary records:
 - every dropped/deferred reason;
 - a separate instruction-file proposal section when that pass is enabled.
 
+Proposal rule lines render as `- <statement>`, with their reason in the sentence. The registry keeps `modality` as a classification; summaries label it "registry modality" for reviewers. Existing bold modality lines are kept until a sharpen replaces their complete line, or a maintainer edits them.
+
 Gotchas are registry data used by future preflight briefs. Doc/skill proposal edits are never applied by the retrospective: accepted proposals, prospective file text, registry text, and the gate-compatible proposal block are rendered for human review. The weekly workflow opens one PR containing the permitted run artifacts; maintainers decide what merges.
 
 ## Configuration walkthrough

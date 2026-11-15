@@ -9,6 +9,8 @@ Every release section must include a `### Consumer action` subsection, even when
 
 - `corral instructions lint`: instruction discovery, suppression comments, text and JSON reports, and deterministic repeated-emphasis and retired-model checks.
 
+- Instruction lint checks unreasoned emphasis, thinking scaffolds, word caps, historical and migration-relative wording, grader vocabulary, and reasons in generated rules; registered governance anchors are exempt from checks that would edit their wording.
+
 ### Consumer action
 
 None. Instruction lint is opt-in.

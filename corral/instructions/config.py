@@ -4,6 +4,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from corral.governance.config import GovernanceConfig
+
 DEFAULT_LINT_INCLUDE = [
     'AGENTS.md', '**/AGENTS.md', 'CLAUDE.md', '**/CLAUDE.md', 'CLAUDE.local.md',
     'GEMINI.md', '**/GEMINI.md', '.cursorrules', '.cursor/rules/**',
@@ -45,6 +47,7 @@ class LintConfig:
     checks: dict[str, CheckConfig] = field(default_factory=default_check_configs)
     registered_anchors: dict[str, tuple[str, ...]] = field(default_factory=dict)
     registry: str = 'instruction_rules.yaml'
+    registry_config: GovernanceConfig | None = None
 
 
 @dataclass

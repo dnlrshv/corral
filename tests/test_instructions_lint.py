@@ -186,7 +186,8 @@ def test_only_configured_drops_non_matching_paths(tmp_path):
 
 
 def test_lint_text_generated_rule_severities_for_slice1_checks():
-    assert {f.severity for f in run('Stop!! Use claude-2.', kind='generated_rule')} == {'error'}
+    found = run('Stop!! Use claude-2', kind='generated_rule')
+    assert {f.check: f.severity for f in found if f.check in ('double-bang', 'retired-model-id')} == {'double-bang': 'error', 'retired-model-id': 'error'}
 
 
 def test_skipped_files_do_not_fail(tmp_path):

@@ -61,6 +61,7 @@ def run_lint(args) -> int:
         lint = cfg.instructions.lint
         lint.governance_globs = cfg.governance.instruction_globs
         lint.registry = cfg.governance.registry
+        lint.registry_config = cfg.governance
         select = {s.strip() for value in args.select for s in value.split(',')}
         ignore = {s.strip() for value in args.ignore for s in value.split(',')}
         for slug in sorted(select | ignore):

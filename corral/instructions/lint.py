@@ -6,7 +6,7 @@ producer cannot suppress its own findings.
 """
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 import os
 import re
@@ -193,6 +193,7 @@ def lint_paths(paths: Sequence[Path], *, config: LintConfig, root: Path) -> Lint
     validate_lint_config(config)
     root = root.absolute()
     report = LintReport(0, [], 0)
+    config = _registered_anchors(config, root, report.input_errors)
     candidates = list(paths) if paths else _discover(config, root, report.input_errors)
     expanded = []
     for candidate in candidates:
@@ -229,3 +230,22 @@ def lint_paths(paths: Sequence[Path], *, config: LintConfig, root: Path) -> Lint
         report.suppressed += suppressed
     report.findings.sort(key=lambda f: (f.path, f.line, f.column, f.check))
     return report
+
+
+def _registered_anchors(config, root, errors):
+    from corral.governance.registry import parse_registry
+    import yaml
+    registry = root / config.registry
+    if lint_refs.has_symlink(registry, root):
+        return config
+    if not registry.exists():
+        return config
+    try:
+        parsed = parse_registry(registry.read_text(encoding='utf-8'), config.registry_config)
+    except (OSError, ValueError, UnicodeError, RecursionError, yaml.YAMLError) as exc:
+        errors.append(f'governance registry unreadable: {str(exc).replace(str(root), ".")}; anchor exemptions disabled')
+        return config
+    anchors = dict(config.registered_anchors)
+    for rule in parsed.values():
+        anchors[rule['file']] = anchors.get(rule['file'], ()) + (rule['anchor'],)
+    return replace(config, registered_anchors=anchors)

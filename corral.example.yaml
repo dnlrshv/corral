@@ -87,7 +87,7 @@ retro:
   require_distinct_provider: true
 
   # Per probe-independent completion call timeout.
-  verification_timeout_s: 300
+  verification_timeout_s: 900
 
   # Gotchas preserve the source's proceed-unverified behavior. Instruction
   # proposals preserve the stricter source behavior and are refuted whenever
@@ -119,11 +119,12 @@ retro:
   # Minimum drafter confidence for a candidate to reach verification.
   confidence_threshold: 0.70
 
-  # Output token budget for drafter completions.
-  max_tokens: 900
+  # Output-token budget for every drafter and verifier completion. Thinking
+  # counts toward this limit, so leave room for it as well as the reply.
+  max_tokens: 16000
 
   # Per drafter completion timeout in seconds.
-  drafting_timeout_s: 300
+  drafting_timeout_s: 900
 
   # Severity vocabulary offered to the drafter, and the subset that triggers
   # immediate review-issue filing. Default empty subset: no issue filing.

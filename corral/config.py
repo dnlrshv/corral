@@ -42,7 +42,7 @@ Layout::
       drafter_seat: retro-drafter
       verifier_seats: [retro-verifier]
       require_distinct_provider: true
-      verification_timeout_s: 300
+      verification_timeout_s: 900
       gotcha_unavailable_policy: proceed-unverified
       instruction_unavailable_policy: fail-closed
       repository: null
@@ -51,8 +51,8 @@ Layout::
       gotchas_path: agent_memory/gotchas.json
       refinements_path: agent_memory/refinements.jsonl
       confidence_threshold: 0.70
-      max_tokens: 900
-      drafting_timeout_s: 300
+      max_tokens: 16000
+      drafting_timeout_s: 900
       allowed_severities: [info, P2, P1, P0]
       severe_severities: []
       github:
@@ -117,7 +117,7 @@ DEFAULT_REQUIRED_CI_CONTEXTS = ("lint", "test")
 DEFAULT_SEATS_FILE = "seats.yaml"
 DEFAULT_RETRO_DRAFTER_SEAT = "retro-drafter"
 DEFAULT_RETRO_VERIFIER_SEATS = ("retro-verifier",)
-DEFAULT_RETRO_VERIFICATION_TIMEOUT_S = 300
+DEFAULT_RETRO_VERIFICATION_TIMEOUT_S = 900
 DEFAULT_GOTCHA_UNAVAILABLE_POLICY = "proceed-unverified"
 DEFAULT_INSTRUCTION_UNAVAILABLE_POLICY = "fail-closed"
 DEFAULT_RETRO_ISSUE_SINK = "stdout"
@@ -126,8 +126,8 @@ DEFAULT_RETRO_REFINEMENTS_PATH = "agent_memory/refinements.jsonl"
 DEFAULT_RETRO_CONFIDENCE_THRESHOLD = 0.70
 DEFAULT_RETRO_PROPOSALS_MAX = 3
 DEFAULT_RETRO_PROPOSALS_MIN_INCIDENTS = 2
-DEFAULT_RETRO_MAX_TOKENS = 900
-DEFAULT_RETRO_DRAFTING_TIMEOUT_S = 300
+DEFAULT_RETRO_MAX_TOKENS = 16000
+DEFAULT_RETRO_DRAFTING_TIMEOUT_S = 900
 DEFAULT_RETRO_ALLOWED_SEVERITIES = ("info", "P2", "P1", "P0")
 DEFAULT_RETRO_GOTCHA_LABEL = "agent-gotcha"
 DEFAULT_RETRO_GH_TIMEOUT_S = 30
@@ -275,6 +275,7 @@ class RetroConfig:
     #: Repo-root-relative refinement ledger (audit records + revert input).
     refinements_path: str = DEFAULT_RETRO_REFINEMENTS_PATH
     confidence_threshold: float = DEFAULT_RETRO_CONFIDENCE_THRESHOLD
+    #: Output-token budget for every drafter and verifier completion.
     max_tokens: int = DEFAULT_RETRO_MAX_TOKENS
     drafting_timeout_s: int = DEFAULT_RETRO_DRAFTING_TIMEOUT_S
     #: Severity vocabulary offered to the drafter.

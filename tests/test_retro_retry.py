@@ -102,3 +102,18 @@ def test_max_attempts_bounds() -> None:
         call_with_retry(lambda prompt: result(SeatStatus.OK), "p", context="ctx", max_attempts=0)
     with pytest.raises(ValueError):
         call_with_retry(lambda prompt: result(SeatStatus.OK), "p", context="ctx", max_attempts=5)
+
+
+def test_incomplete_is_not_retried():
+    from corral.retro.retry import IncompleteLLMError
+    calls, sleeps = [], []
+    def complete(prompt):
+        calls.append(prompt)
+        return result(SeatStatus.INCOMPLETE, detail="refusal (category=unspecified)")
+    with pytest.raises(IncompleteLLMError) as caught:
+        call_with_retry(complete, "prompt", context="drafting", sleep=sleeps.append)
+    assert caught.value.status == "incomplete"
+    assert caught.value.attempts == 1
+    assert "refusal" in str(caught.value)
+    assert calls == ["prompt"]
+    assert sleeps == []

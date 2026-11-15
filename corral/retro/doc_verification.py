@@ -105,7 +105,7 @@ def verify(
     verifier_seats: Sequence[str] | None = None,
     require_distinct_provider: bool | None = None,
     timeout_s: float | None = None,
-    max_tokens: int = DEFAULT_MAX_TOKENS,
+    max_tokens: int | None = None,
     runner_factory: RunnerFactory | None = None,
     verifier_complete: Completer | None = None,
 ) -> VerificationResult:
@@ -147,6 +147,7 @@ def verify(
         else getattr(retro, "require_distinct_provider", True)
     )
     timeout = timeout_s or getattr(retro, "verification_timeout_s", DEFAULT_VERIFICATION_TIMEOUT_S)
+    max_tokens = max_tokens or getattr(retro, "max_tokens", DEFAULT_MAX_TOKENS)
 
     outcome = invoke_verifier_with_fallback(
         prompt,

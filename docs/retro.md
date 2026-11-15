@@ -37,6 +37,8 @@ The drafter writes one plain rule sentence with its reason in the same sentence,
 
 `retro.allowed_severities` defines the vocabulary the drafter may use. `retro.severe_severities` is the subset eligible for immediate review-issue handling through `retro.issue_sink`. Keep the subset empty until maintainers agree on the operational meaning of each severity.
 
+For Anthropic seats, a refusal, output-limit stop, or empty completed answer is recorded as `incomplete`. An incomplete drafter answer skips that group and the next group continues. An incomplete verifier answer advances to the next verifier seat. `retro.max_tokens` bounds drafter and verifier output, including thinking tokens. Per-seat `options.max_tokens` can accommodate endpoints with lower output ceilings.
+
 A transient drafting failure is retried within the bounded retry policy. Exhausting retries opens a pass-level capacity circuit: later groups are reported as deferred rather than called blindly.
 
 ## 4. An independent seat challenges the draft
@@ -81,7 +83,7 @@ retro:
   drafter_seat: retro-drafter
   verifier_seats: [retro-verifier, local-verifier]
   require_distinct_provider: true
-  verification_timeout_s: 300
+  verification_timeout_s: 900
   gotcha_unavailable_policy: proceed-unverified
   instruction_unavailable_policy: fail-closed
 
@@ -90,8 +92,8 @@ retro:
   gotchas_path: agent_memory/gotchas.json
   refinements_path: agent_memory/refinements.jsonl
   confidence_threshold: 0.70
-  max_tokens: 900
-  drafting_timeout_s: 300
+  max_tokens: 16000
+  drafting_timeout_s: 900
   allowed_severities: [info, P2, P1, P0]
   severe_severities: []
 

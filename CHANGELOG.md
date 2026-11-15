@@ -13,6 +13,8 @@ Every release section must include a `### Consumer action` subsection, even when
 
 ### Changed
 
+- `retro.max_tokens` defaults to 16000 and now also bounds verifier calls (previously fixed at 1000); `retro.verification_timeout_s` and `retro.drafting_timeout_s` default to 900.
+
 - Proposal rule lines render as `- <statement>`; `modality` is kept in the registry only.
 
 - Retro prompts ask for one plain rule sentence with its reason and no longer describe scoring; prompts state the configured evidence floor.
@@ -27,6 +29,9 @@ Every release section must include a `### Consumer action` subsection, even when
 
 ### Consumer action
 
+- Endpoints that cap output below 16000 tokens: set `options.max_tokens` on those seats, or set `retro.max_tokens`.
+- Code that switches on `SeatStatus` values must handle `incomplete`.
+
 - Existing `- **MUST** ...` lines from earlier proposals stay until edited; rewrite them by hand if wanted. Registry entries need no change.
 
 - To keep Claude Haiku 4.5, set `preflight.model: claude-haiku-4-5-20251001` and `preflight.effort: null`, because that model rejects the effort parameter. Briefs on the new default can end with `fallback_reason: llm_refused` when a safety classifier declines; the brief then falls back as it does when the model is unavailable.
@@ -36,6 +41,8 @@ Every release section must include a `### Consumer action` subsection, even when
 - Repositories that set `preflight.max_tokens` explicitly to a small value should raise it before moving to a thinking model. Telemetry consumers that enumerate `fallback_reason` values should accept `llm_refused` and `llm_truncated`.
 
 ### Added
+
+- Seat status `incomplete` for refusals and output-limit stops; per-seat `options.max_tokens`.
 
 - `preflight.effort` config key and `corral preflight --effort`. `null` omits the parameter for models that reject it.
 

@@ -291,6 +291,13 @@ def draft_and_verify_candidates(
                 for deferred in capped_groups[group_index + 1 :]
             )
             break
+        except retry.IncompleteLLMError as exc:
+            skipped.append({
+                "key": group.key,
+                "reason": f"drafter returned no usable answer: {exc}",
+                "kind": "incomplete",
+            })
+            continue
         except ValueError as exc:  # returned-output validation is group-local
             skipped.append({"key": group.key, "reason": f"extraction failed: {exc}"})
             continue

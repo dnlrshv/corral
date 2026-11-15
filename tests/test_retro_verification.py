@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
+import pytest
+
 from corral.retro.doc_verification import verify as verify_doc
 from corral.retro.cli import probe_verifier_status
 from corral.retro.providers.base import Availability, SeatResult, SeatStatus
@@ -244,3 +248,39 @@ def test_verification_prompt_keeps_labeled_verdict_contract():
     assert verdict.verdict == "CONFIRM"
     assert verdict.reasoning == "Repeated evidence supports it."
     assert verdict.sharpened_rule == "Check the boundary because it protects state."
+
+
+def test_incomplete_verifier_advances_to_next_seat():
+    runners = {
+        "v1": FakeRunner([SeatStatus.INCOMPLETE]),
+        "v2": FakeRunner(["VERDICT: CONFIRM\nREASONING: supported\nSHARPENED: NONE"]),
+    }
+    result = verify_candidate(candidate(), {}, registry=make_registry(), drafter_seat="draft",
+                              verifier_seats=["v1", "v2"], runner_factory=lambda s: runners[s.name])
+    assert result.verdict == "CONFIRM"
+    assert result.verifier_alias == "v2"
+    assert runners["v1"].calls == runners["v2"].calls == 1
+
+
+@pytest.mark.parametrize("kind", ["gotcha", "doc"])
+@pytest.mark.parametrize("override", [None, 123])
+def test_verifier_uses_configured_max_tokens(kind, override):
+    calls = []
+    class RecordingRunner(FakeRunner):
+        def complete(self, seat, prompt, **kwargs):
+            calls.append(kwargs)
+            return super().complete(seat, prompt, **kwargs)
+    output = 'VERDICT: CONFIRM\nREASONING: supported\nSHARPENED: NONE' if kind == "gotcha" else '{"verdict":"confirm","reason":"supported","confidence":0.9}'
+    runner = RecordingRunner(["malformed", output] if kind == "gotcha" else [output])
+    common = dict(config=SimpleNamespace(retro=SimpleNamespace(max_tokens=4321, verification_timeout_s=678)),
+                  registry=make_registry(), drafter_seat="draft", verifier_seats=["v1"],
+                  runner_factory=lambda seat: runner, max_tokens=override)
+    if kind == "gotcha":
+        result = verify_candidate(candidate(), {}, **common)
+        assert result.verdict == "CONFIRM"
+        assert len(calls) == 2
+    else:
+        result = verify_doc(subject="edit", evidence="evidence", contract="contract", **common)
+        assert result.confirmed
+        assert len(calls) == 1
+    assert all(call == {"timeout": 678, "max_tokens": override or 4321} for call in calls)

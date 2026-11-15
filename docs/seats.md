@@ -32,6 +32,8 @@ export CORRAL_DRAFTER_API_KEY='…'
 
 `anthropic-sdk` uses the optional `anthropic` dependency supplied by `corral[preflight]`. The probe is local: it checks that `auth_env` is configured and set and that the SDK imports. It does not generate text. Completion creates an Anthropic client with only the explicitly read token and the configured timeout, then sends one user message with the requested output budget. The adapter does not allow the SDK to discover ambient standard credential variables when the named credential is absent.
 
+`options.max_tokens` overrides `retro.max_tokens` for this seat. Set a positive integer within the model's output ceiling; corral does not know model ceilings, so a provider rejection is reported as an error.
+
 ## OpenAI-compatible endpoint adapter
 
 ```yaml
@@ -53,6 +55,8 @@ export CORRAL_VERIFIER_BASE_URL='https://provider.example/v1'
 ```
 
 This adapter uses the Python standard library. `options.base_url_env` is required, and `options.protocol` must be `chat-completions` or `responses`. The adapter appends `/chat/completions` or `/responses` unless the configured URL already ends with that suffix. Probe checks only the named base URL and credential variables. Completion sends a bearer token, model, prompt, timeout, and adapter-appropriate output-token field; it accepts the corresponding response shape.
+
+`options.max_tokens` overrides `retro.max_tokens` for endpoints with a smaller output ceiling. It applies to both supported protocols.
 
 ## Shell-command adapter
 
@@ -94,6 +98,7 @@ All adapters use the same status vocabulary:
 | --- | --- |
 | `ok` | The probe is ready or the completion returned text. |
 | `unavailable` | Required configuration, credentials, package, endpoint, or executable is absent. |
+| `incomplete` | The provider answered but the reply is unusable: it declined the request, or it stopped at the output-token limit. The detail names which. |
 | `timeout` | The completion exceeded the configured timeout. |
 | `error` | The provider, response parser, or local process failed. |
 

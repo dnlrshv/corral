@@ -196,3 +196,16 @@ def test_example_config_preflight_matches_defaults():
     assert cfg.preflight.model == "claude-haiku-5-5"
     assert cfg.preflight.effort == "low"
     assert cfg.preflight.max_tokens == 16000
+
+
+
+def test_retro_defaults_raise_output_and_timeouts(tmp_path, monkeypatch):
+    from corral.retro.verification import DEFAULT_MAX_TOKENS, DEFAULT_VERIFICATION_TIMEOUT_S
+    monkeypatch.chdir(tmp_path)
+    config = load_config()
+    assert config.retro.max_tokens == DEFAULT_MAX_TOKENS == 16000
+    assert config.retro.verification_timeout_s == DEFAULT_VERIFICATION_TIMEOUT_S == 900
+    assert config.retro.drafting_timeout_s == 900
+    example = load_config(Path(__file__).resolve().parents[1] / "corral.example.yaml")
+    assert example.retro.max_tokens == 16000
+    assert example.retro.verification_timeout_s == example.retro.drafting_timeout_s == 900

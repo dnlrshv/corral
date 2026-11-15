@@ -32,6 +32,8 @@ from corral.preflight.parser import parse_brief, sanitize_preflight_error
 from corral.preflight.retry import (
     LIST_FIELD_CAPS,
     BriefResponseError,
+    BriefRefusalError,
+    BriefTruncatedError,
     generate_brief_with_retry,
     issue_text,
     validate_brief,
@@ -41,7 +43,7 @@ AGENT_GOTCHAS_FIELD = "agent_gotchas"
 AUTO_BRANCH_RE = re.compile(r"(?:agent|feat|fix|claude|codex)/(\d+)-")
 FINGERPRINT_HEADER_PREFIX = "# preflight_fingerprint: "
 GENERAL_SURFACE_CAP = 8
-DEFAULT_MAX_TOKENS = 1500
+DEFAULT_MAX_TOKENS = 16000
 PATH_MENTION_RE = re.compile(
     r"(?<![\w./-])(?:[\w.-]+/)+[\w.-]+\.(?:py|ya?ml|json|toml|md|sh)|"
     r"(?<![\w./-])(?:AGENTS|CLAUDE|README)\.md(?![\w./-])"
@@ -476,6 +478,10 @@ def _generate_brief_with_fallback(
         brief["preflight_error"] = error
         if isinstance(exc, BriefQualityError):
             brief["fallback_reason"] = "semantic_quality"
+        elif isinstance(exc, BriefRefusalError):
+            brief["fallback_reason"] = "llm_refused"
+        elif isinstance(exc, BriefTruncatedError):
+            brief["fallback_reason"] = "llm_truncated"
         elif isinstance(exc, BriefResponseError):
             brief["fallback_reason"] = "llm_response_invalid"
         else:

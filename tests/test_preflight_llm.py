@@ -73,7 +73,7 @@ class MockAnthropic:
         self.responses = list(responses)
         self.calls: list[dict] = []
 
-    def __call__(self, model, prompt, max_tokens, history=None):
+    def __call__(self, model, prompt, max_tokens, history=None, **kwargs):
         self.calls.append(
             {"model": model, "prompt": prompt, "max_tokens": max_tokens, "history": history}
         )
@@ -123,7 +123,7 @@ def test_schema_invalid_response_retries_once_with_error_feedback(
     monkeypatch, repo: Path, capsys
 ) -> None:
     mock = MockAnthropic(
-        [(WRAPPED_BRIEF_YAML, "end_turn"), (VALID_BRIEF_YAML, "max_tokens")]
+        [(WRAPPED_BRIEF_YAML, "end_turn"), (VALID_BRIEF_YAML, "end_turn")]
     )
 
     rc = run_preflight(monkeypatch, repo, mock)
@@ -135,7 +135,7 @@ def test_schema_invalid_response_retries_once_with_error_feedback(
     assert "failed validation" in retry_call["prompt"]
     assert "Missing required fields" in retry_call["prompt"]
     assert "files_to_touch" in retry_call["prompt"]
-    assert retry_call["max_tokens"] == mock.calls[0]["max_tokens"] == 1500
+    assert retry_call["max_tokens"] == mock.calls[0]["max_tokens"] == 16000
     assert retry_call["history"] == [
         {"role": "user", "content": mock.calls[0]["prompt"]},
         {"role": "assistant", "content": WRAPPED_BRIEF_YAML},
@@ -145,7 +145,7 @@ def test_schema_invalid_response_retries_once_with_error_feedback(
 
     brief = yaml.safe_load(capsys.readouterr().out.partition("\n")[2])
     assert brief["preflight_status"] == "generated"
-    assert brief["stop_reason"] == "max_tokens"
+    assert brief["stop_reason"] == "end_turn"
 
 
 def test_auth_precedence_matches_reference(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -157,7 +157,7 @@ def test_auth_precedence_matches_reference(monkeypatch: pytest.MonkeyPatch) -> N
         def create(self, **kwargs):
             create_kwargs.append(kwargs)
             return SimpleNamespace(
-                content=[SimpleNamespace(text=" ok ")], stop_reason="end_turn"
+                content=[SimpleNamespace(type="text", text=" ok ")], stop_reason="end_turn"
             )
 
     class FakeClient:
@@ -319,3 +319,85 @@ def test_sanitize_preflight_error_preserves_gemini_token_counters() -> None:
     assert parsed["token_count"] == 500
     assert parsed["candidatesTokenCount"] == 800
     assert parsed["token"] == "[REDACTED]"
+
+
+@pytest.fixture
+def fake_sdk(monkeypatch):
+    message = SimpleNamespace(content=[], stop_reason="end_turn")
+    calls = []
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            self.messages = self
+
+        def create(self, **kwargs):
+            calls.append(kwargs)
+            return message
+
+    monkeypatch.setitem(sys.modules, "anthropic", SimpleNamespace(Anthropic=FakeClient))
+    return message, calls
+
+
+def test_reads_text_blocks_after_thinking_blocks(fake_sdk):
+    message, _ = fake_sdk
+    message.content = [
+        SimpleNamespace(type="thinking", thinking="", signature="sig"),
+        SimpleNamespace(type="text", text=" ok "),
+        SimpleNamespace(type="text", text="done "),
+    ]
+    assert auth._call_anthropic("model", "prompt", 16000).text == "ok done"
+
+
+def test_refusal_without_stop_details(fake_sdk):
+    from corral.preflight.retry import BriefRefusalError
+
+    message, _ = fake_sdk
+    message.stop_reason = "refusal"
+    response = auth._call_anthropic("model", "prompt", 16000)
+    assert response.refusal_category is None
+    assert str(BriefRefusalError(response.refusal_category)) == "model refused (category: unknown)"
+
+
+def test_refusal_falls_back_without_retry(monkeypatch, repo, capsys):
+    calls = []
+
+    def refuse(*args, **kwargs):
+        calls.append(kwargs)
+        return auth.PreflightLLMResponse("", "refusal", "cyber")
+
+    run_preflight(monkeypatch, repo, refuse)
+    import yaml
+    brief = yaml.safe_load(capsys.readouterr().out.partition("\n")[2])
+    assert brief["preflight_status"] == "fallback"
+    assert brief["fallback_reason"] == "llm_refused"
+    assert "cyber" in brief["preflight_error"]
+    assert len(calls) == 1
+
+
+def test_refusal_strict_raises(monkeypatch, repo):
+    from corral.preflight.retry import BriefRefusalError
+
+    def refuse(*args, **kwargs):
+        return auth.PreflightLLMResponse("", "refusal", "cyber")
+
+    with pytest.raises(BriefRefusalError, match="cyber"):
+        run_preflight(monkeypatch, repo, refuse, "--strict")
+
+
+def test_max_tokens_falls_back_without_retry(monkeypatch, repo, capsys):
+    mock = MockAnthropic([("", "max_tokens")])
+    run_preflight(monkeypatch, repo, mock)
+    import yaml
+    brief = yaml.safe_load(capsys.readouterr().out.partition("\n")[2])
+    assert brief["fallback_reason"] == "llm_truncated"
+    assert len(mock.calls) == 1
+
+
+@pytest.mark.parametrize("stop_reason,reason", [("refusal", "llm_refused"), ("max_tokens", "llm_truncated")])
+def test_retry_stop_reason_checked_before_parsing(monkeypatch, repo, capsys, stop_reason, reason):
+    mock = MockAnthropic([(WRAPPED_BRIEF_YAML, "end_turn"), ("", stop_reason)])
+    run_preflight(monkeypatch, repo, mock)
+    import yaml
+    brief = yaml.safe_load(capsys.readouterr().out.partition("\n")[2])
+    assert brief["fallback_reason"] == reason
+    assert len(mock.calls) == 2

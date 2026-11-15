@@ -253,8 +253,9 @@ preflight:
   # Anthropic model ID used for LLM brief generation.
   model: claude-haiku-4-5-20251001
 
-  # Maximum output tokens for the LLM call.
-  max_tokens: 1500
+  # Maximum output tokens for the LLM call. Thinking counts toward this limit,
+  # so keep it well above the size of the brief itself.
+  max_tokens: 16000
 
   # OPTIONAL repo-local quota snapshot (YAML or JSON). When unset or the
   # file is absent, quota telemetry is skipped silently.

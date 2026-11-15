@@ -26,7 +26,7 @@ Layout::
     preflight:
       gotchas: agent_memory/gotchas.json
       model: claude-haiku-4-5-20251001
-      max_tokens: 1500
+      max_tokens: 16000
       quota_status_file: null
       output: null
       recognized_modules: null
@@ -107,7 +107,7 @@ DEFAULT_YAML_MANIFEST_SCHEMA = {"sources": "table", "groups": "target_table"}
 DEFAULT_SURFACES_PATH = "surfaces.yaml"
 DEFAULT_MAGIC_NUMBER_ALLOWLIST = ".magic-number-allowlist.yaml"
 DEFAULT_GOTCHAS_PATH = "agent_memory/gotchas.json"
-DEFAULT_PREFLIGHT_MAX_TOKENS = 1500
+DEFAULT_PREFLIGHT_MAX_TOKENS = 16000
 DEFAULT_TELEMETRY_ROLLOUT_OUTPUT_DIR = "agent_telemetry"
 DEFAULT_TELEMETRY_LOOKBACK_DAYS = 7
 DEFAULT_REQUIRED_CI_CONTEXTS = ("lint", "test")
@@ -545,6 +545,8 @@ def load_config(path: Path | str | None = None) -> Config:
         preflight.model = _as_str(preflight_raw["model"], "preflight.model")
     if "max_tokens" in preflight_raw:
         preflight.max_tokens = _as_int(preflight_raw["max_tokens"], "preflight.max_tokens")
+        if preflight.max_tokens <= 0:
+            raise ValueError("corral.yaml: preflight.max_tokens must be > 0")
     if "quota_status_file" in preflight_raw:
         preflight.quota_status_file = _as_optional_str(
             preflight_raw["quota_status_file"], "preflight.quota_status_file"

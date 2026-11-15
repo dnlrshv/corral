@@ -35,7 +35,7 @@ except ImportError:  # pragma: no cover - optional dependency
 #: model; import this constant rather than re-hardcoding it elsewhere.
 #: Overridable via the ``preflight.model`` key in ``corral.yaml``.
 DEFAULT_PREFLIGHT_MODEL = "claude-haiku-4-5-20251001"
-API_TIMEOUT = 60.0
+API_TIMEOUT = 120.0
 _DOTENV_LOADED = False
 
 
@@ -51,6 +51,7 @@ class PreflightLLMResponse:
 
     text: str
     stop_reason: str | None
+    refusal_category: str | None = None
 
 
 def _load_dotenv_once() -> None:
@@ -96,8 +97,17 @@ def _call_anthropic(
         max_tokens=max_tokens,
         messages=messages,
     )
-    text = message.content[0].text.strip() if message.content else ""
-    return PreflightLLMResponse(text=text, stop_reason=message.stop_reason)
+    text = "".join(
+        getattr(block, "text", "") for block in (message.content or [])
+        if getattr(block, "type", None) == "text"
+    ).strip()
+    category = None
+    if message.stop_reason == "refusal":
+        details = getattr(message, "stop_details", None)
+        category = getattr(details, "category", None) if details is not None else None
+    return PreflightLLMResponse(
+        text=text, stop_reason=message.stop_reason, refusal_category=category
+    )
 
 
 def call_llm_with_meta(

@@ -159,6 +159,11 @@ def _harness_env(plan: dict, boundary: containment.Boundary, home: str | None,
 
 
 def _write_prompt(scratch: Path, context: dict) -> Path:
+    prompt = context.get("prompt_markdown")
+    if isinstance(prompt, str) and prompt:
+        path = scratch / PROMPT_FILE
+        path.write_text(prompt, encoding="utf-8")
+        return path
     objective = str(context.get("objective") or "").strip()
     if not objective:
         raise PermissionError("native dispatch requires an explicit objective; nothing was inferred")

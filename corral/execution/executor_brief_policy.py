@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 from dataclasses import asdict
 from pathlib import Path
@@ -11,23 +10,7 @@ from pathlib import Path
 from corral.config import CONFIG_FILENAME, DEFAULT_EXECUTOR_BRIEF_BUDGET_CHARS
 from corral.redaction import check_outbound_safe
 from corral.rules import load_layers
-from . import executor_brief, result_schema
-
-
-def _compatibility_prompt(context):
-    # Slice 4b replaces this with the full renderer. These bytes match the adapter
-    # fallback so budget and digest describe what the executor actually receives.
-    parts = [str(context.get("objective") or "").strip()]
-    extras = context.get("prompt_extras")
-    if isinstance(extras, str) and extras.strip():
-        parts.append(extras.strip())
-    history = context.get("amendment_history")
-    if isinstance(history, list) and history:
-        parts.append(
-            "Prior amendments for this same task identity (continue, do not restart):"
-        )
-        parts.extend(f"- {json.dumps(item, sort_keys=True)}" for item in history)
-    return "\n\n".join(parts) + "\n"
+from . import executor_brief, executor_brief_render, result_schema
 
 
 def prepare(*, context, workspace, profile, route, task, generation, attempt):
@@ -61,7 +44,18 @@ def prepare(*, context, workspace, profile, route, task, generation, attempt):
     applied = [asdict(rule) for rule in applicable]
     schema = context.get("result_schema") or result_schema.for_harness(route.harness)
     delivery = "harness-flag" if "{schema_file}" in route.argv else "inline"
-    prompt = _compatibility_prompt(context)
+    prompt = executor_brief_render.render(
+        brief=brief,
+        objective=context["objective"],
+        rules=applied,
+        prompt_extras=extras,
+        amendment_history=context.get("amendment_history") or [],
+        schema_delivery=delivery,
+        schema_file_hint="{schema_file}",
+        result_file_hint="{result_file}",
+        result_schema=schema,
+        legacy_notice=warnings[0] if warnings else None,
+    )
     budget = cfg.max_prompt_chars or DEFAULT_EXECUTOR_BRIEF_BUDGET_CHARS[profile.tier]
     if len(prompt) > budget:
         raise PermissionError(
@@ -103,6 +97,7 @@ def prepare(*, context, workspace, profile, route, task, generation, attempt):
         "warnings": warnings,
     }
     fields = {
+        "prompt_markdown": prompt,
         "brief": brief,
         "brief_mode": mode,
         "rules_applied": applied,

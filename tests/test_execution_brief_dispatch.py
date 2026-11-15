@@ -110,6 +110,7 @@ def test_brief_dispatch_writes_brief_json_and_context_fields(env):
         "rules_applied",
         "brief_render",
         "result_schema",
+        "prompt_markdown",
     ):
         assert key in context
     assert record["brief_digest"] == digest(context["brief"])
@@ -289,3 +290,12 @@ def test_credential_shaped_prompt_extras_refuses_before_launch(env):
     _, state = refuse(env, prompt_extras="api_key = 'not-a-real-secret-value'")
     assert "credential-shaped prompt_extras text refused" in state["reason"]
     assert "not-a-real-secret-value" not in json.dumps(state)
+
+
+@requires_sandbox
+def test_rendered_prompt_hash_matches_the_written_prompt(env):
+    task, status = run(env, brief=True)
+    output = Path(status["result"]["artifact_directory"])
+    record = json.loads((output / "brief.json").read_text())
+    prompt = (env["state"] / "scratch" / task / "prompt.md").read_bytes()
+    assert hashlib.sha256(prompt).hexdigest() == record["render"]["prompt_sha256"]
